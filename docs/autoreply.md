@@ -115,8 +115,16 @@ that answered only the id form would drop every not-yet-updated node out of a su
 
 **Parameters:**
 
-- `value`: multiplier (1-120) on the radio's own retransmit delay. The reply is sent after a
-  random wait between zero and that multiple.
+- `value`: multiplier (1-120) on the radio's own retransmit delay, default **60**. The reply is
+  sent after a random wait between zero and that multiple — roughly 2.3 s x the multiplier, so
+  60 spreads replies over about 135 seconds.
+
+  The default was 4 until 2026-09-09, which spread a storm over about 9 seconds. Measured on
+  one mesh across 18 probes, a storm is 17 distinct transmissions rather than one per
+  answering repeater, because each reply is relayed; at 4 those overlapped constantly and
+  roughly 40% of replies never arrived. **A node that already has a stored value keeps it on
+  upgrade** — the new default reaches nodes configured for the first time, and everything else
+  needs `set autoreply.delay 60`.
 
 **Default:** `4`
 

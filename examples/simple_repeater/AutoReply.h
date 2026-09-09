@@ -22,7 +22,20 @@
 // several repeaters raise do not land on top of each other
 #define AUTOREPLY_DELAY_MIN   1
 #define AUTOREPLY_DELAY_MAX   120
-#define AUTOREPLY_DELAY_DEF   4
+// Multiplier on the radio's own retransmit delay, so a reply leaves after a random
+// wait of up to roughly 2.3 s x this. Every repeater that hears a request answers it,
+// and their replies collide unless they are spread.
+//
+// Measured on the JKG mesh, 18 probes on 2026-09-09: a storm is 17 distinct
+// transmissions (11-40), about three per answering repeater once each reply is
+// relayed -- not one. At the old default of 4 those 17 packets were crammed into a
+// 9 s window, and roughly 40% of replies never arrived. 60 spreads them over ~135 s.
+//
+// Sized for a mesh larger than today's: at a dozen answering repeaters this holds
+// overlapping transmissions near a fifth, where 4 put them past two thirds. Nothing
+// waits on a test reply, so a wait costs only patience; a collision costs the
+// measurement. Runtime-settable, because the right value is not knowable from one mesh.
+#define AUTOREPLY_DELAY_DEF   60
 #define AUTOREPLY_MAX_PAYLOAD (5 + AUTOREPLY_MAX_TEXT)   // timestamp + flags + text
 // how many leading bytes of a requester's key name it in a private reply's brackets
 #define AUTOREPLY_PRIVATE_WHO 4

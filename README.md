@@ -145,7 +145,7 @@ To turn it off again: `set autoreply off`.
 | `set autoreply on\|off` | `off` | Whether this repeater answers the trigger. |
 | `set autoreply.hops <0-63>` | `8` | How many hops away a request may be and still get an answer. `0` = direct neighbours only. |
 | `set autoreply.direct.flood on\|off` | `on` | Whether a request that arrived direct is answered with a flood. `off` sends a single zero-hop packet that no repeater relays — cheapest, but it never reaches anyone who cannot hear this repeater directly. |
-| `set autoreply.delay <1-120>` | `4` | How widely replies are spread in time. Every repeater that hears a request is about to answer it, and without a spread their replies land on top of each other. The wait is random, up to roughly 2.3 s x this number — so `4` spreads answers over about 9 seconds and `120` over about four and a half minutes. Nobody is waiting on a test, so err high: with a dozen repeaters answering, `4` is far too tight. |
+| `set autoreply.delay <1-120>` | `60` | How widely replies are spread in time. Every repeater that hears a request answers it, and once each reply is relayed a storm is roughly three transmissions per answering repeater — they collide unless they are spread. The wait is random, up to roughly 2.3 s x this number, so `60` spreads a storm over about 135 seconds. Nobody is waiting on a test reply, so a long wait costs only patience while a collision costs the measurement. **Raising this on an existing node needs the command — see below.** |
 | `set autoreply.region <code>` | *(request scope)* | Which region replies are scoped to. Empty mirrors whatever scope the request arrived under. |
 | `set autoreply.mode flood\|private\|direct` | `flood` | How a request that names no mode is answered. `private` and `direct` answer with a text message to the requester alone, and only when the request carries their key. |
 | `set autoreply.private on\|off` | `off` | Whether a test request sent to this repeater alone, off the channel, is answered. Off because it is an unauthenticated packet that makes the node transmit. |
@@ -163,7 +163,13 @@ matters because phone keyboards like to capitalise the first letter. Override it
 time with `-D AUTOREPLY_KEYWORD='"..."'`.
 
 Remote control reaches all of these: `set autoreply` and `get autoreply` are on the allowlist
-as families, so `set autoreply.delay 30` can be published to a node instead of typed into it.
+as families, so `set autoreply.delay 60` can be published to a node instead of typed into it.
+
+> **Upgrading does not change a setting you already have.** The config file stores
+> `autoreply.delay`, and a node that has one keeps it — the new default of `60` applies to a
+> node configured for the first time, or one that has been erased. A repeater already in the
+> field at the old default of `4` stays at `4` until it is told otherwise, with
+> `set autoreply.delay 60` over serial or by signed publish.
 
 ---
 
