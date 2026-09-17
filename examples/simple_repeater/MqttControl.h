@@ -32,14 +32,15 @@ struct MqttCommandRunner {
  *
  * The broker this rides on publishes its own credentials, so anyone can publish to
  * any topic on it. Nothing here trusts the transport: a command is executed only if
- * it carries an Ed25519 signature by the node's configured owner key over the topic
- * and body together, its counter has never been seen before, it has not expired, it
- * is on the allowlist, and the rate limiter still has budget.
+ * it carries an Ed25519 signature by the key set with 'set mqtt.cmd.pubkey' over the
+ * topic and body together, its counter has never been seen before, it has not
+ * expired, it is on the allowlist, and the rate limiter still has budget.
  *
  * The decisions are all in src/helpers/MqttControlLogic.h, where they are attacked
  * on the host (test/test_mqtt_control). This class is the state, the key and the I/O.
  *
- * Off unless 'set mqtt.cmd on', and inert regardless without an owner key.
+ * Off unless 'set mqtt.cmd on', deaf until 'set mqtt.cmd.slot <n>' names the MQTT slot
+ * to listen on (read at boot), and inert regardless without a key.
  */
 // What drain() reports back so the caller can publish a result that names the
 // request it answers. The counter is the correlation id: strictly increasing,
@@ -56,6 +57,8 @@ class MqttControl {
   FILESYSTEM* _fs;
   bool _enabled;
   uint32_t _counter;          // highest command counter accepted, persisted
+  uint8_t _slot;              // 1-based MQTT slot to listen and answer on, 0 = none
+  char _pubkey[PUB_KEY_SIZE * 2 + 1];   // hex public key commands must be signed by
   MqttControlStaged _staged;
   RateLimiter _commands;
   RateLimiter _transmits;
@@ -69,6 +72,8 @@ public:
   void begin(FILESYSTEM* fs);
   bool isEnabled() const { return _enabled; }
   uint32_t counter() const { return _counter; }
+  uint8_t slot() const { return _slot; }
+  const char* pubkey() const { return _pubkey; }
 
   // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
   static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);
@@ -105,5 +110,8 @@ public:
                        MqttCommandRunner* runner, char* reply, size_t reply_size,
                        MqttCtrlOutcome* out = NULL);
 
-  bool handleCommand(const char* command, char* reply);
+  // 'slot_count' bounds 'set mqtt.cmd.slot'; see mqttCtrlParseSlot. A non-zero
+  // 'sender_timestamp' is a remote caller, which may not read or write the key.
+  bool handleCommand(uint32_t sender_timestamp, int slot_count, const char* command,
+                     char* reply);
 };

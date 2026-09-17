@@ -1,7 +1,7 @@
 # Remote control over MQTT
 
 An observer node can accept commands published to it over MQTT: parameter changes, and a
-request to send a test now, on the channel or to one repeater alone. It is **off by default** and inert without a configured owner key.
+request to send a test now, on the channel or to one repeater alone. It is **off by default** and inert without a configured command key.
 
 Flashing a fleet takes months. This exists so that changing a parameter afterwards costs a
 signed publish rather than another flashing round.
@@ -10,22 +10,48 @@ signed publish rather than another flashing round.
 
 `mqtt.meshat.se` and brokers like it publish their credentials. **Anyone can publish to any
 topic**, so nothing here trusts the transport: a command runs only if it carries a valid
-Ed25519 signature by this node's configured owner key.
+Ed25519 signature by the command key this node was given.
 
 ## Turning it on
 
 ```
-set mqtt.owner <64 hex characters>    # serial only; the public half of the signing key
+set mqtt.cmd.pubkey <64 hex characters>   # serial only; the PUBLIC half of the signing key
 set mqtt.cmd on
+set mqtt.cmd.slot <n>                 # the MQTT slot to listen and answer on; reboot to apply
 get mqtt.cmd                          # state, and the highest command counter seen
 ```
 
-Both are needed. With `mqtt.cmd on` but no owner key, every command is refused -- and,
+All three are needed. With `mqtt.cmd on` but no command key, every command is refused -- and,
 importantly, *discarded*. The node holds one staged command at a time and a full slot drops
 the newer arrival, so a refusal that left the slot occupied would silently swallow every
 later command for the rest of the boot, including the ones sent once a key was finally
 provisioned. Refusing and clearing are the same act (`mqttCtrlOwnerReady`, tested in
 `test_mqtt_control`).
+
+`mqtt.cmd.pubkey` is not `mqtt.owner`. `mqtt.owner` is the Observer firmware's own setting: it
+names the person who owns the node, and travels in the login token to the stats services. The
+command key is one key for a whole fleet, held by whoever runs the control plane, so the two
+are kept apart and an operator's ownership claim does not have to give way to it. Both
+`get mqtt.cmd.pubkey` and `set mqtt.cmd.pubkey` answer only a caller at the serial port or the
+local console; an empty `set` clears the key.
+
+## Which broker
+
+Commands arrive on one MQTT slot and results leave by the same one, `mqtt.cmd.slot`, from 1 to
+the board's slot count (3 without PSRAM, 6 with); `0`, the default, listens nowhere. The node
+subscribes on that slot alone. The stats presets refuse subscriptions -- `meshcore-mqtt.meshat.se`
+is the one that forced this -- so the stats go out on their preset slot as before, and the
+control plane rides a broker of its own on another:
+
+```
+set mqtt1.preset meshat.se            # stats, unchanged
+set mqtt2.preset custom               # plus the custom broker settings for slot 2
+set mqtt.cmd.slot 2
+reboot
+```
+
+The slot is read at boot, when the subscriptions are made. It cannot be set remotely: a signed
+`set mqtt.cmd.slot 0` would leave a node that only a serial cable could bring back.
 
 ## Topics
 
@@ -67,7 +93,7 @@ node keeps its own.
 ## What a node checks, in order
 
 ```
-feature enabled → owner key set → signature valid
+feature enabled → command key set → signature valid
   → counter strictly greater than the stored one → not expired
   → rate limit → command on the allowlist
   → store the counter → run it → publish the result
@@ -117,7 +143,7 @@ the mesh without someone also adding it here.
 
 Everything else is refused before it reaches the CLI. The allowlist is deliberately independent
 of the second guard: MQTT commands run with the node's clock rather than the `0` that marks a
-locally-privileged caller, so `set prv.key`, `erase` and `set mqtt.owner` refuse them anyway.
+locally-privileged caller, so `set prv.key`, `erase` and `set mqtt.cmd.pubkey` refuse them anyway.
 Either alone should be enough; both together mean one of them can be wrong.
 
 **The allowlist is the tighter of the two gates and must stay that way.** It requires a match to
@@ -151,7 +177,7 @@ anything.
   appear in either — which is what the allowlist keeps true.
 - **Availability.** Anyone can flood the broker. The node's rate limit bounds the airtime
   consequence; it cannot make the broker quiet.
-- **A compromised owner key.** Whoever holds it can do anything on the allowlist. Rotation
+- **A compromised command key.** Whoever holds it can do anything on the allowlist. Rotation
   currently needs serial access.
 
 ## The result
@@ -175,7 +201,7 @@ earlier field is bounded, so a clamped line still parses.
 limiter — the limiters spend budget when asked, so every stateless check comes first — which
 means a bad-signature refusal is not rate limited, and publishing those would let anyone on a
 broker with public credentials drive unlimited publishes out of the node. A legitimate
-requester holds the owner key, so its commands always draw an answer whether they succeed or
+requester holds the command key, so its commands always draw an answer whether they succeed or
 are refused; nothing readable is lost.
 
 | Code | Meaning |

@@ -1,9 +1,11 @@
 #include "MqttControl.h"
 
+#include <helpers/MQTTPresets.h>
 #include <helpers/TxtDataHelpers.h>
 
 #define MQTTCTRL_CONFIG_FILE  "/mqttcontrol"
-#define MQTTCTRL_CONFIG_VER   1
+#define MQTTCTRL_CONFIG_VER_1 1
+#define MQTTCTRL_CONFIG_VER   2
 
 // The broker permits meshcore/ and silently discards everything else -- a publish
 // elsewhere is accepted, acked and dropped, with no error visible to the sender.
@@ -33,16 +35,17 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 }
 
 // The node's own MQTT-originated commands run with the RTC time rather than 0.
-// Zero is not a clock, it is a privilege signal: CommonCLI gates 'set prv.key',
-// 'erase' and 'set mqtt.owner' on it, and serial and the web CLI both rely on
+// Zero is not a clock, it is a privilege signal: 'set prv.key', 'erase' and
+// 'set mqtt.cmd.pubkey' are gated on it, and serial and the web CLI both rely on
 // physical or password authentication as their boundary. A remote caller has
 // neither, so it must never present itself as local. The allowlist in
 // MqttControlLogic.h is the independent second guard on the same door.
 MqttControl::MqttControl()
-  : _fs(NULL), _enabled(false), _counter(0),
+  : _fs(NULL), _enabled(false), _counter(0), _slot(0),
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW)
 {
+  _pubkey[0] = 0;
   _staged.pending = false;
   _staged.payload_len = 0;
   _staged.topic[0] = 0;
@@ -61,11 +64,21 @@ void MqttControl::load() {
   if (file) {
     uint8_t ver = 0;
     file.read(&ver, 1);
-    if (ver == MQTTCTRL_CONFIG_VER) {
+    // Append-only, as /autoreply is. A v1 file has no slot and no key, so it loads
+    // deaf and keyless: guessing a slot would subscribe on a broker that may refuse
+    // it, and the key it used lives in mqtt.owner, which is somebody's ownership
+    // claim rather than a command key.
+    if (ver >= MQTTCTRL_CONFIG_VER_1) {
       uint8_t enabled = 0;
       file.read(&enabled, 1);
       file.read((uint8_t *) &_counter, sizeof(_counter));
+      if (ver >= MQTTCTRL_CONFIG_VER) {
+        file.read(&_slot, 1);
+        file.read((uint8_t *) _pubkey, sizeof(_pubkey));
+      }
       _enabled = enabled != 0;
+      if (_slot > RUNTIME_MQTT_SLOTS) _slot = 0;
+      _pubkey[sizeof(_pubkey) - 1] = 0;
     }
     file.close();
   }
@@ -79,6 +92,8 @@ void MqttControl::save() {
     file.write(&ver, 1);
     file.write(&enabled, 1);
     file.write((const uint8_t *) &_counter, sizeof(_counter));
+    file.write(&_slot, 1);
+    file.write((const uint8_t *) _pubkey, sizeof(_pubkey));
     file.close();
   }
 }
@@ -149,7 +164,7 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
       result = MQTTCTRL_ERR_SIG_INVALID;   // parsed as hex, did not verify
       break;
     }
-    // Past this line the sender held the owner key, so the outcome is safe to
+    // Past this line the sender held the command key, so the outcome is safe to
     // publish however it turns out -- and the counter and command it signed are
     // what let the requester tell which question the answer belongs to.
     if (out != NULL) {
@@ -195,7 +210,60 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
   return result;
 }
 
-bool MqttControl::handleCommand(const char* command, char* reply) {
+bool MqttControl::handleCommand(uint32_t sender_timestamp, int slot_count,
+                                const char* command, char* reply) {
+  // The key that authorises every signed command, so neither half of it is reachable
+  // from anything but a caller who is physically present. The MQTT allowlist refuses
+  // it too; this is the second, independent guard. The public half only, and the
+  // name says so: a private seed is also 64 hex characters, and nothing here could
+  // tell the two apart.
+  bool set_key = memcmp(command, "set mqtt.cmd.pubkey", 19) == 0
+                 && (command[19] == 0 || command[19] == ' ');
+  if (set_key || strcmp(command, "get mqtt.cmd.pubkey") == 0) {
+    if (sender_timestamp != 0) {
+      strcpy(reply, "Err - serial only");
+      return true;
+    }
+    if (!set_key) {
+      sprintf(reply, "> %s", _pubkey[0] ? _pubkey : "(not set)");
+      return true;
+    }
+    const char* key = command[19] ? &command[20] : "";
+    if (key[0] == 0) {
+      _pubkey[0] = 0;
+      save();
+      strcpy(reply, "OK - key cleared");
+    } else if (mqttOwnerKeyValid(key)) {
+      strcpy(_pubkey, key);
+      save();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Err - use: set mqtt.cmd.pubkey <64 hex characters, the PUBLIC key>");
+    }
+    return true;
+  }
+
+  // Read once at boot, when the bridge registers its subscriptions; a live change
+  // would have to move them between clients from another core, for a setting that
+  // changes about once in a node's life.
+  if (memcmp(command, "set mqtt.cmd.slot ", 18) == 0) {
+    uint8_t slot = 0;
+    if (!mqttCtrlParseSlot(&command[18], slot_count, &slot)) {
+      sprintf(reply, "Err - use: set mqtt.cmd.slot 0-%d", slot_count);
+      return true;
+    }
+    _slot = slot;
+    save();
+    strcpy(reply, "OK - reboot to apply");
+    return true;
+  }
+
+  if (strcmp(command, "get mqtt.cmd.slot") == 0) {
+    if (_slot == 0) strcpy(reply, "> 0 (none)");
+    else sprintf(reply, "> %d", _slot);
+    return true;
+  }
+
   if (memcmp(command, "set mqtt.cmd ", 13) == 0) {
     bool on = false;
     if (!autoReplyParseOnOff(&command[13], &on)) {

@@ -39,12 +39,12 @@ a permission; it is the starting position everyone already has.
 
 ### Two separate keypairs. Do not confuse them.
 
-| | **Your node's mesh identity** | **Your owner signing key** |
+| | **Your node's mesh identity** | **Your command signing key** |
 |---|---|---|
 | What it is | The repeater's own keypair, the one it has always had | A keypair **you** generate, for commanding your fleet |
 | What it does | Mesh addressing, encryption, direct messages | Signs remote commands |
 | Where the **private** half lives | On the node | **With you. Never on a node, never at the broker.** |
-| Where the **public** half lives | Advertised on the mesh | On each node you provision, as `mqtt.owner` |
+| Where the **public** half lives | Advertised on the mesh | On each node you provision, as `mqtt.cmd.pubkey` |
 
 **A node never holds a secret that can command anything — not even itself.** It stores 64 hex
 characters: the *public* half of your signing key. That is enough to check a signature and
@@ -59,14 +59,19 @@ authorises commands.
 ### Turning it on
 
 ```
-set mqtt.owner <64 hex characters>    # serial only — the PUBLIC half of your signing key
+set mqtt.cmd.pubkey <64 hex characters>   # serial only — the PUBLIC half of your signing key
 set mqtt.cmd on
+set mqtt.cmd.slot <n>                 # the MQTT slot to listen and answer on; reboot to apply
 get mqtt.cmd                          # state, and the highest command counter seen
 ```
 
-Both are needed. `mqtt.cmd on` with no owner key refuses everything. **`set mqtt.owner` cannot
-be done remotely** — only over serial or the local console — so a remote attacker cannot point
-a node at their own key.
+All three are needed, and `mqtt.cmd.slot` must name a slot on a broker that allows
+subscriptions — the stats presets do not. See `docs/mqtt-control.md`. `mqtt.cmd on` with no
+command key refuses everything. **`set mqtt.cmd.pubkey` cannot be done remotely** — only over
+serial or the local console — so a remote attacker cannot point a node at their own key.
+
+This is not `mqtt.owner`. That one is the Observer firmware's ownership claim sent to the stats
+services, and stays yours; the command key is shared by the whole fleet you command.
 
 To turn it off again: `set mqtt.cmd off`.
 
@@ -74,7 +79,7 @@ To turn it off again: `set mqtt.cmd off`.
 
 In this order, and it stops at the first failure:
 
-1. the feature is on, and an owner key is provisioned
+1. the feature is on, and a command key is provisioned
 2. the **Ed25519 signature** verifies against that key — over the topic *and* the payload
    together, so a command signed for one node cannot be replayed at another, and a per-node
    command cannot be replayed as a broadcast
@@ -85,10 +90,10 @@ In this order, and it stops at the first failure:
    *validly signed* commands: even your own key cannot turn a repeater into a flood weapon
 6. the command is on a short **allowlist** — the auto-reply settings, a few read-only `get`s,
    and the two `trigger` commands. Everything else is refused before it reaches the CLI.
-   There is no general `set`, no `erase`, and no way to change the owner key
+   There is no general `set`, no `erase`, and no way to change the command key
 
 Two things are deliberately out of reach of the remote path no matter what it carries:
-`set prv.key`, `erase` and `set mqtt.owner`, which require a locally-privileged caller; and a
+`set prv.key`, `erase` and `set mqtt.cmd.pubkey`, which require a locally-privileged caller; and a
 broadcast that would make every node transmit at once.
 
 ### What this does not defend against

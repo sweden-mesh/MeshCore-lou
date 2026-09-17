@@ -171,6 +171,20 @@ static inline bool mqttCtrlParseU32(const char* start, size_t len, uint32_t* out
   return true;
 }
 
+// The MQTT slot commands arrive on and results leave by, as 'set mqtt.cmd.slot'
+// takes it: 0 for none, else 1..slot_count. One slot, not all of them, because the
+// stats presets refuse subscriptions -- the control plane rides a broker of its own.
+// 'slot_count' is the board's runtime slot array, not its active cap: the cap counts
+// connections, not indices, so slot 3 can be one of a non-PSRAM board's two.
+static inline bool mqttCtrlParseSlot(const char* text, int slot_count, uint8_t* out) {
+  if (text == NULL || out == NULL || slot_count < 0) return false;
+  uint32_t value = 0;
+  if (!mqttCtrlParseU32(text, strlen(text), &value)) return false;
+  if (value > (uint32_t)slot_count) return false;
+  *out = (uint8_t)value;
+  return true;
+}
+
 // A command may hold only printable ASCII, and never the field separator, so the
 // split that found the signature cannot be steered by the command itself.
 static inline bool mqttCtrlCommandCharsOk(const char* cmd, size_t len) {
@@ -465,7 +479,7 @@ static inline MqttCtrlResult mqttCtrlTransmitTopicResult(bool is_transmit, const
 //
 // Zero is not a clock reading in this CLI, it is a privilege marker: it means the
 // caller is physically present (serial, ethernet, the web portal), and it is what
-// gates `get prv.key`, `set prv.key`, `set mqtt.owner` and `erase`. A remote
+// gates `get prv.key`, `set prv.key`, `set mqtt.cmd.pubkey` and `erase`. A remote
 // command that reached the CLI with 0 would be handed exactly the privilege those
 // gates exist to withhold.
 //

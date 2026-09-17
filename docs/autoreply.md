@@ -210,7 +210,7 @@ follow. An id is always eight hex digits and a mode always one letter, so a lone
 is never read as a short id.
 
 The key is the requester's public key as 64 hexadecimal characters, the same form
-`set mqtt.owner` takes. A private reply has to be addressed to a key, because a group text
+`set mqtt.cmd.pubkey` takes. A private reply has to be addressed to a key, because a group text
 names its sender only by a display name anyone can type. A `P` or `D` that carries no key is
 still a request, and is answered on the channel instead: a probe left unanswered for an
 addressing gap would look exactly like a dead repeater. A key after `F` or `S` is chat, since

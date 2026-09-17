@@ -278,6 +278,75 @@ TEST(Allowlist, BlocksTheCommandsThatWouldOwnTheNode) {
   EXPECT_FALSE(allowed("reboot"));
 }
 
+TEST(Allowlist, TheControlPlaneCannotBeSwitchedOffRemotely) {
+  // A signed `set mqtt.cmd.slot 0`, or a slot with no broker behind it, would
+  // leave the node listening nowhere, and only someone at its serial port could
+  // undo that. The commands that decide where the node listens stay local.
+  EXPECT_FALSE(allowed("set mqtt.cmd off"));
+  EXPECT_FALSE(allowed("set mqtt.cmd.slot 0"));
+  EXPECT_FALSE(allowed("set mqtt.cmd.slot 2"));
+}
+
+TEST(Allowlist, TheCommandKeyIsNeitherWritableNorReadable) {
+  // Rotating the key that authorises signed commands must not itself be a signed
+  // command. MqttControl also refuses both to any non-zero sender_timestamp, which
+  // mqttCtrlSenderStamp guarantees every MQTT command carries.
+  EXPECT_FALSE(allowed("set mqtt.cmd.pubkey "
+                       "AA04792D7804529FABF230B32DC8F7FA494D1B3280F153B2215C305E4FD654DC"));
+  EXPECT_FALSE(allowed("set mqtt.cmd.pubkey"));
+  EXPECT_FALSE(allowed("get mqtt.cmd.pubkey"));
+}
+
+// ---- the slot the control plane rides --------------------------------------
+
+static bool slot(const char* text, int slot_count, uint8_t* out) {
+  return mqttCtrlParseSlot(text, slot_count, out);
+}
+
+TEST(ControlSlot, ZeroMeansNoneAndEverySlotTheBoardHasIsAccepted) {
+  uint8_t out = 99;
+  EXPECT_TRUE(slot("0", 3, &out));
+  EXPECT_EQ(out, 0);
+  EXPECT_TRUE(slot("1", 3, &out));
+  EXPECT_EQ(out, 1);
+  EXPECT_TRUE(slot("3", 3, &out));
+  EXPECT_EQ(out, 3);
+  EXPECT_TRUE(slot("6", 6, &out));
+  EXPECT_EQ(out, 6);
+}
+
+TEST(ControlSlot, ASlotPastTheBoardsArrayIsRefused) {
+  // A non-PSRAM board has three slots. Accepting 4 would store a slot that can
+  // never connect, and the node would listen nowhere without saying so.
+  uint8_t out = 99;
+  EXPECT_FALSE(slot("4", 3, &out));
+  EXPECT_FALSE(slot("7", 6, &out));
+  EXPECT_FALSE(slot("256", 6, &out));    // would wrap to 0 in a uint8_t
+  EXPECT_FALSE(slot("4294967297", 6, &out));
+  EXPECT_EQ(out, 99);
+}
+
+TEST(ControlSlot, OnlyAPlainNumberIsASlot) {
+  uint8_t out = 99;
+  EXPECT_FALSE(slot("", 6, &out));
+  EXPECT_FALSE(slot("-1", 6, &out));
+  EXPECT_FALSE(slot("+2", 6, &out));
+  EXPECT_FALSE(slot(" 2", 6, &out));
+  EXPECT_FALSE(slot("2 ", 6, &out));
+  EXPECT_FALSE(slot("two", 6, &out));
+  EXPECT_FALSE(slot("mqtt2", 6, &out));
+  EXPECT_EQ(out, 99);
+}
+
+TEST(ControlSlot, DegenerateInputIsRefused) {
+  uint8_t out = 99;
+  EXPECT_FALSE(slot(NULL, 6, &out));
+  EXPECT_FALSE(slot("1", 6, NULL));
+  EXPECT_FALSE(slot("1", -1, &out));
+  EXPECT_TRUE(slot("0", 0, &out));       // a build with no slots can still say none
+  EXPECT_FALSE(slot("1", 0, &out));
+}
+
 TEST(Allowlist, IsNotFooledByPrefixTricks) {
   // Boundary matching: an allowed prefix must be followed by end-of-string or a
   // space, or 'set autoreply.hopsX' rides in on 'set autoreply'.
@@ -819,7 +888,7 @@ TEST(GoldenRead, TheSameReadIsRefusedAtAnotherNode) {
 
 TEST(PrivateKey, GuardOne_AnMqttCommandNeverCarriesTheLocalPrivilegeMarker) {
   // sender_timestamp 0 is not a clock reading, it is "the caller is physically
-  // present". It gates get/set prv.key, set mqtt.owner and erase in CommonCLI.
+  // present". It gates get/set prv.key, get/set mqtt.cmd.pubkey and erase.
   // If an MQTT command could execute with 0, every one of those gates would open.
   EXPECT_NE(0u, mqttCtrlSenderStamp(0));
 

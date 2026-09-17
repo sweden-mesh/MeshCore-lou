@@ -1931,7 +1931,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     strcpy(reply, "Err - neighbors not enabled in this build");
 #endif
 #ifdef WITH_MQTT_BRIDGE
-  } else if (mqtt_control.handleCommand(command, reply)) {
+  } else if (mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply)) {
     // reply already filled in
 #endif
   } else if (auto_reply.handleCommand(autoReplyRegion(), command, reply)) {
@@ -1955,6 +1955,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 void MyMesh::setupMqttControl(MQTTBridge* bridge) {
   const char* iata = autoReplyRegion();
   if (iata == NULL || iata[0] == 0) return;      // no region, no control plane
+  if (mqtt_control.slot() == 0) return;          // no slot to listen on
 
   char node_hex[MAX_ADVERT_DATA_SIZE];
   mesh::Utils::toHex(node_hex, self_id.pub_key, 4);   // first four bytes name the node
@@ -1965,7 +1966,7 @@ void MyMesh::setupMqttControl(MQTTBridge* bridge) {
 
   _ctrl_topics[0] = _ctrl_topic;
   _ctrl_topics[1] = _ctrl_broadcast;
-  bridge->setControlSink(this, _ctrl_topics, 2);
+  bridge->setControlSink(this, _ctrl_topics, 2, mqtt_control.slot() - 1);
 }
 
 // Drained on the loop task, never on the MQTT event task: verification wants more
@@ -1978,18 +1979,18 @@ void MyMesh::loopMqttControl() {
   // slot. These two returns used to leave it pending, which latched the slot for
   // the life of the boot and dropped every command after it, including the ones
   // sent once a key had finally been provisioned.
-  const char* owner_hex = _cli.getObserverPrefs()->mqtt_owner_public_key;
+  const char* owner_hex = mqtt_control.pubkey();
   MqttCtrlResult ready = mqttCtrlOwnerReady(owner_hex);
   if (ready != MQTTCTRL_OK) {
     mqtt_control.discard();
-    MESH_DEBUG_PRINTLN("MqttControl: no usable owner key, command discarded");
+    MESH_DEBUG_PRINTLN("MqttControl: no usable mqtt.cmd.pubkey, command discarded");
     return;
   }
 
   mesh::Identity owner;
   if (!mesh::Utils::fromHex(owner.pub_key, PUB_KEY_SIZE, owner_hex)) {
     mqtt_control.discard();
-    MESH_DEBUG_PRINTLN("MqttControl: owner key unreadable, command discarded");
+    MESH_DEBUG_PRINTLN("MqttControl: mqtt.cmd.pubkey unreadable, command discarded");
     return;
   }
 
@@ -1999,7 +2000,7 @@ void MyMesh::loopMqttControl() {
                                              this, reply, sizeof(reply), &outcome);
   MESH_DEBUG_PRINTLN("MqttControl: result %d, reply '%s'", (uint32_t)result, reply);
 
-  // Only an outcome the owner key vouched for is published -- see the note on
+  // Only an outcome the command key vouched for is published -- see the note on
   // drain(). A refusal that got this far still publishes: a node that refuses in
   // silence is indistinguishable from one that is switched off or un-flashed,
   // and this fleet runs several firmware versions at once, so that ambiguity is

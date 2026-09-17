@@ -129,7 +129,7 @@ pointer placement in that file is split almost evenly. Leave both alone.
 Both were found in this tree and both are load-bearing for security:
 
 - **`sender_timestamp == 0` is a privilege signal**, not merely a clock. It gates
-  `set prv.key`, `erase` and `set mqtt.owner`. **A remote path must never pass 0**, and must
+  `set prv.key`, `erase` and `set mqtt.cmd.pubkey`. **A remote path must never pass 0**, and must
   additionally be bounded by an allowlist rather than exposing the whole `set`/`get` surface.
 - **The rate limit applies to validly signed commands.** A compromised signing key must not
   become a mesh-flood weapon. Do not add a path that bypasses it "because the signature

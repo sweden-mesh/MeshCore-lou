@@ -703,30 +703,37 @@ public:
     virtual void onControlMessage(const char* topic, const uint8_t* payload, size_t len) = 0;
   };
 
-  // 'topics' are subscribed on every connect, so they survive the reconnect
-  // ladder. Both pointers are owned by the caller and must outlive the bridge.
-  void setControlSink(ControlSink* sink, const char* const* topics, size_t topic_count) {
+  // 'topics' are subscribed on every connect of the one slot 'slot_index' names
+  // (0-based), so they survive the reconnect ladder. One slot, never all: the
+  // stats presets refuse subscriptions. Both pointers are owned by the caller and
+  // must outlive the bridge. Call before begin() -- subscriptions are registered
+  // when a slot's client is created, and never moved afterwards.
+  void setControlSink(ControlSink* sink, const char* const* topics, size_t topic_count,
+                      int slot_index) {
     _control_sink = sink;
     _control_topics = topics;
     _control_topic_count = topic_count;
+    _control_slot = slot_index;
   }
 
   // The answering half of the control plane: the sink verifies and executes on
   // the loop task, then publishes the outcome here. Deliberately narrow rather
   // than exposing publishToAllSlots -- a caller gets to answer on the control
-  // plane, not a general publish-anywhere. Not retained: a result describes one
-  // command at one moment, and a retained one would be replayed to every later
-  // subscriber as though it were current. Returns false when no slot is
-  // connected, which is a normal outcome and not an error.
+  // plane, not a general publish-anywhere. It answers on the slot the command
+  // came in on and nowhere else. Not retained: a result describes one command at
+  // one moment, and a retained one would be replayed to every later subscriber as
+  // though it were current. Returns false when that slot is not connected, which
+  // is a normal outcome and not an error.
   bool publishControlResult(const char* topic, const char* payload, size_t len) {
     if (topic == NULL || topic[0] == 0 || payload == NULL || len == 0) return false;
-    return publishToAllSlots(topic, payload, len, false, 0);
+    return publishToSlot(_control_slot, topic, payload, len, false, 0);
   }
 
 private:
   ControlSink* _control_sink = NULL;
   const char* const* _control_topics = NULL;
   size_t _control_topic_count = 0;
+  int _control_slot = -1;
 };
 
 #endif

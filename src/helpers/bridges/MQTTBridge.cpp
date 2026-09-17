@@ -1609,7 +1609,7 @@ bool MQTTBridge::ensureSlotClient(int index) {
   // deliver. onTopic() both registers the handler and subscribes, and
   // PsychicMqttClient re-subscribes everything on each reconnect, so a broker
   // outage costs nothing here.
-  if (_control_sink != NULL) {
+  if (_control_sink != NULL && index == _control_slot) {
     for (size_t i = 0; i < _control_topic_count; i++) {
       const char* topic = _control_topics[i];
       slot.client->onTopic(topic, 1, [this, topic](char* /*t*/, char* payload,

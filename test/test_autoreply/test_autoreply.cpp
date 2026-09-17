@@ -289,7 +289,7 @@ TEST(ParseRequest, ModeMustBeExactlyOneKnownLetter) {
 
 // ---- the requester's key: where a private reply is addressed ---------------
 
-// A 32-byte key as 64 hex characters, the form `set mqtt.owner` also takes.
+// A 32-byte key as 64 hex characters, the form `set mqtt.cmd.pubkey` also takes.
 static const char KEY[] =
   "AA04792D7804529FABF230B32DC8F7FA494D1B3280F153B2215C305E4FD654DC";
 
