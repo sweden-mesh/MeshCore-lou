@@ -1166,3 +1166,30 @@ TEST(ParsePrivateTest, AnEmptyBodyIsNotARequest) {
   EXPECT_FALSE(autoReplyParsePrivateTest(one, "test", &id, &id_len));
   EXPECT_FALSE(autoReplyParsePrivateTest(part, "test", &id, &id_len));
 }
+
+// ---- reply slots (Sprint F04 T-02) ------------------------------------------
+
+TEST(AutoReplySlot, ZeroIsUnassignedAndIsAValidSetting) {
+  // The default. It is not "no slot" in the sense of refusing to answer -- it means
+  // the node derives one from its own key, which is what an unconfigured mesh does.
+  EXPECT_TRUE(autoReplySlotValid(AUTOREPLY_SLOT_UNASSIGNED));
+  EXPECT_EQ(AUTOREPLY_SLOT_UNASSIGNED, 0);
+}
+
+TEST(AutoReplySlot, AcceptsTheWholeRangeAndNothingOutsideIt) {
+  EXPECT_TRUE(autoReplySlotValid(1));
+  EXPECT_TRUE(autoReplySlotValid(AUTOREPLY_SLOT_MAX));
+  EXPECT_FALSE(autoReplySlotValid(AUTOREPLY_SLOT_MAX + 1));
+  EXPECT_FALSE(autoReplySlotValid(-1));
+}
+
+TEST(AutoReplySlot, AStoredByteOutsideTheRangeReadsAsUnassigned) {
+  // A truncated or corrupt config file. Unassigned is the safe reading: the node
+  // falls back to its key-derived slot rather than sitting on slot 0 as though it
+  // had been assigned there, which is where a collision would come from.
+  EXPECT_EQ(autoReplyStoredSlot(0), 0);
+  EXPECT_EQ(autoReplyStoredSlot(7), 7);
+  EXPECT_EQ(autoReplyStoredSlot(AUTOREPLY_SLOT_MAX), AUTOREPLY_SLOT_MAX);
+  EXPECT_EQ(autoReplyStoredSlot(AUTOREPLY_SLOT_MAX + 1), AUTOREPLY_SLOT_UNASSIGNED);
+  EXPECT_EQ(autoReplyStoredSlot(255), AUTOREPLY_SLOT_UNASSIGNED);
+}

@@ -3,7 +3,8 @@
 #include <helpers/TxtDataHelpers.h>
 
 #define AUTOREPLY_CONFIG_FILE   "/autoreply"
-#define AUTOREPLY_CONFIG_VER    6
+#define AUTOREPLY_CONFIG_VER    7
+#define AUTOREPLY_CONFIG_VER_6  6    // ... + the private switch, before the reply slot
 #define AUTOREPLY_CONFIG_VER_5  5    // ... + mode, before the private switch
 #define AUTOREPLY_CONFIG_VER_4  4    // enabled + hops + direct flood + delay + region, before the mode
 #define AUTOREPLY_CONFIG_VER_3  3    // enabled + hops + direct flood, before delay and region
@@ -34,6 +35,7 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 AutoReply::AutoReply()
   : _fs(NULL), _enabled(false), _hops(8), _direct_flood(true),
     _delay_factor(AUTOREPLY_DELAY_DEF), _mode(AUTOREPLY_MODE_FLOOD), _private(false),
+    _slot(AUTOREPLY_SLOT_UNASSIGNED),
     _ready(false),
     _limiter(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS),
     _private_limiter(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS)
@@ -115,7 +117,8 @@ void AutoReply::load() {
       file.read(&_delay_factor, 1);
       file.read((uint8_t *) _region, sizeof(_region));
       if (ver >= AUTOREPLY_CONFIG_VER_5) file.read(&_mode, 1);
-      if (ver >= AUTOREPLY_CONFIG_VER) file.read(&priv, 1);
+      if (ver >= AUTOREPLY_CONFIG_VER_6) file.read(&priv, 1);
+      if (ver >= AUTOREPLY_CONFIG_VER) file.read(&_slot, 1);
       _enabled = enabled != 0;
       _direct_flood = direct_flood != 0;
       _private = priv != 0;
@@ -131,6 +134,10 @@ void AutoReply::load() {
       if (_mode != AUTOREPLY_MODE_PRIVATE && _mode != AUTOREPLY_MODE_DIRECT) {
         _mode = AUTOREPLY_MODE_FLOOD;
       }
+      // A file from before v7 has no slot byte at all, so _slot keeps its
+      // constructor default of unassigned -- which is the behaviour such a node
+      // had, and the one the key-derived fallback covers.
+      _slot = autoReplyStoredSlot(_slot);
     } else if (ver == AUTOREPLY_CONFIG_VER_3) {
       // v3 predates the delay factor and the reply region; both keep the
       // constructor defaults, which reproduce v3 behaviour exactly.
@@ -173,6 +180,7 @@ void AutoReply::save() {
     file.write(&_mode, 1);
     uint8_t priv = _private ? 1 : 0;
     file.write(&priv, 1);
+    file.write(&_slot, 1);
     file.close();
   }
 }
@@ -247,6 +255,28 @@ bool AutoReply::handleCommand(const char* iata, const char* command, char* reply
       _delay_factor = (uint8_t)factor;
       save();
       strcpy(reply, "OK");
+    }
+    return true;
+  }
+
+  if (memcmp(command, "set autoreply.slot ", 19) == 0) {
+    long slot = atol(&command[19]);
+    if (!autoReplySlotValid(slot)) {
+      sprintf(reply, "Err - must be %d..%d (%d = unassigned)",
+              AUTOREPLY_SLOT_UNASSIGNED, AUTOREPLY_SLOT_MAX, AUTOREPLY_SLOT_UNASSIGNED);
+    } else {
+      _slot = (uint8_t) slot;
+      save();
+      strcpy(reply, "OK");
+    }
+    return true;
+  }
+
+  if (strcmp(command, "get autoreply.slot") == 0) {
+    if (_slot == AUTOREPLY_SLOT_UNASSIGNED) {
+      strcpy(reply, "> 0 (unassigned; the slot comes from this node's own key)");
+    } else {
+      sprintf(reply, "> %d", (uint32_t) _slot);
     }
     return true;
   }

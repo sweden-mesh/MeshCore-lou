@@ -83,6 +83,7 @@ class AutoReply {
   uint8_t _delay_factor;        // multiplier on the radio retransmit delay
   char _region[AUTOREPLY_MAX_REGION + 1];   // scope for the reply, empty = mirror the request
   uint8_t _mode;                // how a request that names no mode is answered
+  uint8_t _slot;                // assigned reply slot, 0 = derive one from our key
   bool _private;                // answer a private test request sent to this node directly
   bool _ready;
   mesh::GroupChannel _channel;
@@ -120,6 +121,8 @@ public:
    */
   bool directFlood() const { return _direct_flood; }
   uint8_t delayFactor() const { return _delay_factor; }
+  // 0 means unassigned; the caller derives a slot from the node's key instead.
+  uint8_t slot() const { return _slot; }
   const char* replyRegion() const { return _region; }
   /**
    * \brief  The standing reply mode, for a request that names none (AUTOREPLY_MODE_*).

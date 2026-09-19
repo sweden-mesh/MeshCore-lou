@@ -116,6 +116,35 @@ enum {
   AUTOREPLY_MODE_SILENT,
 };
 
+// A reply slot, assigned by the operator over the control plane. Slots exist so the
+// repeaters that answer one request take the air one after another instead of drawing
+// random waits that sometimes coincide: two nodes in distinct slots cannot collide,
+// where two random draws collide at the birthday rate -- 34% across fifteen nodes.
+//
+// 0 means unassigned, and it is the default. An unassigned node derives a slot from
+// its own public key instead (see autoReplySlotFromKey), so a mesh where nobody hands
+// out slots still spreads its replies evenly and needs no configuration at all. That
+// is the difference the assignment buys: unassigned is as good as random, assigned is
+// collision-free.
+#define AUTOREPLY_SLOT_UNASSIGNED 0
+#define AUTOREPLY_SLOT_MAX        64
+
+// True for a value an operator may set. The upper bound is the widest slot count the
+// firmware will accept rather than the count in use, which is a separate setting: a
+// slot above the current count is not wrong, only unused until the count grows.
+static inline bool autoReplySlotValid(long slot) {
+  return slot >= 0 && slot <= AUTOREPLY_SLOT_MAX;
+}
+
+// What a stored byte means when it is read back. A value outside the range is a
+// truncated or corrupt config file, and unassigned is the safe reading of it: the node
+// falls back to its key-derived slot, which is always a legal one. Refusing to answer,
+// or answering at slot 0 as though assigned, would both be worse -- the first silences
+// a node the mesh is trying to measure, the second puts it on top of whoever holds it.
+static inline uint8_t autoReplyStoredSlot(uint8_t stored) {
+  return autoReplySlotValid(stored) ? stored : (uint8_t)AUTOREPLY_SLOT_UNASSIGNED;
+}
+
 // The letter a requester types, either case. Anything else is DEFAULT, which the
 // trigger parser treats as "not a mode token" rather than as a choice.
 static inline uint8_t autoReplyModeFromLetter(char c) {
