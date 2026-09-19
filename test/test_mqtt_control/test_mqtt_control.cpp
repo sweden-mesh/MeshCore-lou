@@ -265,6 +265,28 @@ TEST(Allowlist, AcceptsAutoReplyParametersAndTheTrigger) {
   EXPECT_FALSE(allowed("triggerprivate x"));   // the boundary rule, as for the others
 }
 
+TEST(Allowlist, AdmitsTheSlotSettingsThroughTheAutoReplyFamily) {
+  // Sprint F04 added three settings, and the point of checking rather than assuming
+  // is that nobody touched this list: the "set autoreply" family entry admits them
+  // through its boundary rule. If that ever stops being true, slot assignment stops
+  // working over the control plane and the only clue would be a node that never
+  // answers where it was told to.
+  EXPECT_TRUE(allowed("set autoreply.slot 7"));
+  EXPECT_TRUE(allowed("set autoreply.window 10 120"));
+  EXPECT_TRUE(allowed("set autoreply.slots 16"));
+  EXPECT_TRUE(allowed("get autoreply.slot"));
+  EXPECT_TRUE(allowed("get autoreply.window"));
+  EXPECT_TRUE(allowed("get autoreply.slots"));
+}
+
+TEST(Allowlist, TheRetiredDelayCommandIsStillAdmittedAndTheNodeRefusesIt) {
+  // "set autoreply.delay 60" still rides the family, because the family is a prefix
+  // rule and the command no longer exists to be listed separately. That is the right
+  // outcome: the node answers with an error, which is how a stale provisioning script
+  // finds out. The allowlist is not the place to hide a removed command.
+  EXPECT_TRUE(allowed("set autoreply.delay 60"));
+}
+
 TEST(Allowlist, BlocksTheCommandsThatWouldOwnTheNode) {
   // The whole point of the list. Each of these is reachable from the CLI and
   // must never be reachable from a public broker.
