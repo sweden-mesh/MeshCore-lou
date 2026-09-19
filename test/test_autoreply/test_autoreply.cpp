@@ -1268,3 +1268,74 @@ TEST(AutoReplySlotDelay, DegenerateInputsDoNotDivideByZero) {
   EXPECT_EQ(autoReplySlotDelayMs(0, 0, WIN_START, WIN_END, 7), WIN_START);
   EXPECT_EQ(autoReplySlotDelayMs(0, 16, WIN_END, WIN_START, 7), WIN_END);
 }
+
+// ---- the unassigned node's slot (Sprint F04 T-04) ----------------------------
+
+// A stand-in for an Ed25519 public key, which is indistinguishable from random. An
+// arithmetic pattern is not: bytes of the form seed*37 + i*101 collide mod 16 on every
+// day of the year, which failed this suite's own spread test the first time it ran.
+static void fillKey(uint8_t* key, uint8_t seed) {
+  uint32_t x = 0x9E3779B9u ^ (seed * 0x85EBCA6Bu);
+  for (int i = 0; i < 32; i++) {
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;      // xorshift32
+    key[i] = (uint8_t)(x >> 24);
+  }
+}
+
+TEST(AutoReplyKeySlot, SameKeyAndDayGiveTheSameSlotEveryTime) {
+  uint8_t key[32]; fillKey(key, 5);
+  for (uint32_t day = 0; day < 10; day++) {
+    uint8_t first = autoReplySlotFromKey(key, sizeof(key), 16, day);
+    for (int again = 0; again < 3; again++) {
+      EXPECT_EQ(autoReplySlotFromKey(key, sizeof(key), 16, day), first);
+    }
+  }
+}
+
+TEST(AutoReplyKeySlot, TheSlotIsAlwaysInsideTheSlotCount) {
+  uint8_t key[32]; fillKey(key, 9);
+  for (uint8_t slots = 1; slots <= 32; slots++) {
+    for (uint32_t day = 0; day < 40; day++) {
+      EXPECT_LT(autoReplySlotFromKey(key, sizeof(key), slots, day), slots);
+    }
+  }
+}
+
+TEST(AutoReplyKeySlot, ANodeDoesNotSitOnOneSlotForEver) {
+  // Not a fairness guarantee -- a key whose bytes happen to agree mod 16 would sit
+  // still, and that is allowed. This asserts the day actually reaches the choice.
+  uint8_t key[32]; fillKey(key, 3);
+  bool moved = false;
+  for (uint32_t day = 1; day < 32 && !moved; day++) {
+    moved = autoReplySlotFromKey(key, sizeof(key), 16, day)
+         != autoReplySlotFromKey(key, sizeof(key), 16, 0);
+  }
+  EXPECT_TRUE(moved);
+}
+
+TEST(AutoReplyKeySlot, DifferentKeysMostlyLandApartButNotAlways) {
+  // The honest property: this spreads like a random draw, so collisions happen at the
+  // birthday rate. The test records that rather than pretending otherwise -- with 12
+  // keys over 16 slots, some days will have a clash, and most keys still differ.
+  uint8_t keys[12][32];
+  for (uint8_t i = 0; i < 12; i++) fillKey(keys[i], (uint8_t)(i + 1));
+  int days_with_a_clash = 0;
+  for (uint32_t day = 0; day < 32; day++) {
+    bool used[16] = {false}; bool clash = false;
+    for (uint8_t i = 0; i < 12; i++) {
+      uint8_t slot = autoReplySlotFromKey(keys[i], 32, 16, day);
+      if (used[slot]) clash = true;
+      used[slot] = true;
+    }
+    if (clash) days_with_a_clash++;
+  }
+  EXPECT_GT(days_with_a_clash, 0);        // it is not collision-free, by construction
+  EXPECT_LT(days_with_a_clash, 32);       // nor is it always colliding
+}
+
+TEST(AutoReplyKeySlot, DegenerateInputsAreSafe) {
+  uint8_t key[32]; fillKey(key, 1);
+  EXPECT_EQ(autoReplySlotFromKey(NULL, 32, 16, 3), 0);
+  EXPECT_EQ(autoReplySlotFromKey(key, 0, 16, 3), 0);
+  EXPECT_EQ(autoReplySlotFromKey(key, sizeof(key), 0, 3), 0);
+}

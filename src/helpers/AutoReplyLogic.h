@@ -166,6 +166,27 @@ static inline uint8_t autoReplyRotatedSlot(uint8_t index, uint8_t slots, uint32_
   return (uint8_t)(((uint32_t)index + day) % slots);
 }
 
+// The slot a node uses when nobody has assigned it one -- which is every node on a
+// mesh with no orchestration behind it. Flash the firmware, configure nothing, and
+// replies still spread across the window instead of landing together.
+//
+// **This is not as good as an assignment, and it is not meant to be.** A key byte is
+// effectively a uniform draw, so two unassigned nodes share a slot at the birthday
+// rate: about a third of the time across fifteen nodes at sixteen slots. What it buys
+// over a plain random wait is that the spread is even and bounded, and that the choice
+// is *predictable* -- the same node picks the same slot all day, and an observer who
+// knows the key and the date can say which. An orchestrated mesh hands out slots and
+// gets no collisions at all; that is the difference the assignment is worth.
+//
+// The byte is chosen by the day rather than by the request, so an unassigned node is
+// as stable through a day as an assigned one. `key_len` is passed in rather than
+// assuming 32, because this header knows nothing about MeshCore's key sizes.
+static inline uint8_t autoReplySlotFromKey(const uint8_t* key, size_t key_len,
+                                           uint8_t slots, uint32_t day) {
+  if (key == NULL || key_len == 0 || slots == 0) return 0;
+  return (uint8_t)(key[day % key_len] % slots);
+}
+
 // Where in the window a rotated slot sits, in milliseconds after the request.
 //
 // The window runs from `start_ms` to `end_ms` and is cut into `slots` equal pieces. A
