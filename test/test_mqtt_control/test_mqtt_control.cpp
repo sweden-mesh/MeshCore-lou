@@ -497,6 +497,16 @@ TEST(RateLimit, TheThirdTransmitInAnHourIsRefusedWhileReadsStillWork) {
   EXPECT_FALSE(commands.allow(now + 3700));
 }
 
+// ---- the result must not be written from the loop task --------------------------
+
+TEST(Result, IsPublishedThroughTheOutboxNotStraightToTheSocket) {
+  // MQTTBridge::publishToSlot takes `async = (qos > 0)`. At 0 the loop task writes to
+  // a socket the bridge task is also writing to, and the broker drops the node for a
+  // malformed packet on every command. This pins the side of that line we are on.
+  EXPECT_GT(MQTTCTRL_RESULT_QOS, 0);
+  EXPECT_LE(MQTTCTRL_RESULT_QOS, 1);   // QoS 2 buys nothing: a repeated result is harmless
+}
+
 // ---- a window boundary must not double the budget ------------------------------
 
 TEST(RateLimit, UpstreamsFixedWindowLetsThreeFloodsThroughInTwoSeconds) {

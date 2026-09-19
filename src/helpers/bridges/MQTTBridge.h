@@ -724,9 +724,13 @@ public:
   // one moment, and a retained one would be replayed to every later subscriber as
   // though it were current. Returns false when that slot is not connected, which
   // is a normal outcome and not an error.
-  bool publishControlResult(const char* topic, const char* payload, size_t len) {
+  //
+  // `qos` has no default on purpose. The caller is on the loop task, and QoS 0 here
+  // means a synchronous write to a socket the bridge task is also writing to; see
+  // MQTTCTRL_RESULT_QOS. A default of 0 is how that went unnoticed.
+  bool publishControlResult(const char* topic, const char* payload, size_t len, uint8_t qos) {
     if (topic == NULL || topic[0] == 0 || payload == NULL || len == 0) return false;
-    return publishToSlot(_control_slot, topic, payload, len, false, 0);
+    return publishToSlot(_control_slot, topic, payload, len, false, qos);
   }
 
 private:

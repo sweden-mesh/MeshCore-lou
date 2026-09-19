@@ -2058,7 +2058,7 @@ void MyMesh::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutco
                                   (int)result, outcome.command, reply);
   if (n == 0) return;
 
-  bridge->publishControlResult(_ctrl_result, payload, n);
+  bridge->publishControlResult(_ctrl_result, payload, n, MQTTCTRL_RESULT_QOS);
 }
 
 #endif

@@ -201,6 +201,14 @@ which node answered, the counter says which question it answered. Split on the f
 separators and take the remainder as the reply — a command can never contain a separator
 (`mqttCtrlCommandCharsOk` refuses it), so only the reply can, and only at the end.
 
+It is published at **QoS 1, not retained**. The QoS is not there for delivery: in this bridge a
+QoS 0 publish is a synchronous write from the calling task, and the result is published from the
+loop task while the bridge's task writes packets to the same socket. On firmware up to
+`v1.17.0-observer-autoreply-2` and `8530d4bb` that interleaving makes the broker drop the node —
+**one reconnect per command** — so on those builds space commands by 30 s and retry on silence.
+At QoS 1 the MQTT task is the only writer. *Reasoned from the code and compiled; not yet seen on
+a node, because nothing is flashed during the freeze.*
+
 A line too long for the buffer is **truncated, never dropped**. The reply is last and every
 earlier field is bounded, so a clamped line still parses.
 

@@ -59,6 +59,15 @@
 #define MQTTCTRL_TRIGGER_MAX      2
 #define MQTTCTRL_TRIGGER_WINDOW   3600
 
+// The QoS a result is published at, and it is not about delivery. In this bridge
+// QoS 0 is a *synchronous* socket write from whichever task calls publish, and a
+// result is published from the loop task while the bridge's own task is writing
+// packets to the same socket. Two writers interleave, the broker reads a malformed
+// packet and drops the node -- once per command, observed 2026-09-19 on both nodes
+// that could be commanded. Anything above 0 takes the outbox instead and is written
+// by the MQTT task alone. Costs one PUBACK per command, against ten an hour.
+#define MQTTCTRL_RESULT_QOS       1
+
 // The budget itself. Upstream's RateLimiter is a fixed window: its count resets all
 // at once when the window rolls, so one command late in a window and a full budget
 // just after it both pass -- three floods in two seconds against a limit of two an
