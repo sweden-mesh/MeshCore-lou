@@ -145,6 +145,50 @@ static inline uint8_t autoReplyStoredSlot(uint8_t stored) {
   return autoReplySlotValid(stored) ? stored : (uint8_t)AUTOREPLY_SLOT_UNASSIGNED;
 }
 
+// How many slots the window is divided into, unless the operator says otherwise.
+// Sixteen covers the fifteen repliers JKG has today with room for growth, and divides
+// a 110 s window into ~6.9 s slots -- wider than one reply's own flood footprint.
+#define AUTOREPLY_SLOTS_DEF 16
+#define AUTOREPLY_SLOTS_MIN 1
+#define AUTOREPLY_SLOTS_MAX AUTOREPLY_SLOT_MAX
+
+// A slot is not used raw: it is rotated by the day, so the same node does not answer
+// first every single test for the rest of its life. Adding one offset to every node is
+// a rotation of the whole order, so distinct slots stay distinct -- which is the
+// property the whole scheme rests on, and which picking a per-node offset would break.
+//
+// The offset changes at midnight and holds for the whole day (operator, 2026-09-19):
+// an order that reshuffles per request is fairer still, but nobody watching a test can
+// anticipate it, and a human tester should be able to. A node whose clock has not
+// synced passes day 0 and lands on a legal ordering rather than refusing to answer.
+static inline uint8_t autoReplyRotatedSlot(uint8_t index, uint8_t slots, uint32_t day) {
+  if (slots == 0) return 0;
+  return (uint8_t)(((uint32_t)index + day) % slots);
+}
+
+// Where in the window a rotated slot sits, in milliseconds after the request.
+//
+// The window runs from `start_ms` to `end_ms` and is cut into `slots` equal pieces. A
+// reply leaves in the middle of its own piece: a guard of an eighth at each edge keeps
+// two neighbours apart even though they hear the request at different moments -- each
+// hop adds up to ~1.35 s of retransmit delay plus airtime, so slot edges smear across
+// the mesh. `entropy` fills the jittered middle; any source will do, and the firmware
+// passes the radio's RNG.
+//
+// Jitter is deliberately not the whole slot. Without a guard the scheme would spread
+// the *average* while still letting neighbours touch at the edges, which is the thing
+// a collision-free order is for.
+static inline uint32_t autoReplySlotDelayMs(uint8_t rotated, uint8_t slots,
+                                            uint32_t start_ms, uint32_t end_ms,
+                                            uint32_t entropy) {
+  if (slots == 0 || end_ms <= start_ms) return start_ms;
+  const uint32_t width = (end_ms - start_ms) / slots;
+  const uint32_t guard = width / 8;
+  const uint32_t base = start_ms + (uint32_t)rotated * width + guard;
+  const uint32_t jitter_span = width - 2 * guard;
+  return jitter_span ? base + (entropy % jitter_span) : base;
+}
+
 // The letter a requester types, either case. Anything else is DEFAULT, which the
 // trigger parser treats as "not a mode token" rather than as a choice.
 static inline uint8_t autoReplyModeFromLetter(char c) {

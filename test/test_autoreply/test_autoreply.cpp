@@ -1193,3 +1193,78 @@ TEST(AutoReplySlot, AStoredByteOutsideTheRangeReadsAsUnassigned) {
   EXPECT_EQ(autoReplyStoredSlot(AUTOREPLY_SLOT_MAX + 1), AUTOREPLY_SLOT_UNASSIGNED);
   EXPECT_EQ(autoReplyStoredSlot(255), AUTOREPLY_SLOT_UNASSIGNED);
 }
+
+// ---- the slot -> delay rule (Sprint F04 T-03) --------------------------------
+
+static const uint32_t WIN_START = 10000, WIN_END = 120000;
+
+TEST(AutoReplySlotDelay, TwoDistinctSlotsNeverOverlapOnAnyDay) {
+  // The property the whole scheme rests on. Checked across a year of days and every
+  // pair of slots, at both extremes of the jitter.
+  const uint8_t K = 16;
+  for (uint32_t day = 0; day < 370; day++) {
+    for (uint8_t a = 0; a < K; a++) {
+      for (uint8_t b = (uint8_t)(a + 1); b < K; b++) {
+        uint8_t ra = autoReplyRotatedSlot(a, K, day), rb = autoReplyRotatedSlot(b, K, day);
+        uint32_t a_lo = autoReplySlotDelayMs(ra, K, WIN_START, WIN_END, 0);
+        uint32_t a_hi = autoReplySlotDelayMs(ra, K, WIN_START, WIN_END, 0xFFFFFFFF);
+        uint32_t b_lo = autoReplySlotDelayMs(rb, K, WIN_START, WIN_END, 0);
+        uint32_t b_hi = autoReplySlotDelayMs(rb, K, WIN_START, WIN_END, 0xFFFFFFFF);
+        EXPECT_TRUE(a_hi < b_lo || b_hi < a_lo)
+            << "slots " << (int)a << " and " << (int)b << " touch on day " << day;
+      }
+    }
+  }
+}
+
+TEST(AutoReplySlotDelay, RotationIsAPermutation) {
+  // Every slot lands somewhere, and no two land on the same place -- otherwise the
+  // rotation would be quietly colliding nodes it was meant to keep apart.
+  const uint8_t K = 16;
+  for (uint32_t day = 0; day < 40; day++) {
+    bool taken[16] = {false};
+    for (uint8_t i = 0; i < K; i++) {
+      uint8_t r = autoReplyRotatedSlot(i, K, day);
+      ASSERT_LT(r, K);
+      EXPECT_FALSE(taken[r]) << "day " << day << " maps two slots onto " << (int)r;
+      taken[r] = true;
+    }
+  }
+}
+
+TEST(AutoReplySlotDelay, TheDelayStaysInsideTheWindow) {
+  const uint8_t K = 16;
+  for (uint8_t r = 0; r < K; r++) {
+    for (uint32_t e = 0; e < 5; e++) {
+      uint32_t d = autoReplySlotDelayMs(r, K, WIN_START, WIN_END, e * 999983u);
+      EXPECT_GE(d, WIN_START);
+      EXPECT_LE(d, WIN_END);
+    }
+  }
+}
+
+TEST(AutoReplySlotDelay, JitterStaysInsideTheGuards) {
+  const uint8_t K = 16;
+  const uint32_t width = (WIN_END - WIN_START) / K, guard = width / 8;
+  for (uint8_t r = 0; r < K; r++) {
+    uint32_t lo = autoReplySlotDelayMs(r, K, WIN_START, WIN_END, 0);
+    uint32_t hi = autoReplySlotDelayMs(r, K, WIN_START, WIN_END, 0xFFFFFFFF);
+    EXPECT_EQ(lo, WIN_START + (uint32_t)r * width + guard);
+    EXPECT_LE(hi, WIN_START + (uint32_t)(r + 1) * width - guard);
+  }
+}
+
+TEST(AutoReplySlotDelay, AnUnsyncedClockIsDayZeroAndStillOrders) {
+  // Day 0 is what a node with no NTP passes. It must be a legal ordering, not a refusal
+  // and not everyone on slot 0.
+  const uint8_t K = 8;
+  EXPECT_EQ(autoReplyRotatedSlot(3, K, 0), 3);
+  EXPECT_NE(autoReplySlotDelayMs(autoReplyRotatedSlot(3, K, 0), K, WIN_START, WIN_END, 0),
+            autoReplySlotDelayMs(autoReplyRotatedSlot(4, K, 0), K, WIN_START, WIN_END, 0));
+}
+
+TEST(AutoReplySlotDelay, DegenerateInputsDoNotDivideByZero) {
+  EXPECT_EQ(autoReplyRotatedSlot(3, 0, 5), 0);
+  EXPECT_EQ(autoReplySlotDelayMs(0, 0, WIN_START, WIN_END, 7), WIN_START);
+  EXPECT_EQ(autoReplySlotDelayMs(0, 16, WIN_END, WIN_START, 7), WIN_END);
+}
