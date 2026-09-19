@@ -50,6 +50,12 @@ set mqtt.cmd.slot 2
 reboot
 ```
 
+**If the slot used to hold a JWT preset, check how it signs in.** On a custom slot the audience
+is the switch for JWT, and `set mqttN.preset custom` does not clear it — so the slot goes on
+opening TLS and presenting a token to a plain broker, while `get mqttN.preset` and
+`get mqttN.server` read exactly as intended. `get mqtt.stats` ends each slot with the mode it
+is really in — `s2=11/0 pw` or `s2=0/4 jwt` — and `set mqttN.audience` with no value clears it.
+
 The slot is read at boot, when the subscriptions are made. It cannot be set remotely: a signed
 `set mqtt.cmd.slot 0` would leave a node that only a serial cable could bring back.
 

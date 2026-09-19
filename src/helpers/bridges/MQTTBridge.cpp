@@ -4,6 +4,7 @@
 #include "../MQTTPacketQueuePolicy.h"
 #include "../MQTTReplyFormat.h"
 #include "../MQTTRuntimeBufferLifecycle.h"
+#include "../MQTTSlotAuth.h"
 #include "../MQTTTopicRouter.h"
 #include "../TxtDataHelpers.h"
 #include <NTPClient.h>
@@ -375,9 +376,15 @@ void MQTTBridge::formatMqttStatsReply(char* buf, size_t bufsize) {
   replyAppendf(buf, bufsize, &pos, " |");
   for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) {
     if (!b->_slots[i].enabled || !b->_slots[i].client) continue;
-    replyAppendf(buf, bufsize, &pos, " s%d=%lu/%lu", i + 1,
-                 b->_slots[i].client->getPublishOk(),
-                 b->_slots[i].client->getPublishErr());
+    // The trailing word is how the slot really signs in, which no other `get` shows:
+    // a custom slot with a leftover audience is "jwt" whatever its URI says.
+    const MQTTSlot& st = b->_slots[i];
+    replyAppendf(buf, bufsize, &pos, " s%d=%lu/%lu %s", i + 1,
+                 st.client->getPublishOk(), st.client->getPublishErr(),
+                 mqttSlotAuthLabel(mqttSlotUsesJwt(
+                     st.preset != nullptr,
+                     st.preset && st.preset->auth_type == MQTT_AUTH_JWT,
+                     st.audience[0] != '\0')));
   }
 }
 
@@ -1828,7 +1835,9 @@ bool MQTTBridge::setupSlot(int index) {
     slot.last_reconnect_attempt = 0;
   }
 
-  bool uses_jwt = (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) || slot.audience[0] != '\0';
+  bool uses_jwt = mqttSlotUsesJwt(slot.preset != nullptr,
+                                  slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT,
+                                  slot.audience[0] != '\0');
   optimizeMqttClientConfig(slot.client, uses_jwt);  // sets keepalive (45s PSRAM, 75s non-PSRAM)
   #ifndef MQTT_FORCE_KEEPALIVE_45
   #if defined(BOARD_HAS_PSRAM)
