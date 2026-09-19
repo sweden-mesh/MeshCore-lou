@@ -1408,3 +1408,34 @@ TEST(AutoReplyWindow, RefusesASlotCountOutsideTheRange) {
   EXPECT_FALSE(autoReplySlotsValid(AUTOREPLY_SLOTS_MAX + 1, 10, 600));
   EXPECT_TRUE(autoReplySlotsValid(1, 10, 120));
 }
+
+// ---- the cross-check against the model (Sprint F04 T-09) --------------------
+//
+// The same four vectors are asserted in Meshcore-Panopticon's
+// tests/test_reply_slots.py. Two implementations of one timing rule is exactly where
+// this project has gone wrong before: reply timing lived only in the firmware for six
+// nights while the model scored storm_duration against a number it could not produce.
+// If either side drifts, one of these two suites goes red.
+
+TEST(AutoReplySlotDelay, AgreesWithTheModelOnFixedVectors) {
+  uint8_t key[32];
+  memset(key, 0xAA, sizeof(key));
+  const uint8_t K = 16;
+  const uint32_t start = 10000, end = 120000;
+  const uint32_t width = (end - start) / K, guard = width / 8, span = width - 2 * guard;
+
+  struct Vector { uint8_t assigned; uint32_t day; uint32_t entropy; uint32_t expect_ms; };
+  const Vector vectors[] = {
+    {1, 0,       0,          10859},
+    {1, 0,       span / 2,   13437},
+    {5, 7,       span / 4,   87773},
+    {0, 0,       0,          79609},   // unassigned: 0xAA % 16 = slot 10
+  };
+
+  for (const Vector& v : vectors) {
+    uint8_t index = autoReplySlotIndex(v.assigned, key, sizeof(key), K, v.day);
+    uint32_t got = autoReplySlotDelayMs(autoReplyRotatedSlot(index, K, v.day), K,
+                                        start, end, v.entropy);
+    EXPECT_EQ(got, v.expect_ms) << "assigned=" << (int)v.assigned << " day=" << v.day;
+  }
+}
