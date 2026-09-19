@@ -4,6 +4,7 @@
 // functions examples/simple_repeater/AutoReply.cpp calls.
 #include <gtest/gtest.h>
 #include <string>
+#include <vector>
 #include "helpers/AutoReplyLogic.h"
 
 // The firmware's buffer for a channel name (AUTOREPLY_MAX_CHANNEL).
@@ -1438,4 +1439,149 @@ TEST(AutoReplySlotDelay, AgreesWithTheModelOnFixedVectors) {
                                         start, end, v.entropy);
     EXPECT_EQ(got, v.expect_ms) << "assigned=" << (int)v.assigned << " day=" << v.day;
   }
+}
+
+// ---- the stored config, every version of it (Sprint 18 T-07) ----------------
+//
+// Seven versions of /autoreply exist in the field or in the history, and until now
+// none was tested: AutoReply.cpp needs a filesystem. The layout is a pure codec now.
+
+static AutoReplyStoredConfig decodeFrom(const std::vector<uint8_t>& bytes, bool* ok = nullptr) {
+  AutoReplyStoredConfig c;
+  autoReplyConfigDefaults(&c);
+  bool r = autoReplyConfigDecode(bytes.data(), bytes.size(), &c);
+  if (ok) *ok = r;
+  return c;
+}
+
+static std::vector<uint8_t> v4Prefix(uint8_t ver, const char* region) {
+  std::vector<uint8_t> b = {ver, 1 /*enabled*/, 5 /*hops*/, 0 /*direct_flood*/, 60 /*retired delay*/};
+  std::vector<uint8_t> r(AUTOREPLY_MAX_REGION + 1, 0);
+  memcpy(r.data(), region, strlen(region));
+  b.insert(b.end(), r.begin(), r.end());
+  return b;
+}
+
+TEST(AutoReplyConfig, V1TurnsANamedChannelIntoEnabled) {
+  std::vector<uint8_t> b(1 + 32 + 1, 0);
+  b[0] = 1; b[1] = '#'; b[33] = 3;
+  AutoReplyStoredConfig c = decodeFrom(b);
+  EXPECT_TRUE(c.enabled);
+  EXPECT_EQ(c.hops, 3);
+  b[1] = 0;                                   // no channel was named: it was off
+  EXPECT_FALSE(decodeFrom(b).enabled);
+}
+
+TEST(AutoReplyConfig, V2AndV3KeepTheDefaultsForWhatTheyPredate) {
+  AutoReplyStoredConfig v2 = decodeFrom({2, 1, 4});
+  EXPECT_TRUE(v2.enabled); EXPECT_EQ(v2.hops, 4);
+  EXPECT_TRUE(v2.direct_flood);               // v2 predates the flag; the default holds
+  AutoReplyStoredConfig v3 = decodeFrom({3, 1, 4, 0});
+  EXPECT_FALSE(v3.direct_flood);
+  EXPECT_EQ(v3.slot, AUTOREPLY_SLOT_UNASSIGNED);
+  EXPECT_EQ(v3.slots, AUTOREPLY_SLOTS_DEF);
+}
+
+TEST(AutoReplyConfig, V4ReadsTheRegionAndThrowsTheOldDelayAway) {
+  AutoReplyStoredConfig c = decodeFrom(v4Prefix(4, "JKG"));
+  EXPECT_TRUE(c.enabled); EXPECT_EQ(c.hops, 5); EXPECT_FALSE(c.direct_flood);
+  EXPECT_STREQ(c.region, "JKG");
+  EXPECT_EQ(c.mode, AUTOREPLY_MODE_FLOOD);    // v4 predates the mode
+}
+
+TEST(AutoReplyConfig, V5AndV6AddTheModeThenThePrivateSwitch) {
+  std::vector<uint8_t> b = v4Prefix(5, "JKG");
+  b.push_back(AUTOREPLY_MODE_DIRECT);
+  EXPECT_EQ(decodeFrom(b).mode, AUTOREPLY_MODE_DIRECT);
+  EXPECT_FALSE(decodeFrom(b).priv);
+  b[0] = 6; b.push_back(1);
+  EXPECT_TRUE(decodeFrom(b).priv);
+}
+
+TEST(AutoReplyConfig, V7RoundTripsEveryField) {
+  AutoReplyStoredConfig in;
+  autoReplyConfigDefaults(&in);
+  in.enabled = true; in.hops = 6; in.direct_flood = false;
+  strcpy(in.region, "JKG"); in.mode = AUTOREPLY_MODE_PRIVATE; in.priv = true;
+  in.slot = 9; in.window_start = 15; in.window_end = 300; in.slots = 32;
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  ASSERT_GT(n, 0u);
+  EXPECT_EQ(buf[0], AUTOREPLY_CONFIG_VERSION);
+  AutoReplyStoredConfig out = decodeFrom(std::vector<uint8_t>(buf, buf + n));
+  EXPECT_TRUE(out.enabled); EXPECT_EQ(out.hops, 6); EXPECT_FALSE(out.direct_flood);
+  EXPECT_STREQ(out.region, "JKG"); EXPECT_EQ(out.mode, AUTOREPLY_MODE_PRIVATE);
+  EXPECT_TRUE(out.priv); EXPECT_EQ(out.slot, 9);
+  EXPECT_EQ(out.window_start, 15); EXPECT_EQ(out.window_end, 300); EXPECT_EQ(out.slots, 32);
+}
+
+TEST(AutoReplyConfig, AFileFromNewerFirmwareIsReadByTheFieldsWeKnow) {
+  // What stops a rollback switching the feature off in silence.
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  in.enabled = true; in.slot = 4;
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  buf[0] = 9;                                 // some later version
+  std::vector<uint8_t> b(buf, buf + n);
+  b.push_back(0x77); b.push_back(0x88);       // and fields we have never heard of
+  AutoReplyStoredConfig out = decodeFrom(b);
+  EXPECT_TRUE(out.enabled);
+  EXPECT_EQ(out.slot, 4);
+}
+
+TEST(AutoReplyConfig, ATruncatedFileKeepsDefaultsForWhatItNeverReached) {
+  std::vector<uint8_t> b = v4Prefix(7, "JKG");
+  b.push_back(AUTOREPLY_MODE_DIRECT);         // mode present, then the file ends
+  AutoReplyStoredConfig c = decodeFrom(b);
+  EXPECT_EQ(c.mode, AUTOREPLY_MODE_DIRECT);
+  EXPECT_FALSE(c.priv);
+  EXPECT_EQ(c.slots, AUTOREPLY_SLOTS_DEF);
+  EXPECT_EQ(c.window_end, AUTOREPLY_WINDOW_END_DEF);
+}
+
+TEST(AutoReplyConfig, ADamagedWindowFallsBackAsAWhole) {
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  in.window_start = 120; in.window_end = 10; in.slots = 16;      // inverted
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  AutoReplyStoredConfig out = decodeFrom(std::vector<uint8_t>(buf, buf + n));
+  EXPECT_EQ(out.window_start, AUTOREPLY_WINDOW_START_DEF);
+  EXPECT_EQ(out.window_end, AUTOREPLY_WINDOW_END_DEF);
+  EXPECT_EQ(out.slots, AUTOREPLY_SLOTS_DEF);
+}
+
+TEST(AutoReplyConfig, ADamagedModeOrSlotTakesTheSafeReading) {
+  std::vector<uint8_t> b = v4Prefix(7, "");
+  b.push_back(0xEE);                           // not a mode
+  b.push_back(0);
+  b.push_back(200);                            // not a slot
+  b.insert(b.end(), {10, 0, 120, 0, 16});
+  AutoReplyStoredConfig c = decodeFrom(b);
+  EXPECT_EQ(c.mode, AUTOREPLY_MODE_FLOOD);
+  EXPECT_EQ(c.slot, AUTOREPLY_SLOT_UNASSIGNED);
+}
+
+TEST(AutoReplyConfig, RefusesAnEmptyFileOrAVersionItHasNeverHeardOf) {
+  bool ok = true;
+  AutoReplyStoredConfig c = decodeFrom({}, &ok);
+  EXPECT_FALSE(ok);
+  decodeFrom({0, 1, 1}, &ok);
+  EXPECT_FALSE(ok);
+  EXPECT_FALSE(c.enabled);
+}
+
+TEST(AutoReplyConfig, EncodeRefusesABufferTooSmall) {
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  uint8_t tiny[8];
+  EXPECT_EQ(autoReplyConfigEncode(&in, tiny, sizeof(tiny)), 0u);
+}
+
+TEST(AutoReplyConfig, AV5FilesTrailingByteIsNotThePrivateSwitch) {
+  // v5 ends at the mode. Anything after it is not a field this version defined, and
+  // reading it as `private` would switch on an unauthenticated transmit path from
+  // whatever byte happened to follow -- so the version gates the read, not the length.
+  std::vector<uint8_t> b = v4Prefix(5, "JKG");
+  b.push_back(AUTOREPLY_MODE_DIRECT);
+  b.push_back(1);
+  EXPECT_FALSE(decodeFrom(b).priv);
 }

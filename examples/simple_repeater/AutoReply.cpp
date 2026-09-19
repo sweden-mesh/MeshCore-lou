@@ -3,13 +3,6 @@
 #include <helpers/TxtDataHelpers.h>
 
 #define AUTOREPLY_CONFIG_FILE   "/autoreply"
-#define AUTOREPLY_CONFIG_VER    7
-#define AUTOREPLY_CONFIG_VER_6  6    // ... + the private switch, before the reply slot
-#define AUTOREPLY_CONFIG_VER_5  5    // ... + mode, before the private switch
-#define AUTOREPLY_CONFIG_VER_4  4    // enabled + hops + direct flood + delay + region, before the mode
-#define AUTOREPLY_CONFIG_VER_3  3    // enabled + hops + direct flood, before delay and region
-#define AUTOREPLY_CONFIG_VER_2  2    // enabled + hops, with no direct reply mode stored
-#define AUTOREPLY_CONFIG_VER_1  1    // channel name + hops, before the channel was derived
 
 #define MAX_PATH_HASHES_SHOWN   8    // keep the reply short, it is airtime
 
@@ -100,105 +93,59 @@ void AutoReply::load() {
   if (!_fs->exists(AUTOREPLY_CONFIG_FILE)) return;
 
   File file = openRead(_fs, AUTOREPLY_CONFIG_FILE);
+  if (!file) return;
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t len = file.read(buf, sizeof(buf));
+  file.close();
+
+  // The byte layout, every version of it, is autoReplyConfigDecode's -- kept in the
+  // logic header so the host suite can test it, which this file cannot be.
+  AutoReplyStoredConfig c;
+  toStored(&c);
+  if (!autoReplyConfigDecode(buf, len, &c)) return;
+  fromStored(c);
+}
+
+void AutoReply::save() {
+  AutoReplyStoredConfig c;
+  toStored(&c);
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t len = autoReplyConfigEncode(&c, buf, sizeof(buf));
+  if (len == 0) return;
+
+  File file = openWrite(_fs, AUTOREPLY_CONFIG_FILE);
   if (file) {
-    uint8_t ver = 0;
-    file.read(&ver, 1);
-    // The file is append-only from v5 on: each version adds its fields after the
-    // ones before it, never between them. So the v4 prefix is read for any file
-    // from v4 up, each later field only when the file's version has it, and a
-    // file written by a *newer* firmware is read by the fields this one knows and
-    // the rest ignored -- rolling firmware back no longer switches the feature
-    // off in silence. (A v4 reader cannot do the same for a v5 file; that is
-    // already in the field and is documented instead.)
-    if (ver >= AUTOREPLY_CONFIG_VER_4) {
-      uint8_t enabled = 0, direct_flood = 1, priv = 0;
-      file.read(&enabled, 1);
-      file.read(&_hops, 1);
-      file.read(&direct_flood, 1);
-      // v4-v6 stored the autoreply.delay multiplier here. It is read and thrown
-      // away: the spread is the window and the slot now, and keeping its byte
-      // position is what lets a v4, v5 or v6 file still load field by field.
-      uint8_t retired_delay = 0;
-      file.read(&retired_delay, 1);
-      file.read((uint8_t *) _region, sizeof(_region));
-      if (ver >= AUTOREPLY_CONFIG_VER_5) file.read(&_mode, 1);
-      if (ver >= AUTOREPLY_CONFIG_VER_6) file.read(&priv, 1);
-      if (ver >= AUTOREPLY_CONFIG_VER) {
-        file.read(&_slot, 1);
-        file.read((uint8_t *) &_window_start, sizeof(_window_start));
-        file.read((uint8_t *) &_window_end, sizeof(_window_end));
-        file.read(&_slots, 1);
-      }
-      _enabled = enabled != 0;
-      _direct_flood = direct_flood != 0;
-      _private = priv != 0;
-      _region[sizeof(_region) - 1] = 0;
-      // A stored window that is not usable means a truncated or corrupt file. The
-      // defaults are safer than a zero-width window, which would put every repeater
-      // in range on the same instant -- the very thing slots exist to prevent.
-      if (!autoReplySlotsValid(_slots, _window_start, _window_end)) {
-        _window_start = AUTOREPLY_WINDOW_START_DEF;
-        _window_end = AUTOREPLY_WINDOW_END_DEF;
-        _slots = AUTOREPLY_SLOTS_DEF;
-      }
-      // Only a standing mode is stored; anything else is the same kind of damage
-      // and takes the same cure -- the reply every node sends today.
-      if (_mode != AUTOREPLY_MODE_PRIVATE && _mode != AUTOREPLY_MODE_DIRECT) {
-        _mode = AUTOREPLY_MODE_FLOOD;
-      }
-      // A file from before v7 has no slot byte at all, so _slot keeps its
-      // constructor default of unassigned -- which is the behaviour such a node
-      // had, and the one the key-derived fallback covers.
-      _slot = autoReplyStoredSlot(_slot);
-    } else if (ver == AUTOREPLY_CONFIG_VER_3) {
-      // v3 predates the delay factor and the reply region; both keep the
-      // constructor defaults, which reproduce v3 behaviour exactly.
-      uint8_t enabled = 0, direct_flood = 1;
-      file.read(&enabled, 1);
-      file.read(&_hops, 1);
-      file.read(&direct_flood, 1);
-      _enabled = enabled != 0;
-      _direct_flood = direct_flood != 0;
-    } else if (ver == AUTOREPLY_CONFIG_VER_2) {
-      uint8_t enabled = 0;
-      file.read(&enabled, 1);
-      file.read(&_hops, 1);
-      _enabled = enabled != 0;
-    } else if (ver == AUTOREPLY_CONFIG_VER_1) {
-      // v1 named the channel to switch the feature on, so a node that had one
-      // named wanted it on. The name itself is dropped: it is derived now.
-      char old_name[32];
-      file.read((uint8_t *) old_name, sizeof(old_name));
-      file.read(&_hops, 1);
-      old_name[sizeof(old_name) - 1] = 0;
-      _enabled = old_name[0] != 0;
-    }
+    file.write(buf, len);
     file.close();
   }
 }
 
-void AutoReply::save() {
-  File file = openWrite(_fs, AUTOREPLY_CONFIG_FILE);
-  if (file) {
-    uint8_t ver = AUTOREPLY_CONFIG_VER;
-    uint8_t enabled = _enabled ? 1 : 0;
-    uint8_t direct_flood = _direct_flood ? 1 : 0;
-    file.write(&ver, 1);
-    file.write(&enabled, 1);
-    file.write(&_hops, 1);
-    file.write(&direct_flood, 1);
-    uint8_t retired_delay = 0;    // was autoreply.delay; the byte keeps its place
-    file.write(&retired_delay, 1);
-    file.write((const uint8_t *) _region, sizeof(_region));
-    file.write(&_mode, 1);
-    uint8_t priv = _private ? 1 : 0;
-    file.write(&priv, 1);
-    file.write(&_slot, 1);
-    file.write((const uint8_t *) &_window_start, sizeof(_window_start));
-    file.write((const uint8_t *) &_window_end, sizeof(_window_end));
-    file.write(&_slots, 1);
-    file.close();
-  }
+void AutoReply::toStored(AutoReplyStoredConfig* c) const {
+  autoReplyConfigDefaults(c);
+  c->enabled = _enabled;
+  c->hops = _hops;
+  c->direct_flood = _direct_flood;
+  memcpy(c->region, _region, sizeof(c->region));
+  c->mode = _mode;
+  c->priv = _private;
+  c->slot = _slot;
+  c->window_start = _window_start;
+  c->window_end = _window_end;
+  c->slots = _slots;
+}
+
+void AutoReply::fromStored(const AutoReplyStoredConfig& c) {
+  _enabled = c.enabled;
+  _hops = c.hops;
+  _direct_flood = c.direct_flood;
+  memcpy(_region, c.region, sizeof(_region));
+  _region[sizeof(_region) - 1] = 0;
+  _mode = c.mode;
+  _private = c.priv;
+  _slot = c.slot;
+  _window_start = c.window_start;
+  _window_end = c.window_end;
+  _slots = c.slots;
 }
 
 int AutoReply::searchChannelsByHash(const char* iata, const uint8_t* hash,

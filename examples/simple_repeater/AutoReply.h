@@ -70,6 +70,9 @@ class AutoReply {
   uint8_t _slot;                // assigned reply slot, 0 = derive one from our key
   bool _private;                // answer a private test request sent to this node directly
   bool _ready;
+
+  void toStored(AutoReplyStoredConfig* c) const;
+  void fromStored(const AutoReplyStoredConfig& c);
   mesh::GroupChannel _channel;
   RateLimiter _limiter;
 

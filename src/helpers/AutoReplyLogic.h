@@ -271,6 +271,142 @@ static inline uint32_t autoReplySlotDelayMs(uint8_t rotated, uint8_t slots,
   return jitter_span ? base + (entropy % jitter_span) : base;
 }
 
+// ---- the stored config, as bytes ---------------------------------------------
+//
+// The layout lives here rather than in AutoReply.cpp so the host suite can test it.
+// AutoReply.cpp needs a filesystem and the suite has none, and that gap had grown to
+// seven file versions resting on nothing but a target compile. load() and save() now
+// read and write one buffer and call these.
+//
+//   v1  name[32] hops                       the channel was named, not derived
+//   v2  enabled hops
+//   v3  enabled hops direct_flood
+//   v4  ... retired region[32]              `retired` was autoreply.delay
+//   v5  ... mode
+//   v6  ... private
+//   v7  ... slot window_start(LE16) window_end(LE16) slots
+//
+// Append-only from v4: a later version adds fields after the ones before it, never
+// between them, so a file written by *newer* firmware is read by the fields this one
+// knows and the rest ignored. That is what stops a rollback switching the feature off
+// in silence.
+#ifndef AUTOREPLY_MAX_REGION
+  #define AUTOREPLY_MAX_REGION 31
+#endif
+#define AUTOREPLY_CONFIG_VERSION   7
+#define AUTOREPLY_CONFIG_MAX_BYTES 64
+#define AUTOREPLY_HOPS_DEF         8
+
+struct AutoReplyStoredConfig {
+  bool enabled;
+  uint8_t hops;
+  bool direct_flood;
+  char region[AUTOREPLY_MAX_REGION + 1];
+  uint8_t mode;
+  bool priv;
+  uint8_t slot;
+  uint16_t window_start;
+  uint16_t window_end;
+  uint8_t slots;
+};
+
+static inline void autoReplyConfigDefaults(AutoReplyStoredConfig* c) {
+  memset(c, 0, sizeof(*c));
+  c->hops = AUTOREPLY_HOPS_DEF;
+  c->direct_flood = true;
+  c->mode = AUTOREPLY_MODE_FLOOD;
+  c->slot = AUTOREPLY_SLOT_UNASSIGNED;
+  c->window_start = AUTOREPLY_WINDOW_START_DEF;
+  c->window_end = AUTOREPLY_WINDOW_END_DEF;
+  c->slots = AUTOREPLY_SLOTS_DEF;
+}
+
+// Reads a stored config of any version into `out`, which should hold the defaults on
+// entry: a field the file does not carry keeps whatever was there. Returns false for
+// an empty buffer or a version this has never heard of, leaving `out` untouched.
+//
+// A short file stops where it runs out rather than reading past the end; whatever was
+// not reached keeps its default. The file.read() calls this replaced would have left
+// those fields holding whatever the constructor put there, which came to the same
+// thing by luck rather than by design.
+static inline bool autoReplyConfigDecode(const uint8_t* buf, size_t len,
+                                         AutoReplyStoredConfig* out) {
+  if (buf == NULL || out == NULL || len < 1) return false;
+  const uint8_t ver = buf[0];
+  size_t at = 1;
+  #define AR_HAS(n) (at + (n) <= len)
+
+  if (ver >= 4) {
+    if (AR_HAS(1)) out->enabled = buf[at++] != 0;
+    if (AR_HAS(1)) out->hops = buf[at++];
+    if (AR_HAS(1)) out->direct_flood = buf[at++] != 0;
+    if (AR_HAS(1)) at++;                                   // the retired delay byte
+    if (AR_HAS(sizeof(out->region))) {
+      memcpy(out->region, &buf[at], sizeof(out->region));
+      at += sizeof(out->region);
+    }
+    out->region[sizeof(out->region) - 1] = 0;
+    if (ver >= 5 && AR_HAS(1)) out->mode = buf[at++];
+    if (ver >= 6 && AR_HAS(1)) out->priv = buf[at++] != 0;
+    if (ver >= 7 && AR_HAS(6)) {
+      out->slot = buf[at++];
+      out->window_start = (uint16_t)(buf[at] | (buf[at + 1] << 8)); at += 2;
+      out->window_end = (uint16_t)(buf[at] | (buf[at + 1] << 8)); at += 2;
+      out->slots = buf[at++];
+    }
+    // Only a standing mode is stored; anything else is a damaged file and takes the
+    // reply every node sends today.
+    if (out->mode != AUTOREPLY_MODE_PRIVATE && out->mode != AUTOREPLY_MODE_DIRECT) {
+      out->mode = AUTOREPLY_MODE_FLOOD;
+    }
+    out->slot = autoReplyStoredSlot(out->slot);
+    // A window that cannot hold its slots would put every repeater in range on one
+    // instant -- the thing slots exist to prevent -- so all three fall back together.
+    if (!autoReplySlotsValid(out->slots, out->window_start, out->window_end)) {
+      out->window_start = AUTOREPLY_WINDOW_START_DEF;
+      out->window_end = AUTOREPLY_WINDOW_END_DEF;
+      out->slots = AUTOREPLY_SLOTS_DEF;
+    }
+  } else if (ver == 3) {
+    if (AR_HAS(1)) out->enabled = buf[at++] != 0;
+    if (AR_HAS(1)) out->hops = buf[at++];
+    if (AR_HAS(1)) out->direct_flood = buf[at++] != 0;
+  } else if (ver == 2) {
+    if (AR_HAS(1)) out->enabled = buf[at++] != 0;
+    if (AR_HAS(1)) out->hops = buf[at++];
+  } else if (ver == 1) {
+    // v1 named the channel to switch the feature on, so a node that had one named
+    // wanted it on. The name itself is dropped: it is derived now.
+    if (AR_HAS(32)) { out->enabled = buf[at] != 0; at += 32; }
+    if (AR_HAS(1)) out->hops = buf[at++];
+  } else {
+    return false;
+  }
+  #undef AR_HAS
+  return true;
+}
+
+// Writes the current version. Returns the bytes written, or 0 if `size` is too small.
+static inline size_t autoReplyConfigEncode(const AutoReplyStoredConfig* c, uint8_t* buf,
+                                           size_t size) {
+  const size_t need = 1 + 4 + sizeof(c->region) + 1 + 1 + 6;
+  if (c == NULL || buf == NULL || size < need) return 0;
+  size_t at = 0;
+  buf[at++] = AUTOREPLY_CONFIG_VERSION;
+  buf[at++] = c->enabled ? 1 : 0;
+  buf[at++] = c->hops;
+  buf[at++] = c->direct_flood ? 1 : 0;
+  buf[at++] = 0;                                 // was autoreply.delay; keeps its place
+  memcpy(&buf[at], c->region, sizeof(c->region)); at += sizeof(c->region);
+  buf[at++] = c->mode;
+  buf[at++] = c->priv ? 1 : 0;
+  buf[at++] = c->slot;
+  buf[at++] = (uint8_t)(c->window_start & 0xFF); buf[at++] = (uint8_t)(c->window_start >> 8);
+  buf[at++] = (uint8_t)(c->window_end & 0xFF);   buf[at++] = (uint8_t)(c->window_end >> 8);
+  buf[at++] = c->slots;
+  return at;
+}
+
 // The letter a requester types, either case. Anything else is DEFAULT, which the
 // trigger parser treats as "not a mode token" rather than as a choice.
 static inline uint8_t autoReplyModeFromLetter(char c) {
