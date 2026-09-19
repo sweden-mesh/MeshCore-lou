@@ -116,7 +116,8 @@ Auto-reply parameters, the two test triggers, and a set of read-only parameter g
 
 ```
 set autoreply on|off · set autoreply.hops · set autoreply.direct.flood
-set autoreply.delay · set autoreply.region · set autoreply.mode · set autoreply.private
+set autoreply.slot · set autoreply.window · set autoreply.slots
+set autoreply.region · set autoreply.mode · set autoreply.private
 get autoreply* · trigger test [<id>] [<F|P|D|S>] · trigger private <64 hex> [<id>]
 
 get txdelay · get direct.txdelay · get rxdelay · get af

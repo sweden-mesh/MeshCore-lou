@@ -150,7 +150,9 @@ To turn it off again: `set autoreply off`.
 | `set autoreply on\|off` | `off` | Whether this repeater answers the trigger. |
 | `set autoreply.hops <0-63>` | `8` | How many hops away a request may be and still get an answer. `0` = direct neighbours only. |
 | `set autoreply.direct.flood on\|off` | `on` | Whether a request that arrived direct is answered with a flood. `off` sends a single zero-hop packet that no repeater relays — cheapest, but it never reaches anyone who cannot hear this repeater directly. |
-| `set autoreply.delay <1-120>` | `60` | How widely replies are spread in time. Every repeater that hears a request answers it, and once each reply is relayed a storm is roughly three transmissions per answering repeater — they collide unless they are spread. The wait is random, up to roughly 2.3 s x this number, so `60` spreads a storm over about 135 seconds. Nobody is waiting on a test reply, so a long wait costs only patience while a collision costs the measurement. **Raising this on an existing node needs the command — see below.** |
+| `set autoreply.slot <0-64>` | `0` | This repeater's place in the reply order. Every repeater that hears a request answers it, and two replies in the same moment collide; two in different slots cannot. **`0` means unassigned**, and the repeater derives a slot from its own public key instead — so a mesh where nobody hands out slots still spreads its replies, at the cost of the occasional coincidence. Assign slots and there are none. |
+| `set autoreply.window <start> <end>` | `10 120` | The seconds after a request inside which every reply lands. It starts late enough for the request's own flood to be over, and for repeaters on older firmware to have answered. Nobody is waiting on a test reply, so a long window costs only patience while a collision costs the measurement. Up to 600 s, with at least 4 s per slot. |
+| `set autoreply.slots <1-64>` | `16` | How many slots the window is cut into. More is not better: past about one slot per 4 s they become narrower than the replies they separate. |
 | `set autoreply.region <code>` | *(request scope)* | Which region replies are scoped to. Empty mirrors whatever scope the request arrived under. |
 | `set autoreply.mode flood\|private\|direct` | `flood` | How a request that names no mode is answered. `private` and `direct` answer with a text message to the requester alone, and only when the request carries their key. |
 | `set autoreply.private on\|off` | `off` | Whether a test request sent to this repeater alone, off the channel, is answered. Off because it is an unauthenticated packet that makes the node transmit. |
@@ -158,7 +160,9 @@ To turn it off again: `set autoreply off`.
 | `get autoreply.channel` | — | The channel name. **Read-only** — it follows `set mqtt.iata`. |
 | `get autoreply.hops` | — | Read the hop limit back. |
 | `get autoreply.direct.flood` | — | Read the direct-reply mode back. |
-| `get autoreply.delay` | — | Read the spread back. |
+| `get autoreply.slot` | — | Read the slot back; `0` says it is derived from the key. |
+| `get autoreply.window` | — | Read the window back. |
+| `get autoreply.slots` | — | Read the slot count back. |
 | `get autoreply.region` | — | Read the reply scope back. |
 | `get autoreply.mode` | — | Read the standing mode back. |
 | `get autoreply.private` | — | Read the private-request switch back. |
@@ -168,13 +172,18 @@ matters because phone keyboards like to capitalise the first letter. Override it
 time with `-D AUTOREPLY_KEYWORD='"..."'`.
 
 Remote control reaches all of these: `set autoreply` and `get autoreply` are on the allowlist
-as families, so `set autoreply.delay 60` can be published to a node instead of typed into it.
+as families, so `set autoreply.slot 7` can be published to a node instead of typed into it —
+which is how an operator hands out slots across a mesh without visiting it.
 
-> **Upgrading does not change a setting you already have.** The config file stores
-> `autoreply.delay`, and a node that has one keeps it — the new default of `60` applies to a
-> node configured for the first time, or one that has been erased. A repeater already in the
-> field at the old default of `4` stays at `4` until it is told otherwise, with
-> `set autoreply.delay 60` over serial or by signed publish.
+> **`autoreply.delay` is gone.** It multiplied a random wait, which spread the *average* while
+> leaving every repeater in one shared window — on a mesh of fifteen that meant about twenty
+> overlapping pairs in every storm. Slots replaced it. A node upgraded from a build that had the
+> setting loads its config as before and simply stops using that byte, and the old commands now
+> answer with an error rather than being silently ignored, so a provisioning note that still
+> carries them fails on the first node instead of quietly doing nothing on all of them.
+>
+> The order rotates once a day, from each repeater's own clock, so it is the same all day and
+> every repeater agrees on it without being told. A clock that has never synced uses day 0.
 
 ---
 
