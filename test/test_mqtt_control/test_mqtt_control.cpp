@@ -14,6 +14,10 @@
 #include <string>
 #include "helpers/MqttControlLogic.h"
 #include "helpers/AutoReplyLogic.h"   // the trigger form is checked one layer down
+// The limiter itself, so the budgets are exercised rather than only their decision
+// function. Header-only and Arduino-free, and the native env has -I src alone, so
+// it comes in by relative path rather than by a platformio.ini change.
+#include "../../examples/simple_repeater/RateLimiter.h"
 
 extern "C" {
 #include "ed25519/ed_25519.h"
@@ -441,15 +445,55 @@ TEST(RateLimit, TriggersAreClassifiedApartFromParameterChanges) {
   EXPECT_FALSE(mqttCtrlIsTransmitCommand("triggerX", 8));
 }
 
-TEST(RateLimit, TransmitCommandsMustSatisfyBothBudgets) {
+TEST(RateLimit, ATransmitSpendsOnlyTheTransmitBudget) {
+  // Changed 2026-09-19 (F04 T-08, operator decision of 2026-09-13). The two budgets
+  // are disjoint: two triggers an hour must not also consume a fifth of the ten
+  // commands a caller has for reading settings.
+  EXPECT_TRUE(mqttCtrlSpendsTransmitBudget(true));
+  EXPECT_FALSE(mqttCtrlSpendsCommandBudget(true));
   EXPECT_EQ(mqttCtrlRateResult(true, true, true), MQTTCTRL_OK);
-  EXPECT_EQ(mqttCtrlRateResult(true, true, false), MQTTCTRL_ERR_RATE_LIMITED);  // trigger spent
-  EXPECT_EQ(mqttCtrlRateResult(true, false, true), MQTTCTRL_ERR_RATE_LIMITED);  // general spent
+  EXPECT_EQ(mqttCtrlRateResult(true, true, false), MQTTCTRL_ERR_RATE_LIMITED);  // its own budget
+}
+
+TEST(RateLimit, AParameterChangeSpendsOnlyTheCommandBudget) {
+  EXPECT_TRUE(mqttCtrlSpendsCommandBudget(false));
+  EXPECT_FALSE(mqttCtrlSpendsTransmitBudget(false));
+}
+
+TEST(RateLimit, TheBudgetsAreWhatTheOperatorAskedFor) {
+  // Named here so a change to either constant has to come past a test that says what
+  // they were chosen to be: 2 transmits an hour is ~10.2 s of mesh airtime including
+  // the reply storms each one provokes, 0.28% of the hour.
+  EXPECT_EQ(MQTTCTRL_CMD_MAX, 10);
+  EXPECT_EQ(MQTTCTRL_TRIGGER_MAX, 2);
+  EXPECT_EQ(MQTTCTRL_CMD_WINDOW_SECS, 3600);
+  EXPECT_EQ(MQTTCTRL_TRIGGER_WINDOW, 3600);
 }
 
 TEST(RateLimit, ParameterChangesIgnoreTheTriggerBudget) {
   EXPECT_EQ(mqttCtrlRateResult(false, true, false), MQTTCTRL_OK);
   EXPECT_EQ(mqttCtrlRateResult(false, false, true), MQTTCTRL_ERR_RATE_LIMITED);
+}
+
+TEST(RateLimit, TheThirdTransmitInAnHourIsRefusedWhileReadsStillWork) {
+  // The shape the operator asked for, exercised on a real limiter rather than on the
+  // decision function alone.
+  RateLimiter transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW);
+  RateLimiter commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS);
+  const uint32_t now = 1788200000;
+  EXPECT_TRUE(transmits.allow(now));
+  EXPECT_TRUE(transmits.allow(now + 60));
+  EXPECT_FALSE(transmits.allow(now + 120));          // the third in the hour
+  for (int i = 0; i < MQTTCTRL_CMD_MAX; i++) {
+    EXPECT_TRUE(commands.allow(now + 130 + i)) << "read " << i << " should still work";
+  }
+  EXPECT_FALSE(commands.allow(now + 200));
+  // and the windows roll independently: the transmit window opened at `now` and has
+  // expired by +3700, while the command window opened at +130 and has not. Taking the
+  // same instant for both is the point -- at +3730 they would both have rolled and the
+  // test would pass without showing anything.
+  EXPECT_TRUE(transmits.allow(now + 3700));
+  EXPECT_FALSE(commands.allow(now + 3700));
 }
 
 // ---- the two overloaded codes, now split -------------------------------------

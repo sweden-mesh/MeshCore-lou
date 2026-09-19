@@ -54,9 +54,9 @@
 // and provokes a reply storm from every repeater in range, so it is capped far
 // harder. Both apply to *validly signed* commands: a key that leaks must not
 // become a flood weapon, and the airtime is not ours to spend.
-#define MQTTCTRL_CMD_MAX          20
+#define MQTTCTRL_CMD_MAX          10
 #define MQTTCTRL_CMD_WINDOW_SECS  3600
-#define MQTTCTRL_TRIGGER_MAX      4
+#define MQTTCTRL_TRIGGER_MAX      2
 #define MQTTCTRL_TRIGGER_WINDOW   3600
 
 // Why a command was refused. Returned rather than logged so the caller decides
@@ -502,12 +502,25 @@ static inline uint32_t mqttCtrlSenderStamp(uint32_t now) {
 // be refused anyway would let anyone drain the budget with garbage.
 //
 // 'allow_general' and 'allow_transmit' are the results of RateLimiter::allow on
-// the caller's two limiters; a transmit command must satisfy both.
+// the caller's two limiters. **The budgets are disjoint** (operator, 2026-09-13): a
+// transmit spends only the transmit budget, a parameter change only the command one.
+// They used to share, so two triggers an hour also took a fifth of the budget for
+// reading settings -- at 20 and 4 that was merely wrong, at 10 and 2 it would bite.
+// The caller must therefore ask only the limiter that applies; see
+// mqttCtrlSpendsCommandBudget, which is the rule the caller branches on.
 //
 // Returns a result rather than a bool so the refusal carries its own code. The
 // name changed with the return type on purpose: the old bool was read as
 // `if (!mqttCtrlRateAccepted(...))`, and MQTTCTRL_OK is 0, so a same-named
 // function returning an enum would have inverted every call site in silence.
+// Which budget a command spends. A limiter spends when asked, so this decides which
+// one the caller may ask -- getting it wrong does not refuse anything, it quietly
+// drains the wrong budget, which is the kind of bug that shows up as a node that
+// stops answering on the hour.
+static inline bool mqttCtrlSpendsCommandBudget(bool is_transmit) { return !is_transmit; }
+
+static inline bool mqttCtrlSpendsTransmitBudget(bool is_transmit) { return is_transmit; }
+
 static inline MqttCtrlResult mqttCtrlRateResult(bool is_transmit, bool allow_general,
                                                 bool allow_transmit) {
   if (!allow_general) return MQTTCTRL_ERR_RATE_LIMITED;

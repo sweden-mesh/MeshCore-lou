@@ -105,7 +105,9 @@ feature enabled → command key set → signature valid
   right way round.
 - **Expiry fails closed without a clock.** If NTP has not synced, every command is refused
   rather than accepted on a guess. A command may not be valid more than an hour ahead.
-- **The rate limit applies to validly signed commands** — 20 an hour, of which 4 may transmit.
+- **The rate limit applies to validly signed commands** — 10 an hour, and 2 transmits, on
+  separate counters: a trigger spends a transmit, a `set` or `get` spends a command, and
+  neither spends the other's.
   A signing key that leaks must not become a mesh-flood weapon; the airtime is not ours.
 
 ## What may be sent

@@ -187,8 +187,12 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
     result = mqttCtrlTransmitTopicResult(transmit, _staged.topic);
     if (result != MQTTCTRL_OK) break;
 
-    result = mqttCtrlRateResult(transmit, _commands.allow(now),
-                                transmit ? _transmits.allow(now) : true);
+    // One limiter is asked, never both: a limiter spends when asked, and the two
+    // budgets are disjoint. A transmit costs a transmit; a parameter change costs a
+    // command.
+    const bool general_ok = mqttCtrlSpendsCommandBudget(transmit) ? _commands.allow(now) : true;
+    const bool transmit_ok = mqttCtrlSpendsTransmitBudget(transmit) ? _transmits.allow(now) : true;
+    result = mqttCtrlRateResult(transmit, general_ok, transmit_ok);
     if (result != MQTTCTRL_OK) break;
 
     // Persisted before the command runs, never after. A counter written afterwards
