@@ -188,6 +188,14 @@ anything.
 
 - **Confidentiality.** Commands and results are public on a public broker. Nothing secret may
   appear in either — which is what the allowlist keeps true.
+  **What a result may never carry,** and so what may never be allowlisted as a read: any key
+  (`prv.key`, the command key, `mqtt.owner`, `bridge.secret`), any credential (`password`,
+  `guest.password`, `wifi.pwd`, a slot's `password`, `token` or `username`), where the node's
+  other brokers are (`mqttN.server`), which network it is on (`wifi.ssid`), and where or whose
+  it is (`lat`, `lon`, `owner.info`) — an advert may publish a position, but that is the
+  operator's choice to make per node, not something a signed stranger's read should decide.
+  `NothingAResultMayNeverCarryCanBeRead` pins the list. What *is* readable is timing and
+  radio configuration, which anyone in range could infer by listening.
 - **Availability.** Anyone can flood the broker. The node's rate limit bounds the airtime
   consequence; it cannot make the broker quiet.
 - **A compromised command key.** Whoever holds it can do anything on the allowlist. Rotation

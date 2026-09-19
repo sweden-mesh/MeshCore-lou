@@ -899,6 +899,21 @@ TEST(Allowlist, StaysTighterThanTheCliItGuards) {
   EXPECT_FALSE(allowed("get int.threshold"));
 }
 
+TEST(Allowlist, NothingAResultMayNeverCarryCanBeRead) {
+  // A result is published on a broker anyone can subscribe to, so whatever a read
+  // returns is public. docs/mqtt-control.md lists what must therefore never be
+  // readable; this is that list, and a widening that admits one of them fails here.
+  const char* never[] = {
+    "get prv.key", "get public.key", "get password", "get guest.password",
+    "get wifi.pwd", "get wifi.ssid", "get bridge.secret",
+    "get mqtt.owner", "get mqtt.cmd.pubkey",
+    "get mqtt1.password", "get mqtt1.username", "get mqtt1.token", "get mqtt1.server",
+    "get mqtt2.password", "get mqtt6.token",
+    "get lat", "get lon", "get name", "get owner.info",
+  };
+  for (const char* command : never) EXPECT_FALSE(allowed(command)) << command;
+}
+
 TEST(Allowlist, TheWideningAddedNoPrivilegedCommand) {
   // Re-pinned after the widening: these must still be refused, and the reads
   // must not have opened a path to them.
