@@ -108,6 +108,10 @@ feature enabled → command key set → signature valid
 - **The rate limit applies to validly signed commands** — 10 an hour, and 2 transmits, on
   separate counters: a trigger spends a transmit, a `set` or `get` spends a command, and
   neither spends the other's.
+  **The hour slides.** No span of 3600 s holds more than the budget, wherever it starts; a
+  fixed window would let a command late in one hour and a full budget early in the next
+  through together — three floods in two seconds. A refused command spends nothing, and a
+  clock stepping backwards costs at most an hour of refusals, never an extra allowance.
   A signing key that leaks must not become a mesh-flood weapon; the airtime is not ours.
 
 ## What may be sent
@@ -163,7 +167,7 @@ an absent setting.
 `trigger test` or `trigger private` sent to `meshcore/{IATA}/all/cmd` is refused, on principle
 rather than on budget.
 
-The rate limits are per node — four triggers an hour each. That bounds what one node does and
+The rate limits are per node — two triggers an hour each. That bounds what one node does and
 says nothing about one publish reaching every node in a region, each of them then transmitting
 inside the same few seconds, every one within its own budget. The workspace rule is explicit
 that any design which scales transmissions with the number of nodes is wrong, and a broadcast

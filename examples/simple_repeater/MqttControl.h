@@ -6,7 +6,6 @@
 #include <helpers/IdentityStore.h>
 #include <helpers/MqttControlLogic.h>
 
-#include "RateLimiter.h"
 
 // One staged command, copied out of the MQTT event task so nothing expensive
 // happens there. Sized to the logic's own bounds; both are static, because the
@@ -60,8 +59,8 @@ class MqttControl {
   uint8_t _slot;              // 1-based MQTT slot to listen and answer on, 0 = none
   char _pubkey[PUB_KEY_SIZE * 2 + 1];   // hex public key commands must be signed by
   MqttControlStaged _staged;
-  RateLimiter _commands;
-  RateLimiter _transmits;
+  MqttCtrlBudget _commands;
+  MqttCtrlBudget _transmits;
 
   void load();
   void save();

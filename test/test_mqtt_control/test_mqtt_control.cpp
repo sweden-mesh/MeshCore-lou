@@ -9,6 +9,7 @@
 // The design is docs/architecture/decisions/001-mqtt-control-envelope.md in the
 // workspace root, which is the directory above this repo, not a path inside it.
 #include <gtest/gtest.h>
+#include <vector>
 
 #include <algorithm>
 #include <string>
@@ -478,8 +479,8 @@ TEST(RateLimit, ParameterChangesIgnoreTheTriggerBudget) {
 TEST(RateLimit, TheThirdTransmitInAnHourIsRefusedWhileReadsStillWork) {
   // The shape the operator asked for, exercised on a real limiter rather than on the
   // decision function alone.
-  RateLimiter transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW);
-  RateLimiter commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS);
+  MqttCtrlBudget transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW);
+  MqttCtrlBudget commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS);
   const uint32_t now = 1788200000;
   EXPECT_TRUE(transmits.allow(now));
   EXPECT_TRUE(transmits.allow(now + 60));
@@ -494,6 +495,74 @@ TEST(RateLimit, TheThirdTransmitInAnHourIsRefusedWhileReadsStillWork) {
   // test would pass without showing anything.
   EXPECT_TRUE(transmits.allow(now + 3700));
   EXPECT_FALSE(commands.allow(now + 3700));
+}
+
+// ---- a window boundary must not double the budget ------------------------------
+
+TEST(RateLimit, UpstreamsFixedWindowLetsThreeFloodsThroughInTwoSeconds) {
+  // Why the control plane stopped using RateLimiter. Not a test of our code: a
+  // record of the defect, so nobody swaps it back in for tidiness.
+  RateLimiter fixed(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW);
+  const uint32_t t0 = 1788200000;
+  int allowed = 0;
+  allowed += fixed.allow(t0);
+  allowed += fixed.allow(t0 + MQTTCTRL_TRIGGER_WINDOW - 1);
+  allowed += fixed.allow(t0 + MQTTCTRL_TRIGGER_WINDOW);
+  allowed += fixed.allow(t0 + MQTTCTRL_TRIGGER_WINDOW + 1);
+  EXPECT_EQ(4, allowed);   // three of them inside two seconds
+}
+
+TEST(RateLimit, NoSpanOfOneWindowEverHoldsMoreThanTheBudget) {
+  MqttCtrlBudget transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW);
+  const uint32_t t0 = 1788200000;
+  EXPECT_TRUE(transmits.allow(t0));
+  EXPECT_TRUE(transmits.allow(t0 + MQTTCTRL_TRIGGER_WINDOW - 1));
+  EXPECT_FALSE(transmits.allow(t0 + MQTTCTRL_TRIGGER_WINDOW - 1));
+  // The first has aged out exactly now, so one -- and only one -- comes back.
+  EXPECT_TRUE(transmits.allow(t0 + MQTTCTRL_TRIGGER_WINDOW));
+  EXPECT_FALSE(transmits.allow(t0 + MQTTCTRL_TRIGGER_WINDOW + 1));
+}
+
+TEST(RateLimit, TheBoundHoldsHoweverTheAttemptsAreSpaced) {
+  // Hammer it once a second for three windows and slide a window over what got
+  // through. A property, because the defect was a boundary nobody thought to pick.
+  for (uint32_t max = 1; max <= MQTTCTRL_CMD_MAX; max += 3) {
+    MqttCtrlBudget budget((uint8_t)max, 600);
+    std::vector<uint32_t> allowed;
+    for (uint32_t t = 1000; t < 1000 + 3 * 600; t++) {
+      if (budget.allow(t)) allowed.push_back(t);
+    }
+    EXPECT_EQ(3 * max, allowed.size()) << "max " << max << ": the budget must also refill";
+    for (size_t i = 0; i + max < allowed.size(); i++) {
+      EXPECT_GE(allowed[i + max] - allowed[i], 600u) << "max " << max << " at " << allowed[i];
+    }
+  }
+}
+
+TEST(RateLimit, ARefusedCommandSpendsNothing) {
+  MqttCtrlBudget budget(1, 600);
+  EXPECT_TRUE(budget.allow(1000));
+  for (uint32_t t = 1001; t < 1600; t++) EXPECT_FALSE(budget.allow(t));
+  EXPECT_TRUE(budget.allow(1600));   // refusals at 1599 must not have pushed this out
+}
+
+TEST(RateLimit, AClockSteppingBackwardsMintsNoBudget) {
+  MqttCtrlBudget budget(2, 600);
+  EXPECT_TRUE(budget.allow(5000));
+  EXPECT_TRUE(budget.allow(5001));
+  // The RTC is corrected an hour back. The two already spent still count, from now.
+  EXPECT_FALSE(budget.allow(1400));
+  EXPECT_FALSE(budget.allow(1999));
+  EXPECT_TRUE(budget.allow(2000));   // and the lockout is one window, not for ever
+}
+
+TEST(RateLimit, ABudgetOfZeroAllowsNothingAndABudgetTooLargeIsCapped) {
+  MqttCtrlBudget none(0, 600);
+  EXPECT_FALSE(none.allow(1000));
+  MqttCtrlBudget huge(200, 600);
+  int allowed = 0;
+  for (int i = 0; i < 250; i++) allowed += huge.allow(1000);
+  EXPECT_EQ(MQTTCTRL_BUDGET_SLOTS, allowed);
 }
 
 // ---- the two overloaded codes, now split -------------------------------------
