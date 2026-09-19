@@ -1375,3 +1375,36 @@ TEST(AutoReplyDay, ARealClockAdvancesOncePerDayAtMidnightUTC) {
   EXPECT_EQ(autoReplyDayNumber(t + 3600), day);    // an hour later, same order
   EXPECT_EQ(autoReplyDayNumber(t + 86400), day + 1);
 }
+
+// ---- the window and the slot count (Sprint F04 T-06) ------------------------
+
+TEST(AutoReplyWindow, TheDefaultsAreUsable) {
+  EXPECT_TRUE(autoReplyWindowValid(AUTOREPLY_WINDOW_START_DEF, AUTOREPLY_WINDOW_END_DEF,
+                                   AUTOREPLY_SLOTS_DEF));
+  EXPECT_TRUE(autoReplySlotsValid(AUTOREPLY_SLOTS_DEF, AUTOREPLY_WINDOW_START_DEF,
+                                  AUTOREPLY_WINDOW_END_DEF));
+}
+
+TEST(AutoReplyWindow, RefusesAWindowThatCannotHoldItsSlots) {
+  // 48 slots in a 110 s window is 2.3 s each, narrower than two replies and their
+  // guards -- measured to make even assigned nodes collide.
+  EXPECT_FALSE(autoReplySlotsValid(48, 10, 120));
+  EXPECT_TRUE(autoReplySlotsValid(48, 10, 300));
+}
+
+TEST(AutoReplyWindow, RefusesAnInvertedOrEmptyWindow) {
+  EXPECT_FALSE(autoReplyWindowValid(120, 10, 16));
+  EXPECT_FALSE(autoReplyWindowValid(60, 60, 16));
+  EXPECT_FALSE(autoReplyWindowValid(-1, 120, 16));
+}
+
+TEST(AutoReplyWindow, RefusesAWindowLongerThanTheCeiling) {
+  EXPECT_TRUE(autoReplyWindowValid(10, AUTOREPLY_WINDOW_MAX, 16));
+  EXPECT_FALSE(autoReplyWindowValid(10, AUTOREPLY_WINDOW_MAX + 1, 16));
+}
+
+TEST(AutoReplyWindow, RefusesASlotCountOutsideTheRange) {
+  EXPECT_FALSE(autoReplySlotsValid(0, 10, 120));
+  EXPECT_FALSE(autoReplySlotsValid(AUTOREPLY_SLOTS_MAX + 1, 10, 600));
+  EXPECT_TRUE(autoReplySlotsValid(1, 10, 120));
+}

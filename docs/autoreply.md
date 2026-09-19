@@ -110,23 +110,43 @@ that answered only the id form would drop every not-yet-updated node out of a su
 
 #### Spread the replies out
 
-- `get autoreply.delay`
-- `set autoreply.delay <value>`
+Every repeater that hears a request answers it, so without a stagger their replies land on
+top of each other. The window is cut into slots, and each node answers inside its own.
+
+- `get autoreply.slot`
+- `set autoreply.slot <n>`
+- `get autoreply.window`
+- `set autoreply.window <start> <end>`
+- `get autoreply.slots`
+- `set autoreply.slots <n>`
 
 **Parameters:**
 
-- `value`: multiplier (1-120) on the radio's own retransmit delay, default **60**. The reply is
-  sent after a random wait between zero and that multiple — roughly 2.3 s x the multiplier, so
-  60 spreads replies over about 135 seconds.
+- `autoreply.slot`: this node's assigned slot, `0`–64. **`0` is the default and means
+  unassigned**, in which case the node derives a slot from its own public key. Assigned slots
+  are what make collisions impossible: two nodes in different slots cannot overlap, where two
+  key-derived slots coincide at the birthday rate.
+- `autoreply.window`: `start` and `end` in seconds after the request, default **10 to 120**.
+  The start clears the request's own flood and the window in which nodes on older firmware
+  answer. The end is bounded at 600 s, and must leave at least 4 s per slot.
+- `autoreply.slots`: how many slots the window is cut into, `1`–64, default **16**.
 
-  The default was 4 until 2026-09-09, which spread a storm over about 9 seconds. Measured on
-  one mesh across 18 probes, a storm is 17 distinct transmissions rather than one per
-  answering repeater, because each reply is relayed; at 4 those overlapped constantly and
-  roughly 40% of replies never arrived. **A node that already has a stored value keeps it on
-  upgrade** — the new default reaches nodes configured for the first time, and everything else
-  needs `set autoreply.delay 60`.
+The slot is rotated by the day, from the node's own clock, so the order is fixed between
+midnights and every node agrees on it without any command being sent. A node whose clock has
+never synced uses day 0, which is still a valid ordering. Inside its slot a reply waits a
+random moment, with a guard at each edge so two nodes in adjacent slots cannot touch even
+though they heard the request at slightly different times.
 
-**Default:** `4`
+Measured on one mesh at 15 answering repeaters: the old scheme produced about 20 overlapping
+pairs per storm, unassigned slots produce about 2, and assigned slots none
+(`planning/firmware/slot-collisions-measured.md` in the Mesh-Health workspace).
+
+**`autoreply.delay` was removed** when slots landed. It multiplied a random wait, which spread
+the average while leaving every node in one shared window. The commands now answer with an
+error rather than being silently ignored, so a provisioning script that still carries them
+fails on the first node instead of quietly doing nothing on all of them.
+
+**Default:** slot `0`, window `10 120`, slots `16`
 
 Every repeater in range answers the same request, so their replies compete for the air. Field
 measurement on 2026-08-30 found that a reply overlapping another transmission reached a median
@@ -374,7 +394,7 @@ set — the gate every reply shares, since a node with no region has no auto-rep
 answers, and a private request was addressed to this node and nobody else, so distance is not
 a reason to leave it unanswered — the hop count is reported, not judged.
 
-**`autoreply.delay` does apply.** It governs every reply this firmware sends, private or not.
+**The slot applies here too.** It governs every reply this firmware sends, private or not.
 One requester asking one node makes no storm, and for that case the delay buys nothing — but
 the request does not have to arrive alone. Several observers can be told to probe the same
 node, or a fleet of them told to probe at once, and without the stagger every answer would

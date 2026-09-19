@@ -18,31 +18,6 @@
 #define AUTOREPLY_MAX_CHANNEL 16
 // a region name bounding how far a reply floods, or empty for the request's own scope
 #define AUTOREPLY_MAX_REGION  31
-// multiplier on the radio's own retransmit delay, spreading replies so the storms
-// several repeaters raise do not land on top of each other
-#define AUTOREPLY_DELAY_MIN   1
-#define AUTOREPLY_DELAY_MAX   120
-// Multiplier on the radio's own retransmit delay, so a reply leaves after a random
-// wait of up to roughly 2.3 s x this. Every repeater that hears a request answers it,
-// and their replies collide unless they are spread.
-//
-// Measured on the JKG mesh, 18 probes on 2026-09-09: a storm is 17 distinct
-// transmissions (11-40), about three per answering repeater once each reply is
-// relayed -- not one. At the old default of 4 those 17 packets were crammed into a
-// 9 s window, and roughly 40% of replies never arrived. 60 spreads them over ~135 s.
-//
-// Sized for a mesh larger than today's: at a dozen answering repeaters this holds
-// overlapping transmissions near a fifth, where 4 put them past two thirds. Nothing
-// waits on a test reply, so a wait costs only patience; a collision costs the
-// measurement. Runtime-settable, because the right value is not knowable from one mesh.
-#define AUTOREPLY_DELAY_DEF   60
-// The window a channel reply lands in, milliseconds after the request. It starts late
-// enough that the request's own flood is over -- each hop costs up to ~1.35 s of
-// retransmit delay plus airtime -- and late enough to clear the ~9 s in which nodes on
-// the released firmware answer, since a mesh runs mixed builds for months.
-#define AUTOREPLY_WINDOW_START_MS 10000UL
-#define AUTOREPLY_WINDOW_END_MS   120000UL
-
 #define AUTOREPLY_MAX_PAYLOAD (5 + AUTOREPLY_MAX_TEXT)   // timestamp + flags + text
 // how many leading bytes of a requester's key name it in a private reply's brackets
 #define AUTOREPLY_PRIVATE_WHO 4
@@ -87,7 +62,9 @@ class AutoReply {
   char _iata[8];                // region the channel was derived from
   uint8_t _hops;                // max hop count of a request we will answer
   bool _direct_flood;           // flood the answer to a request that arrived direct
-  uint8_t _delay_factor;        // multiplier on the radio retransmit delay
+  uint16_t _window_start;       // seconds after the request that the window opens
+  uint16_t _window_end;         // and closes; every reply lands between them
+  uint8_t _slots;               // how many slots the window is cut into
   char _region[AUTOREPLY_MAX_REGION + 1];   // scope for the reply, empty = mirror the request
   uint8_t _mode;                // how a request that names no mode is answered
   uint8_t _slot;                // assigned reply slot, 0 = derive one from our key
@@ -127,7 +104,9 @@ public:
    * \brief  Whether a request that arrived direct is answered with a flood.
    */
   bool directFlood() const { return _direct_flood; }
-  uint8_t delayFactor() const { return _delay_factor; }
+  uint16_t windowStart() const { return _window_start; }
+  uint16_t windowEnd() const { return _window_end; }
+  uint8_t slots() const { return _slots; }
   // 0 means unassigned; the caller derives a slot from the node's key instead.
   uint8_t slot() const { return _slot; }
   const char* replyRegion() const { return _region; }

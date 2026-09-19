@@ -34,7 +34,8 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 
 AutoReply::AutoReply()
   : _fs(NULL), _enabled(false), _hops(8), _direct_flood(true),
-    _delay_factor(AUTOREPLY_DELAY_DEF), _mode(AUTOREPLY_MODE_FLOOD), _private(false),
+    _window_start(AUTOREPLY_WINDOW_START_DEF), _window_end(AUTOREPLY_WINDOW_END_DEF),
+    _slots(AUTOREPLY_SLOTS_DEF), _mode(AUTOREPLY_MODE_FLOOD), _private(false),
     _slot(AUTOREPLY_SLOT_UNASSIGNED),
     _ready(false),
     _limiter(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS),
@@ -114,20 +115,31 @@ void AutoReply::load() {
       file.read(&enabled, 1);
       file.read(&_hops, 1);
       file.read(&direct_flood, 1);
-      file.read(&_delay_factor, 1);
+      // v4-v6 stored the autoreply.delay multiplier here. It is read and thrown
+      // away: the spread is the window and the slot now, and keeping its byte
+      // position is what lets a v4, v5 or v6 file still load field by field.
+      uint8_t retired_delay = 0;
+      file.read(&retired_delay, 1);
       file.read((uint8_t *) _region, sizeof(_region));
       if (ver >= AUTOREPLY_CONFIG_VER_5) file.read(&_mode, 1);
       if (ver >= AUTOREPLY_CONFIG_VER_6) file.read(&priv, 1);
-      if (ver >= AUTOREPLY_CONFIG_VER) file.read(&_slot, 1);
+      if (ver >= AUTOREPLY_CONFIG_VER) {
+        file.read(&_slot, 1);
+        file.read((uint8_t *) &_window_start, sizeof(_window_start));
+        file.read((uint8_t *) &_window_end, sizeof(_window_end));
+        file.read(&_slots, 1);
+      }
       _enabled = enabled != 0;
       _direct_flood = direct_flood != 0;
       _private = priv != 0;
       _region[sizeof(_region) - 1] = 0;
-      // A stored factor outside the range means a truncated or corrupt file; the
-      // default is safer than a zero, which would make every repeater in range
-      // answer at the same instant.
-      if (_delay_factor < AUTOREPLY_DELAY_MIN || _delay_factor > AUTOREPLY_DELAY_MAX) {
-        _delay_factor = AUTOREPLY_DELAY_DEF;
+      // A stored window that is not usable means a truncated or corrupt file. The
+      // defaults are safer than a zero-width window, which would put every repeater
+      // in range on the same instant -- the very thing slots exist to prevent.
+      if (!autoReplySlotsValid(_slots, _window_start, _window_end)) {
+        _window_start = AUTOREPLY_WINDOW_START_DEF;
+        _window_end = AUTOREPLY_WINDOW_END_DEF;
+        _slots = AUTOREPLY_SLOTS_DEF;
       }
       // Only a standing mode is stored; anything else is the same kind of damage
       // and takes the same cure -- the reply every node sends today.
@@ -175,12 +187,16 @@ void AutoReply::save() {
     file.write(&enabled, 1);
     file.write(&_hops, 1);
     file.write(&direct_flood, 1);
-    file.write(&_delay_factor, 1);
+    uint8_t retired_delay = 0;    // was autoreply.delay; the byte keeps its place
+    file.write(&retired_delay, 1);
     file.write((const uint8_t *) _region, sizeof(_region));
     file.write(&_mode, 1);
     uint8_t priv = _private ? 1 : 0;
     file.write(&priv, 1);
     file.write(&_slot, 1);
+    file.write((const uint8_t *) &_window_start, sizeof(_window_start));
+    file.write((const uint8_t *) &_window_end, sizeof(_window_end));
+    file.write(&_slots, 1);
     file.close();
   }
 }
@@ -247,15 +263,42 @@ bool AutoReply::handleCommand(const char* iata, const char* command, char* reply
     return true;
   }
 
-  if (memcmp(command, "set autoreply.delay ", 20) == 0) {
-    int factor = atoi(&command[20]);
-    if (factor < AUTOREPLY_DELAY_MIN || factor > AUTOREPLY_DELAY_MAX) {
-      sprintf(reply, "Err - must be %d..%d", AUTOREPLY_DELAY_MIN, AUTOREPLY_DELAY_MAX);
+  if (memcmp(command, "set autoreply.window ", 21) == 0) {
+    long start_s = 0, end_s = 0;
+    if (sscanf(&command[21], "%ld %ld", &start_s, &end_s) != 2
+        || !autoReplyWindowValid(start_s, end_s, _slots)) {
+      sprintf(reply, "Err - use: set autoreply.window <start> <end> in seconds, "
+                     "end<=%d and at least %d s per slot",
+              AUTOREPLY_WINDOW_MAX, AUTOREPLY_SLOT_MIN_SECS);
     } else {
-      _delay_factor = (uint8_t)factor;
+      _window_start = (uint16_t) start_s;
+      _window_end = (uint16_t) end_s;
       save();
       strcpy(reply, "OK");
     }
+    return true;
+  }
+
+  if (strcmp(command, "get autoreply.window") == 0) {
+    sprintf(reply, "> %d %d", (uint32_t) _window_start, (uint32_t) _window_end);
+    return true;
+  }
+
+  if (memcmp(command, "set autoreply.slots ", 20) == 0) {
+    long slots = atol(&command[20]);
+    if (!autoReplySlotsValid(slots, _window_start, _window_end)) {
+      sprintf(reply, "Err - must be %d..%d and leave at least %d s per slot",
+              AUTOREPLY_SLOTS_MIN, AUTOREPLY_SLOTS_MAX, AUTOREPLY_SLOT_MIN_SECS);
+    } else {
+      _slots = (uint8_t) slots;
+      save();
+      strcpy(reply, "OK");
+    }
+    return true;
+  }
+
+  if (strcmp(command, "get autoreply.slots") == 0) {
+    sprintf(reply, "> %d", (uint32_t) _slots);
     return true;
   }
 
@@ -281,8 +324,13 @@ bool AutoReply::handleCommand(const char* iata, const char* command, char* reply
     return true;
   }
 
-  if (strcmp(command, "get autoreply.delay") == 0) {
-    sprintf(reply, "> %d", (uint32_t)_delay_factor);
+  if (memcmp(command, "set autoreply.delay", 19) == 0
+      || strcmp(command, "get autoreply.delay") == 0) {
+    // Retired in favour of the window and the slot. Answering with an error rather
+    // than silently ignoring it means a provisioning note that still carries the old
+    // command fails loudly on the first node instead of quietly doing nothing on all
+    // of them.
+    strcpy(reply, "Err - autoreply.delay is gone; use autoreply.window and autoreply.slots");
     return true;
   }
 

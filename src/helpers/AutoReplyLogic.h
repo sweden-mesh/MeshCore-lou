@@ -187,6 +187,40 @@ static inline uint8_t autoReplySlotFromKey(const uint8_t* key, size_t key_len,
   return (uint8_t)(key[day % key_len] % slots);
 }
 
+// The window, in seconds after the request, that all replies land inside.
+//
+// The start clears the request's own flood -- each hop costs up to ~1.35 s of
+// retransmit delay plus airtime -- and clears the ~9 s in which nodes on the released
+// firmware answer, since a mesh runs mixed builds for months. The end is where CLAUDE
+// .md's "a repeater may wait 5-10 minutes" budget is spent, bounded here by what the
+// test system records: a reply arriving after the capture closes reads as never
+// delivered, which is the one failure this project must not manufacture.
+#define AUTOREPLY_WINDOW_START_DEF 10
+#define AUTOREPLY_WINDOW_END_DEF   120
+#define AUTOREPLY_WINDOW_MAX       600
+
+// A window needs room for every slot to hold a reply and its guards, and the bound is
+// arithmetic rather than taste. Two nodes in adjacent slots are separated by their two
+// guards, an eighth of a slot each, so the clear air between them is width/4. That has
+// to exceed one reply's airtime -- ~0.9 s for a 97-byte reply at SF8/BW62.5/CR4:8 --
+// which puts the floor at 3.6 s and rounds to 4.
+//
+// The measurement agrees: 48 slots in a 110 s window is 2.3 s each, and there even
+// assigned nodes collide (planning/firmware/slot-collisions-measured.md). This suite
+// caught the constant when it was set to 2 by hand.
+#define AUTOREPLY_SLOT_MIN_SECS 4
+
+static inline bool autoReplyWindowValid(long start_s, long end_s, uint8_t slots) {
+  if (start_s < 0 || end_s <= start_s || end_s > AUTOREPLY_WINDOW_MAX) return false;
+  if (slots == 0) return false;
+  return (end_s - start_s) / (long)slots >= AUTOREPLY_SLOT_MIN_SECS;
+}
+
+static inline bool autoReplySlotsValid(long slots, long start_s, long end_s) {
+  if (slots < AUTOREPLY_SLOTS_MIN || slots > AUTOREPLY_SLOTS_MAX) return false;
+  return autoReplyWindowValid(start_s, end_s, (uint8_t)slots);
+}
+
 // The day number the rotation turns on, from the node's own clock.
 //
 // A node whose clock has never synced reports something near zero, and dividing that

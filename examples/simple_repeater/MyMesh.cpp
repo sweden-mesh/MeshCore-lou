@@ -686,15 +686,29 @@ mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
   return Mesh::onRecvPacket(pkt);
 }
 
-// How long an anon reply waits before it goes out. An admin request answers on the
-// fixed SERVER_RESPONSE_DELAY it always has. A test request answers on the same
-// random, widened stagger the channel reply uses -- every repeater that heard the
-// request is about to answer it, and their replies otherwise land on top of each
-// other. delayFactor() is bounded 1..120, so the staggered value is never zero and
-// never silently becomes the immediate path.
+// Where this node's reply lands in the window today: its assigned slot if it has one,
+// the slot its own key derives if it has not. The day comes from the node's own clock,
+// so every node agrees on the order without a command being sent and the order holds
+// between midnights; an unsynced clock reads as day 0, a legal ordering rather than a
+// refusal to answer.
+uint32_t MyMesh::slottedReplyDelay() {
+  const uint8_t slots = auto_reply.slots();
+  const uint32_t day = autoReplyDayNumber(getRTCClock()->getCurrentTime());
+  const uint8_t index = autoReplySlotIndex(auto_reply.slot(), self_id.pub_key,
+                                           PUB_KEY_SIZE, slots, day);
+  return autoReplySlotDelayMs(autoReplyRotatedSlot(index, slots, day), slots,
+                              (uint32_t) auto_reply.windowStart() * 1000UL,
+                              (uint32_t) auto_reply.windowEnd() * 1000UL,
+                              (uint32_t) getRNG()->nextInt(0, 0x7FFFFFFF));
+}
+
+// How long an anon reply waits. An admin request answers on the fixed
+// SERVER_RESPONSE_DELAY it always has -- somebody is at a keyboard waiting for it. A
+// test request takes its slot like every other reply, because every repeater that
+// heard the request is about to answer it.
 uint32_t MyMesh::anonReplyDelay(const mesh::Packet* reply, bool stagger) {
   if (!stagger) return SERVER_RESPONSE_DELAY;
-  uint32_t delay_millis = getRetransmitDelay(reply) * auto_reply.delayFactor();
+  uint32_t delay_millis = slottedReplyDelay();
   MESH_DEBUG_PRINTLN("AutoReply: answering private test in %d ms", (uint32_t)delay_millis);
   return delay_millis;
 }
@@ -1068,7 +1082,7 @@ void MyMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Gro
       MESH_DEBUG_PRINTLN("AutoReply: could not build private reply packet, pool empty");
       return;
     }
-    uint32_t delay_millis = getRetransmitDelay(reply) * auto_reply.delayFactor();
+    uint32_t delay_millis = slottedReplyDelay();
     if (target.mode == AUTOREPLY_MODE_DIRECT && packet->getPathHashCount() == 0) {
       MESH_DEBUG_PRINTLN("AutoReply: sending private zero-hop reply in %d ms", (uint32_t)delay_millis);
       sendZeroHop(reply, delay_millis);
@@ -1093,19 +1107,7 @@ void MyMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Gro
     // events contained an overlapping pair. The multiplier is runtime-settable
     // ('set autoreply.delay') because the right value is not knowable from one
     // mesh, and re-flashing this fleet to change a number takes months.
-    // Which slot this node holds today, and where in the window that slot sits. The
-    // day comes from the node's own clock, so the order is fixed between midnights
-    // and every node agrees on it without anyone sending a command; an unsynced clock
-    // reads as day 0, which is still a legal ordering. An unassigned node derives its
-    // slot from its own key, which is what a mesh with no orchestration behind it does.
-    uint32_t day = autoReplyDayNumber(getRTCClock()->getCurrentTime());
-    uint8_t slots = AUTOREPLY_SLOTS_DEF;
-    uint8_t index = autoReplySlotIndex(auto_reply.slot(), self_id.pub_key, PUB_KEY_SIZE,
-                                       slots, day);
-    uint32_t delay_millis = autoReplySlotDelayMs(
-        autoReplyRotatedSlot(index, slots, day), slots,
-        AUTOREPLY_WINDOW_START_MS, AUTOREPLY_WINDOW_END_MS,
-        (uint32_t) getRNG()->nextInt(0, 0x7FFFFFFF));
+    uint32_t delay_millis = slottedReplyDelay();
     const char* how = zero_hop ? "zero-hop"
                     : (recv_pkt_region && !recv_pkt_region->isWildcard()) ? "scoped flood"
                     : "un-scoped flood";
