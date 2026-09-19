@@ -36,6 +36,13 @@
 // waits on a test reply, so a wait costs only patience; a collision costs the
 // measurement. Runtime-settable, because the right value is not knowable from one mesh.
 #define AUTOREPLY_DELAY_DEF   60
+// The window a channel reply lands in, milliseconds after the request. It starts late
+// enough that the request's own flood is over -- each hop costs up to ~1.35 s of
+// retransmit delay plus airtime -- and late enough to clear the ~9 s in which nodes on
+// the released firmware answer, since a mesh runs mixed builds for months.
+#define AUTOREPLY_WINDOW_START_MS 10000UL
+#define AUTOREPLY_WINDOW_END_MS   120000UL
+
 #define AUTOREPLY_MAX_PAYLOAD (5 + AUTOREPLY_MAX_TEXT)   // timestamp + flags + text
 // how many leading bytes of a requester's key name it in a private reply's brackets
 #define AUTOREPLY_PRIVATE_WHO 4

@@ -187,6 +187,33 @@ static inline uint8_t autoReplySlotFromKey(const uint8_t* key, size_t key_len,
   return (uint8_t)(key[day % key_len] % slots);
 }
 
+// The day number the rotation turns on, from the node's own clock.
+//
+// A node whose clock has never synced reports something near zero, and dividing that
+// by a day still gives a legal day number -- but every unsynced node would then agree
+// on day 0 *and* on the rotation, which is fine: they are distinct slots regardless.
+// The threshold is only there so a garbage clock cannot produce a wild day that makes
+// one node's order differ from the mesh's for a century.
+#define AUTOREPLY_EPOCH_SANE 1600000000UL   // 2020-09-13; older than any real fix
+#define AUTOREPLY_SECS_PER_DAY 86400UL
+
+static inline uint32_t autoReplyDayNumber(uint32_t epoch_secs) {
+  if (epoch_secs < AUTOREPLY_EPOCH_SANE) return 0;
+  return epoch_secs / AUTOREPLY_SECS_PER_DAY;
+}
+
+// Which slot index this node answers in: its assignment when it has one, and the
+// key-derived slot when it does not. Assigned slots are 1-based as the operator types
+// them, so slot 1 is index 0 and no assignment can silently mean "the first slot".
+static inline uint8_t autoReplySlotIndex(uint8_t assigned, const uint8_t* key,
+                                         size_t key_len, uint8_t slots, uint32_t day) {
+  if (slots == 0) return 0;
+  if (assigned == AUTOREPLY_SLOT_UNASSIGNED) {
+    return autoReplySlotFromKey(key, key_len, slots, day);
+  }
+  return (uint8_t)((assigned - 1) % slots);
+}
+
 // Where in the window a rotated slot sits, in milliseconds after the request.
 //
 // The window runs from `start_ms` to `end_ms` and is cut into `slots` equal pieces. A

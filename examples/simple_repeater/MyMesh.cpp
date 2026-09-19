@@ -1093,7 +1093,19 @@ void MyMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Gro
     // events contained an overlapping pair. The multiplier is runtime-settable
     // ('set autoreply.delay') because the right value is not knowable from one
     // mesh, and re-flashing this fleet to change a number takes months.
-    uint32_t delay_millis = getRetransmitDelay(reply) * auto_reply.delayFactor();
+    // Which slot this node holds today, and where in the window that slot sits. The
+    // day comes from the node's own clock, so the order is fixed between midnights
+    // and every node agrees on it without anyone sending a command; an unsynced clock
+    // reads as day 0, which is still a legal ordering. An unassigned node derives its
+    // slot from its own key, which is what a mesh with no orchestration behind it does.
+    uint32_t day = autoReplyDayNumber(getRTCClock()->getCurrentTime());
+    uint8_t slots = AUTOREPLY_SLOTS_DEF;
+    uint8_t index = autoReplySlotIndex(auto_reply.slot(), self_id.pub_key, PUB_KEY_SIZE,
+                                       slots, day);
+    uint32_t delay_millis = autoReplySlotDelayMs(
+        autoReplyRotatedSlot(index, slots, day), slots,
+        AUTOREPLY_WINDOW_START_MS, AUTOREPLY_WINDOW_END_MS,
+        (uint32_t) getRNG()->nextInt(0, 0x7FFFFFFF));
     const char* how = zero_hop ? "zero-hop"
                     : (recv_pkt_region && !recv_pkt_region->isWildcard()) ? "scoped flood"
                     : "un-scoped flood";

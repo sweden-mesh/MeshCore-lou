@@ -1339,3 +1339,39 @@ TEST(AutoReplyKeySlot, DegenerateInputsAreSafe) {
   EXPECT_EQ(autoReplySlotFromKey(key, 0, 16, 3), 0);
   EXPECT_EQ(autoReplySlotFromKey(key, sizeof(key), 0, 3), 0);
 }
+
+// ---- assignment vs fallback, and the clock (Sprint F04 T-05) -----------------
+
+TEST(AutoReplySlotIndex, AnAssignedSlotIsOneBasedSoNobodyFallsOntoTheFirstByAccident) {
+  uint8_t key[32]; fillKey(key, 11);
+  EXPECT_EQ(autoReplySlotIndex(1, key, sizeof(key), 16, 0), 0);
+  EXPECT_EQ(autoReplySlotIndex(2, key, sizeof(key), 16, 0), 1);
+  EXPECT_EQ(autoReplySlotIndex(16, key, sizeof(key), 16, 0), 15);
+}
+
+TEST(AutoReplySlotIndex, AnAssignmentBeyondTheSlotCountWrapsRatherThanEscaping) {
+  uint8_t key[32]; fillKey(key, 12);
+  // A slot assigned before the count was narrowed. Wrapping keeps it inside the
+  // window; letting it through would index past the last slot.
+  EXPECT_LT(autoReplySlotIndex(40, key, sizeof(key), 16, 0), 16);
+  EXPECT_EQ(autoReplySlotIndex(17, key, sizeof(key), 16, 0), 0);
+}
+
+TEST(AutoReplySlotIndex, UnassignedUsesTheKeyAndAssignedIgnoresIt) {
+  uint8_t a[32], b[32]; fillKey(a, 21); fillKey(b, 22);
+  EXPECT_EQ(autoReplySlotIndex(5, a, sizeof(a), 16, 3), autoReplySlotIndex(5, b, sizeof(b), 16, 3));
+  EXPECT_EQ(autoReplySlotIndex(0, a, sizeof(a), 16, 3), autoReplySlotFromKey(a, sizeof(a), 16, 3));
+}
+
+TEST(AutoReplyDay, AnUnsyncedClockReadsAsDayZero) {
+  EXPECT_EQ(autoReplyDayNumber(0), 0u);
+  EXPECT_EQ(autoReplyDayNumber(1234), 0u);
+  EXPECT_EQ(autoReplyDayNumber(AUTOREPLY_EPOCH_SANE - 1), 0u);
+}
+
+TEST(AutoReplyDay, ARealClockAdvancesOncePerDayAtMidnightUTC) {
+  uint32_t t = 1789800000UL;                       // 2026-09-19
+  uint32_t day = autoReplyDayNumber(t);
+  EXPECT_EQ(autoReplyDayNumber(t + 3600), day);    // an hour later, same order
+  EXPECT_EQ(autoReplyDayNumber(t + 86400), day + 1);
+}
