@@ -155,7 +155,7 @@ To turn it off again: `set autoreply off`.
 | `set autoreply.slots <1-64>` | `16` | How many slots the window is cut into. More is not better: past about one slot per 4 s they become narrower than the replies they separate. |
 | `set autoreply.region <code>` | *(request scope)* | Which region replies are scoped to. Empty mirrors whatever scope the request arrived under. |
 | `set autoreply.mode flood\|private\|direct` | `flood` | How a request that names no mode is answered. `private` and `direct` answer with a text message to the requester alone, and only when the request carries their key. |
-| `set autoreply.private on\|off` | `off` | Whether a test request sent to this repeater alone, off the channel, is answered. Off because it is an unauthenticated packet that makes the node transmit. |
+| `set autoreply.private on\|off` | `on` | Whether a test request sent to this repeater alone, off the channel, is answered. On since 2026-09-20: a private request is answered privately, and one that is never answered reads like a dead repeater. |
 | `get autoreply` | — | Current state, in one line. |
 | `get autoreply.channel` | — | The channel name. **Read-only** — it follows `set mqtt.iata`. |
 | `get autoreply.hops` | — | Read the hop limit back. |
@@ -228,9 +228,12 @@ answered the same way. Nothing about the exchange appears on the test channel.
 This sidesteps the key problem that P and D have, because the request packet carries the
 sender's key by construction — there is nothing to append and nothing to get wrong.
 
-It is **off by default** (`set autoreply.private on`), and it is the one switch here worth
-thinking about before you flip it: unlike a channel request, it is an unauthenticated packet
-sent to your node alone that makes it transmit. The guards are a cooldown charged to the
+It is **on by default** since 2026-09-20 (`set autoreply.private off` to stop it), and it is
+the one switch here worth knowing about: unlike a channel request, it is an unauthenticated
+packet sent to your node alone that makes it transmit. It was off, and a private request that
+is never answered reads from the outside exactly like a dead repeater — the failure the flood
+reply already exists to avoid. The guards that make the default reasonable are a cooldown
+charged to the
 requester's *key* rather than a name — one answer per key per five minutes — and a budget for
 the private path of its own, ten answers per five minutes, which is what bounds somebody
 cycling through fresh keys. A request refused by either gets nothing back.
