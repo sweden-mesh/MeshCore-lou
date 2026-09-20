@@ -1493,9 +1493,38 @@ TEST(AutoReplyConfig, V5AndV6AddTheModeThenThePrivateSwitch) {
   std::vector<uint8_t> b = v4Prefix(5, "JKG");
   b.push_back(AUTOREPLY_MODE_DIRECT);
   EXPECT_EQ(decodeFrom(b).mode, AUTOREPLY_MODE_DIRECT);
-  EXPECT_FALSE(decodeFrom(b).priv);
+  // v5 predates the field, so it keeps the default -- which is ON since 2026-09-20.
+  // A node upgrading from v5 therefore starts answering private requests, which is the
+  // intent: it never had a way to say otherwise, and the answer was always private.
+  EXPECT_EQ(decodeFrom(b).priv, AUTOREPLY_PRIVATE_DEF);
   b[0] = 6; b.push_back(1);
   EXPECT_TRUE(decodeFrom(b).priv);
+  b.back() = 0;
+  EXPECT_FALSE(decodeFrom(b).priv);           // and a node that said no keeps saying no
+}
+
+TEST(AutoReplyConfig, APrivateRequestIsAnsweredOutOfTheBox) {
+  // Operator, 2026-09-20: "when someone messages the repeater in private the answer
+  // should be in private." The mechanism was always there and the switch was shut, so a
+  // private request got nothing back -- indistinguishable, from outside, from a dead node.
+  AutoReplyStoredConfig fresh;
+  autoReplyConfigDefaults(&fresh);
+  EXPECT_TRUE(fresh.priv);
+}
+
+TEST(AutoReplyConfig, ANodeThatTurnedItOffKeepsItOffAcrossAnUpgrade) {
+  // The default reaches a fresh flash or an erase. It must not reach back into a node
+  // whose operator already answered the question.
+  AutoReplyStoredConfig off;
+  autoReplyConfigDefaults(&off);
+  off.priv = false;
+  strcpy(off.region, "JKG");
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&off, buf, sizeof(buf));
+  AutoReplyStoredConfig back;
+  autoReplyConfigDefaults(&back);
+  ASSERT_TRUE(autoReplyConfigDecode(buf, n, &back));
+  EXPECT_FALSE(back.priv);
 }
 
 TEST(AutoReplyConfig, V7RoundTripsEveryField) {
@@ -1534,7 +1563,7 @@ TEST(AutoReplyConfig, ATruncatedFileKeepsDefaultsForWhatItNeverReached) {
   b.push_back(AUTOREPLY_MODE_DIRECT);         // mode present, then the file ends
   AutoReplyStoredConfig c = decodeFrom(b);
   EXPECT_EQ(c.mode, AUTOREPLY_MODE_DIRECT);
-  EXPECT_FALSE(c.priv);
+  EXPECT_EQ(c.priv, AUTOREPLY_PRIVATE_DEF);
   EXPECT_EQ(c.slots, AUTOREPLY_SLOTS_DEF);
   EXPECT_EQ(c.window_end, AUTOREPLY_WINDOW_END_DEF);
 }
@@ -1577,11 +1606,14 @@ TEST(AutoReplyConfig, EncodeRefusesABufferTooSmall) {
 }
 
 TEST(AutoReplyConfig, AV5FilesTrailingByteIsNotThePrivateSwitch) {
-  // v5 ends at the mode. Anything after it is not a field this version defined, and
-  // reading it as `private` would switch on an unauthenticated transmit path from
-  // whatever byte happened to follow -- so the version gates the read, not the length.
+  // v5 ends at the mode. Anything after it is not a field this version defined, so the
+  // version gates the read, not the length. The byte is 0 and the default is on, so this
+  // still fails the moment the length is what decides -- the direction flipped with the
+  // default on 2026-09-20, the guarantee did not. Reading a stray byte as `private`
+  // would let whatever followed decide an unauthenticated transmit path either way.
   std::vector<uint8_t> b = v4Prefix(5, "JKG");
   b.push_back(AUTOREPLY_MODE_DIRECT);
-  b.push_back(1);
-  EXPECT_FALSE(decodeFrom(b).priv);
+  b.push_back(0);
+  EXPECT_EQ(decodeFrom(b).priv, AUTOREPLY_PRIVATE_DEF);
+  EXPECT_TRUE(AUTOREPLY_PRIVATE_DEF);   // or the line above proves nothing
 }

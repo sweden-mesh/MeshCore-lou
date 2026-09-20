@@ -295,6 +295,22 @@ static inline uint32_t autoReplySlotDelayMs(uint8_t rotated, uint8_t slots,
 #endif
 #define AUTOREPLY_CONFIG_VERSION   7
 #define AUTOREPLY_CONFIG_MAX_BYTES 64
+// Whether a `test` addressed privately to this node is answered at all. **On** since
+// 2026-09-20 (operator): "when someone messages the repeater in private the answer should
+// be in private." It was off, so a private request got nothing back -- which reads from
+// the outside exactly like a dead repeater, the failure the flood reply already exists to
+// avoid. The answer was always private when it came; only the switch was shut.
+//
+// Turning it on widens nothing a stranger can provoke: a private request is still charged
+// to the requester's key by the per-key cooldown, still spends the same per-node reply
+// budget as every other reply, and still gets nothing without a key to address.
+//
+// A node with a stored config keeps whatever it stored, so this reaches a node on a fresh
+// flash or after an erase. A node upgrading from a config older than v6 -- which has no
+// field for it -- takes the new default, because a field the file does not carry keeps
+// the default, and that is now on.
+#define AUTOREPLY_PRIVATE_DEF      true
+
 #define AUTOREPLY_HOPS_DEF         8
 
 struct AutoReplyStoredConfig {
@@ -313,6 +329,7 @@ struct AutoReplyStoredConfig {
 static inline void autoReplyConfigDefaults(AutoReplyStoredConfig* c) {
   memset(c, 0, sizeof(*c));
   c->hops = AUTOREPLY_HOPS_DEF;
+  c->priv = AUTOREPLY_PRIVATE_DEF;
   c->direct_flood = true;
   c->mode = AUTOREPLY_MODE_FLOOD;
   c->slot = AUTOREPLY_SLOT_UNASSIGNED;

@@ -388,7 +388,12 @@ A request may reach the repeater either way, and the answer travels accordingly:
 | **Flooded** | Returned along the path the flood collected, carrying that path, exactly as a login is answered — so a requester that has no path to the repeater floods and gets one with the answer. |
 | **Direct** | Flooded, scoped as a channel reply is. The body carries no reply path, so there is no other way home. |
 
-**The switch.** `set autoreply.private on`, off by default, with `autoreply on` and a region
+**The switch.** `set autoreply.private off` turns it off; it is **on by default** since
+2026-09-20 (operator: *"when someone messages the repeater in private the answer should be in
+private"*). It was off, so a private request got nothing back — which reads from the outside
+exactly like a dead repeater. A node that has already stored a config keeps whatever it stored,
+so the new default reaches a node on a fresh flash or after an erase; a node upgrading from a
+config older than v6, which has no field for it, takes the default. It still needs `autoreply on` and a region
 set — the gate every reply shares, since a node with no region has no auto-reply at all.
 `autoreply.hops` does not apply: it bounds which of the requests every repeater hears this one
 answers, and a private request was addressed to this node and nobody else, so distance is not

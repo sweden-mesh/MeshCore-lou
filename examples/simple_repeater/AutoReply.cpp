@@ -28,7 +28,7 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 AutoReply::AutoReply()
   : _fs(NULL), _enabled(false), _hops(8), _direct_flood(true),
     _window_start(AUTOREPLY_WINDOW_START_DEF), _window_end(AUTOREPLY_WINDOW_END_DEF),
-    _slots(AUTOREPLY_SLOTS_DEF), _mode(AUTOREPLY_MODE_FLOOD), _private(false),
+    _slots(AUTOREPLY_SLOTS_DEF), _mode(AUTOREPLY_MODE_FLOOD), _private(AUTOREPLY_PRIVATE_DEF),
     _slot(AUTOREPLY_SLOT_UNASSIGNED),
     _ready(false),
     _limiter(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS),
