@@ -233,9 +233,8 @@ the one switch here worth knowing about: unlike a channel request, it is an unau
 packet sent to your node alone that makes it transmit. It was off, and a private request that
 is never answered reads from the outside exactly like a dead repeater — the failure the flood
 reply already exists to avoid. The guards that make the default reasonable are a cooldown
-charged to the
-requester's *key* rather than a name — one answer per key per five minutes — and a budget for
-the private path of its own, ten answers per five minutes, which is what bounds somebody
+charged to the requester's *key* rather than a name — one answer per key per five minutes —
+and a budget for the private path of its own, ten answers per five minutes, which bounds somebody
 cycling through fresh keys. A request refused by either gets nothing back.
 
 Full detail on all five in [`docs/autoreply.md`](docs/autoreply.md).
