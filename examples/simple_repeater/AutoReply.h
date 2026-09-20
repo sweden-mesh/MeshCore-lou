@@ -4,7 +4,7 @@
 #include <Mesh.h>
 #include <helpers/AutoReplyLogic.h>
 #include <helpers/IdentityStore.h>
-#include "RateLimiter.h"
+#include <helpers/SlidingBudget.h>
 
 // the keyword that triggers a reply (matched on its own, case-insensitive)
 #ifndef AUTOREPLY_KEYWORD
@@ -22,13 +22,7 @@
 // how many leading bytes of a requester's key name it in a private reply's brackets
 #define AUTOREPLY_PRIVATE_WHO 4
 
-// how many replies this repeater will send in total, per AUTOREPLY_WINDOW_SECS
-#define AUTOREPLY_MAX_REPLIES 10
-// how long one sender must wait before being answered again
-#define AUTOREPLY_WINDOW_SECS 300
-// senders remembered for the per-sender cooldown (oldest is evicted). Sized above
-// AUTOREPLY_MAX_REPLIES so a sender can never be evicted while still cooling down.
-#define AUTOREPLY_MAX_SENDERS 16
+// The reply budgets live in AutoReplyLogic.h, where the host suite can reach them.
 
 // Where a built reply goes. For a flood, nothing but the mode; for a private mode
 // the requester's public key, decoded from the request that carried it.
@@ -74,13 +68,13 @@ class AutoReply {
   void toStored(AutoReplyStoredConfig* c) const;
   void fromStored(const AutoReplyStoredConfig& c);
   mesh::GroupChannel _channel;
-  RateLimiter _limiter;
+  SlidingBudget _limiter;
 
   AutoReplySender _senders[AUTOREPLY_MAX_SENDERS];
   uint8_t _next_sender;
   // The private path keeps its own budget: a burst of private requests must not be
   // able to spend the channel's replies, nor the other way round.
-  RateLimiter _private_limiter;
+  SlidingBudget _private_limiter;
   AutoReplySender _private_senders[AUTOREPLY_MAX_SENDERS];
   uint8_t _next_private;
 
@@ -134,7 +128,8 @@ public:
    *
    * \returns  true if a reply may be sent
    */
-  bool privateAllowed(const uint8_t* pubkey, uint32_t timestamp);
+  bool privateAllowed(const uint8_t* pubkey, const char* id, size_t id_len,
+                      uint32_t timestamp);
 
   /**
    * \brief  The derived '#test-<iata>' channel, for originating a probe on it.

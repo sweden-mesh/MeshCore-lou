@@ -463,15 +463,22 @@ Be honest with yourself about the traffic before enabling this:
 - One trigger produces **up to one flood reply per repeater in range**, each propagating
   across the configured scope.
 - Two rate limits apply, both per repeater:
-  - **Per sender** — one reply per sender per 5 minutes. The last 16 senders are remembered
-    in a ring; the oldest is forgotten when a 17th appears. Senders are identified by the
-    name prefix a group message carries, folded to lower case, so this is a courtesy limit
-    rather than a security control — a name is trivially spoofed, and two people using the
-    same name share a slot.
-  - **Global** — 10 replies per 5 minutes in total. The per-sender check runs first, so one
-    person retrying cannot spend everyone else's share.
-  - Both are fixed windows, not cooldowns: the budget refills all at once when the window
-    ends, and the window starts at the first reply after an idle gap.
+  - **Per sender and question** — one reply per sender per 5 minutes for the same question.
+    Since 2026-09-20 a `test <id>` carrying a correlation id the sender has not used before
+    is a *new* question and is answered inside the window (operator decision); a bare `test`
+    and a repeat of the same id are unchanged, so the nightly probe — always bare — behaves
+    exactly as it did. The last 16 (sender, question) pairs are remembered in a ring; the
+    oldest is forgotten when a 17th appears. Senders are identified by the name prefix a
+    group message carries, folded to lower case, so this is a courtesy limit rather than a
+    security control — a name is trivially spoofed, and two people using the same name share
+    a slot. **A sender cycling ids can churn the whole ring**, which costs other senders
+    their cooldown; what it cannot do is raise how many replies leave.
+  - **Global** — 10 replies per 5 minutes in total, and this is the limit that bounds a
+    flood. It is a *sliding* window since 2026-09-20: no 5-minute span holds more than 10,
+    wherever it starts. It was a fixed window, which refilled all at once on the boundary —
+    tolerable only while the per-sender cooldown stopped one sender reaching it twice, and
+    not tolerable once a fresh id bypasses that cooldown, since ten replies just before a
+    boundary and ten just after would have been twenty in two seconds.
 - Replies are staggered by a random delay, scaled by `f_txdelay`, so nearby repeaters do
   not transmit on top of each other. Setting `f_txdelay` to `0` removes that stagger.
 - A request that names a mode changes the bill. `S` costs the mesh nothing beyond the

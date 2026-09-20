@@ -59,6 +59,40 @@ static inline uint32_t autoReplySenderId(const char* name, size_t len) {
   return h;
 }
 
+// how many replies this repeater will send in total, per AUTOREPLY_WINDOW_SECS
+#define AUTOREPLY_MAX_REPLIES 10
+// how long one sender must wait before being answered again
+#define AUTOREPLY_WINDOW_SECS 300
+// Senders remembered for the per-sender cooldown; the oldest entry is evicted.
+//
+// This used to be sized above AUTOREPLY_MAX_REPLIES "so a sender can never be evicted
+// while still cooling down", and that stopped being true on 2026-09-20: a sender
+// cycling correlation ids now occupies one entry per id and can churn the whole table,
+// which costs everyone else their cooldown. What it cannot do is raise the number of
+// replies that leave -- the per-node budget over its window is what bounds a flood, and
+// AStreamOfFreshIdsIsBoundedByTheNodesOwnBudget is the test that says so.
+#define AUTOREPLY_MAX_SENDERS 16
+
+// The cooldown keys on who asked *and what they asked*. A `test <id>` carrying an id
+// the sender has not used before is a new question, not a repeat of the last one, so it
+// is answered inside the 300 s window; a bare `test` and a repeat of the same id are
+// unchanged, which is what keeps the nightly probe -- always bare -- behaving exactly as
+// it did. Operator decision 2026-09-20.
+//
+// The cooldown is also a flood guard, and this deliberately opens it, so what bounds a
+// sender cycling ids is the per-node reply budget over its window -- and that budget had
+// to stop being a fixed window first (SlidingBudget.h), or ten replies just before a
+// boundary and ten just after would have been twenty in two seconds.
+static inline uint32_t autoReplyRequestId(uint32_t sender_id, const char* id, size_t id_len) {
+  if (id == NULL) return sender_id;   // a zero-length id falls out of the loop below
+  uint32_t h = sender_id;
+  for (size_t i = 0; i < id_len; i++) {
+    h ^= (uint8_t)tolower((unsigned char)id[i]);
+    h *= 16777619u;
+  }
+  return h;
+}
+
 // The same hash over a public key, for a private request: the packet names its
 // sender by key, which nobody else can type, so the cooldown is charged to the key
 // and not to a display name. Bytes are hashed as they are -- folding is for text.

@@ -572,7 +572,7 @@ TEST(RateLimit, ABudgetOfZeroAllowsNothingAndABudgetTooLargeIsCapped) {
   MqttCtrlBudget huge(200, 600);
   int allowed = 0;
   for (int i = 0; i < 250; i++) allowed += huge.allow(1000);
-  EXPECT_EQ(MQTTCTRL_BUDGET_SLOTS, allowed);
+  EXPECT_EQ(SLIDING_BUDGET_SLOTS, allowed);
 }
 
 // ---- the two overloaded codes, now split -------------------------------------

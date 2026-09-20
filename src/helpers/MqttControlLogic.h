@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SlidingBudget.h"
+
 #include <ctype.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -68,49 +70,10 @@
 // by the MQTT task alone. Costs one PUBACK per command, against ten an hour.
 #define MQTTCTRL_RESULT_QOS       1
 
-// The budget itself. Upstream's RateLimiter is a fixed window: its count resets all
-// at once when the window rolls, so one command late in a window and a full budget
-// just after it both pass -- three floods in two seconds against a limit of two an
-// hour, which is the weapon the limit exists to deny. This one remembers when each
-// of the last `maximum` commands was allowed and refuses while the oldest of them
-// is younger than the window, so **no span of `secs` ever holds more than
-// `maximum`**, wherever it starts.
-//
-// Ours rather than a change to RateLimiter.h: that file is upstream's, other code
-// uses it, and a private limiter costs nothing at the next merge.
-//
-// A refused command spends nothing. A clock that steps backwards -- an RTC
-// corrected after a bad sync -- must not mint budget, so every remembered time
-// that is now in the future is pulled back to `now`: the cost is at most one
-// window of refusals, never an extra allowance.
-#define MQTTCTRL_BUDGET_SLOTS     MQTTCTRL_CMD_MAX
-
-struct MqttCtrlBudget {
-  uint32_t stamps[MQTTCTRL_BUDGET_SLOTS];
-  uint32_t secs;
-  uint8_t  maximum;
-  uint8_t  used;
-
-  MqttCtrlBudget(uint8_t max_allowed, uint32_t window_secs)
-      : secs(window_secs),
-        maximum(max_allowed > MQTTCTRL_BUDGET_SLOTS ? MQTTCTRL_BUDGET_SLOTS : max_allowed),
-        used(0) {}
-
-  bool allow(uint32_t now) {
-    uint8_t oldest = 0;
-    for (uint8_t i = 0; i < used; i++) {
-      if (stamps[i] > now) stamps[i] = now;
-      if (stamps[i] < stamps[oldest]) oldest = i;
-    }
-    if (used < maximum) {
-      stamps[used++] = now;
-      return true;
-    }
-    if (maximum == 0 || now - stamps[oldest] < secs) return false;
-    stamps[oldest] = now;
-    return true;
-  }
-};
+// The command budget is the shared sliding one; see SlidingBudget.h for why a fixed
+// window is not enough here. The alias keeps the name the control plane's own code and
+// tests use.
+typedef SlidingBudget MqttCtrlBudget;
 
 // Why a command was refused. Returned rather than logged so the caller decides
 // what is safe to publish back -- a rejection reason is not secret, but the

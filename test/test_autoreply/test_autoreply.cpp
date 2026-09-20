@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "helpers/AutoReplyLogic.h"
+#include "helpers/SlidingBudget.h"
 
 // The firmware's buffer for a channel name (AUTOREPLY_MAX_CHANNEL).
 static const size_t CHANNEL_BUF = 16;
@@ -483,6 +484,92 @@ TEST(SenderId, UsesOnlyTheGivenLength) {
 
 TEST(SenderId, EmptyNamesShareOneIdentity) {
   EXPECT_EQ(autoReplySenderId("", 0), autoReplySenderId("anything", 0));
+}
+
+// ---- a fresh correlation id is a new question ------------------------------
+//
+// Operator decision 2026-09-20: "Bypass for a fresh ID." The 300 s cooldown keyed on
+// the sender alone, so a retry carrying a new id was swallowed as a repeat.
+
+TEST(RequestId, ABareKeywordKeepsTheSendersOwnIdentity) {
+  // The nightly probe always sends a bare `test`. Nothing about it may change.
+  const uint32_t sender = autoReplySenderId("LouHome", 7);
+  EXPECT_EQ(autoReplyRequestId(sender, NULL, 0), sender);
+  EXPECT_EQ(autoReplyRequestId(sender, "abcd1234", 0), sender);
+}
+
+TEST(RequestId, TwoIdsFromOneSenderAreDifferentQuestions) {
+  const uint32_t sender = autoReplySenderId("LouHome", 7);
+  EXPECT_NE(autoReplyRequestId(sender, "aaaa1111", 8),
+            autoReplyRequestId(sender, "bbbb2222", 8));
+  EXPECT_NE(autoReplyRequestId(sender, "aaaa1111", 8), sender);
+}
+
+TEST(RequestId, TheSameIdFromOneSenderIsTheSameQuestion) {
+  const uint32_t sender = autoReplySenderId("LouHome", 7);
+  EXPECT_EQ(autoReplyRequestId(sender, "aaaa1111", 8),
+            autoReplyRequestId(sender, "AAAA1111", 8));   // ids are hex, case folded
+}
+
+TEST(RequestId, OneIdAskedByTwoSendersStaysTwoQuestions) {
+  // Otherwise one node's retry would spend another node's cooldown.
+  EXPECT_NE(autoReplyRequestId(autoReplySenderId("A", 1), "aaaa1111", 8),
+            autoReplyRequestId(autoReplySenderId("B", 1), "aaaa1111", 8));
+}
+
+TEST(SenderAllowed, ARetryWithAFreshIdIsAnsweredInsideTheWindow) {
+  AutoReplySender ring[8] = {};
+  uint8_t next = 0;
+  const uint32_t sender = autoReplySenderId("LouHome", 7);
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 8, next,
+                                     autoReplyRequestId(sender, "aaaa1111", 8), 1000, 300));
+  // Same sender, same second, a different id: a new question.
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 8, next,
+                                     autoReplyRequestId(sender, "bbbb2222", 8), 1000, 300));
+  // ...and the same id again is still a repeat.
+  EXPECT_FALSE(autoReplySenderAllowed(ring, 8, next,
+                                      autoReplyRequestId(sender, "aaaa1111", 8), 1000, 300));
+  // ...and a bare `test` is still bound by its own entry, as it always was.
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 8, next, sender, 1000, 300));
+  EXPECT_FALSE(autoReplySenderAllowed(ring, 8, next, sender, 1000, 300));
+}
+
+TEST(ReplyBudget, AStreamOfFreshIdsIsBoundedByTheNodesOwnBudget) {
+  // The cooldown is also a flood guard and this deliberately opens it, so the per-node
+  // reply budget is what is left holding. A sender cycling ids as fast as it likes gets
+  // AUTOREPLY_MAX_REPLIES answers per window and no more.
+  SlidingBudget budget(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS);
+  AutoReplySender ring[AUTOREPLY_MAX_SENDERS] = {};
+  uint8_t next = 0;
+  const uint32_t sender = autoReplySenderId("flooder", 7);
+  int answered = 0;
+  for (int i = 0; i < 200; i++) {
+    char id[9];
+    snprintf(id, sizeof(id), "%08x", i);
+    if (!autoReplySenderAllowed(ring, AUTOREPLY_MAX_SENDERS, next,
+                                autoReplyRequestId(sender, id, 8), 1000 + i, 300)) continue;
+    if (budget.allow(1000 + i)) answered++;
+  }
+  EXPECT_EQ(answered, AUTOREPLY_MAX_REPLIES);
+}
+
+TEST(ReplyBudget, NoWindowHoldsMoreThanTheBudgetHoweverTheIdsAreTimed) {
+  // The reply budget used to be a fixed window, which was tolerable only because the
+  // per-sender cooldown stopped one sender reaching it twice. With fresh ids bypassing
+  // the cooldown, a boundary would have been twenty replies in two seconds.
+  SlidingBudget budget(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS);
+  const uint32_t t0 = 1000;
+  for (int i = 0; i < AUTOREPLY_MAX_REPLIES; i++) {
+    EXPECT_TRUE(budget.allow(t0 + AUTOREPLY_WINDOW_SECS - 1));
+  }
+  EXPECT_FALSE(budget.allow(t0 + AUTOREPLY_WINDOW_SECS));
+  EXPECT_FALSE(budget.allow(t0 + AUTOREPLY_WINDOW_SECS + 1));
+  // All ten were given in the same second, so all ten age out in the same second --
+  // and the eleventh is still refused. The bound is on any window, not on any instant.
+  for (int i = 0; i < AUTOREPLY_MAX_REPLIES; i++) {
+    EXPECT_TRUE(budget.allow(t0 + 2 * AUTOREPLY_WINDOW_SECS - 1));
+  }
+  EXPECT_FALSE(budget.allow(t0 + 2 * AUTOREPLY_WINDOW_SECS - 1));
 }
 
 // ---- per-sender cooldown --------------------------------------------------

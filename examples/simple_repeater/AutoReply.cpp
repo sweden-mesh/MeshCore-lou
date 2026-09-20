@@ -42,8 +42,9 @@ AutoReply::AutoReply()
   _next_private = 0;
 }
 
-bool AutoReply::privateAllowed(const uint8_t* pubkey, uint32_t timestamp) {
-  uint32_t key_id = autoReplyKeyId(pubkey, PUB_KEY_SIZE);
+bool AutoReply::privateAllowed(const uint8_t* pubkey, const char* id, size_t id_len,
+                               uint32_t timestamp) {
+  uint32_t key_id = autoReplyRequestId(autoReplyKeyId(pubkey, PUB_KEY_SIZE), id, id_len);
   if (!autoReplySenderAllowed(_private_senders, AUTOREPLY_MAX_SENDERS, _next_private, key_id,
                               timestamp, AUTOREPLY_WINDOW_SECS)) {
     MESH_DEBUG_PRINTLN("AutoReply: private request from %02X%02X.. already answered in the last %d s",
@@ -399,7 +400,8 @@ int AutoReply::buildReply(const mesh::Packet* req, const uint8_t* data, size_t l
 
   // Per-sender first, so someone retrying cannot spend everyone else's share of
   // the global budget. Only real triggers are charged against either limit.
-  uint32_t sender_id = autoReplySenderId(request.sender, request.sender_len);
+  uint32_t sender_id = autoReplyRequestId(
+      autoReplySenderId(request.sender, request.sender_len), request.id, request.id_len);
   if (!autoReplySenderAllowed(_senders, AUTOREPLY_MAX_SENDERS, _next_sender, sender_id,
                               timestamp, AUTOREPLY_WINDOW_SECS)) {
     MESH_DEBUG_PRINTLN("AutoReply: '%.*s' was already answered in the last %d s",
@@ -507,7 +509,7 @@ int AutoReply::buildPrivateReply(const mesh::Packet* req, const mesh::Identity& 
     MESH_DEBUG_PRINTLN("AutoReply: private request is not the keyword - got '%s'", text);
     return 0;
   }
-  if (!privateAllowed(sender.pub_key, timestamp)) return 0;
+  if (!privateAllowed(sender.pub_key, id, id_len, timestamp)) return 0;
 
   char who[AUTOREPLY_PRIVATE_WHO * 2 + 1];
   mesh::Utils::toHex(who, sender.pub_key, AUTOREPLY_PRIVATE_WHO);
