@@ -407,6 +407,9 @@ static inline bool mqttCtrlCommandAllowed(const char* command, size_t len) {
     // mixed, and this is how a tool finds out which nodes carry a given change
     // without a visit. Read-only; the version string names no key and no address.
     { "ver",                     true },
+    // The node's name. Every advert it sends carries it in clear to the whole mesh,
+    // so a result that repeats it reveals nothing; position and owner stay out.
+    { "get name",                true },
   };
 
   for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {

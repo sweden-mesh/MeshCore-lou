@@ -137,11 +137,12 @@ region remove <name> · region default <name> · region home <name> · region sa
 get txdelay · get direct.txdelay · get rxdelay · get af
 get cad · get int.thresh · get radio
 get repeat · get flood.max · get flood.max.unscoped
-ver
+ver · get name
 ```
 
 `ver` is there so a tool can ask a whole region which firmware each node runs, which is how a
-fleet that takes months to flash is told apart without a visit.
+fleet that takes months to flash is told apart without a visit; `get name` so the same tool can
+label what answered. The name is in every advert the node floods, so it reveals nothing.
 
 **The region map is admitted whole**, so a scope rollout across a fleet is one signed publish
 per node -- or one to `meshcore/{IATA}/all/cmd`, since changing the map costs no airtime and the
@@ -215,6 +216,7 @@ anything.
   other brokers are (`mqttN.server`), which network it is on (`wifi.ssid`), and where or whose
   it is (`lat`, `lon`, `owner.info`) — an advert may publish a position, but that is the
   operator's choice to make per node, not something a signed stranger's read should decide.
+  The node's `name` is the one exception: every advert carries it, so it is readable.
   `NothingAResultMayNeverCarryCanBeRead` pins the list. What *is* readable is timing and
   radio configuration, which anyone in range could infer by listening.
 - **Availability.** Anyone can flood the broker. The node's rate limit bounds the airtime

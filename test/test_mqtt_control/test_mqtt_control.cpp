@@ -292,6 +292,14 @@ TEST(Allowlist, AdmitsTheWholeRegionFamily) {
   EXPECT_FALSE(mqttCtrlIsTransmitCommand("region put se-jkp *", strlen("region put se-jkp *")));
 }
 
+TEST(Allowlist, AdmitsTheNodeNameAsAnExactRead) {
+  // Operator decision 2026-10-07. The name is already in every advert the node floods,
+  // so reading it back over the control plane reveals nothing the air does not.
+  EXPECT_TRUE(allowed("get name"));
+  EXPECT_FALSE(allowed("set name x"));
+  EXPECT_FALSE(allowed("get name.x"));
+}
+
 TEST(Allowlist, AdmitsVerAsAnExactRead) {
   // Operator decision 2026-10-07: a tool asks a fleet which firmware each node runs.
   EXPECT_TRUE(allowed("ver"));
@@ -949,7 +957,7 @@ TEST(Allowlist, NothingAResultMayNeverCarryCanBeRead) {
     "get mqtt.owner", "get mqtt.cmd.pubkey",
     "get mqtt1.password", "get mqtt1.username", "get mqtt1.token", "get mqtt1.server",
     "get mqtt2.password", "get mqtt6.token",
-    "get lat", "get lon", "get name", "get owner.info",
+    "get lat", "get lon", "get owner.info",
   };
   for (const char* command : never) EXPECT_FALSE(allowed(command)) << command;
 }
