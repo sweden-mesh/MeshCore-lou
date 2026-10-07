@@ -137,7 +137,11 @@ region remove <name> · region default <name> · region home <name> · region sa
 get txdelay · get direct.txdelay · get rxdelay · get af
 get cad · get int.thresh · get radio
 get repeat · get flood.max · get flood.max.unscoped
+ver
 ```
+
+`ver` is there so a tool can ask a whole region which firmware each node runs, which is how a
+fleet that takes months to flash is told apart without a visit.
 
 **The region map is admitted whole**, so a scope rollout across a fleet is one signed publish
 per node -- or one to `meshcore/{IATA}/all/cmd`, since changing the map costs no airtime and the

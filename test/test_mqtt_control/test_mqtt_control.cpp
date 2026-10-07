@@ -292,6 +292,14 @@ TEST(Allowlist, AdmitsTheWholeRegionFamily) {
   EXPECT_FALSE(mqttCtrlIsTransmitCommand("region put se-jkp *", strlen("region put se-jkp *")));
 }
 
+TEST(Allowlist, AdmitsVerAsAnExactRead) {
+  // Operator decision 2026-10-07: a tool asks a fleet which firmware each node runs.
+  EXPECT_TRUE(allowed("ver"));
+  EXPECT_FALSE(allowed("ver x"));            // exact: nothing after it
+  EXPECT_FALSE(allowed("version"));
+  EXPECT_FALSE(mqttCtrlIsTransmitCommand("ver", 3));
+}
+
 TEST(Allowlist, AdmitsTheSlotSettingsThroughTheAutoReplyFamily) {
   // Sprint F04 added three settings, and the point of checking rather than assuming
   // is that nobody touched this list: the "set autoreply" family entry admits them

@@ -402,6 +402,11 @@ static inline bool mqttCtrlCommandAllowed(const char* command, size_t len) {
     { "get repeat",              true },   // does it forward at all
     { "get flood.max",           true },
     { "get flood.max.unscoped",  true },
+
+    // Which firmware a node runs. A fleet that takes months to flash is by nature
+    // mixed, and this is how a tool finds out which nodes carry a given change
+    // without a visit. Read-only; the version string names no key and no address.
+    { "ver",                     true },
   };
 
   for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
