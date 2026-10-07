@@ -122,7 +122,8 @@ feature enabled → command key set → signature valid
 
 ## What may be sent
 
-Auto-reply parameters, the two test triggers, and a set of read-only parameter gets:
+Auto-reply parameters, the two test triggers, the region map, and a set of read-only parameter
+gets:
 
 ```
 set autoreply on|off · set autoreply.hops · set autoreply.direct.flood
@@ -130,10 +131,25 @@ set autoreply.slot · set autoreply.window · set autoreply.slots
 set autoreply.region · set autoreply.mode · set autoreply.private
 get autoreply* · trigger test [<id>] [<F|P|D|S>] · trigger private <64 hex> [<id>]
 
+region · region put <name> [<parent>] · region allowf <name> · region denyf <name>
+region remove <name> · region default <name> · region home <name> · region save
+
 get txdelay · get direct.txdelay · get rxdelay · get af
 get cad · get int.thresh · get radio
 get repeat · get flood.max · get flood.max.unscoped
 ```
+
+**The region map is admitted whole**, so a scope rollout across a fleet is one signed publish
+per node -- or one to `meshcore/{IATA}/all/cmd`, since changing the map costs no airtime and the
+broadcast guard applies only to triggers. The reply to a bare `region` is the map as the CLI
+prints it, so a change can be checked from the result topic. Two things to know before sending:
+
+- `region denyf *` and `region remove` can cut a repeater out of its own area. They are admitted
+  on purpose; the node does not second-guess a signed command, so the tool that sends them is
+  where the question gets asked.
+- `region def` with the tree syntax (`a|* b|*`) carries `|`, which is the envelope's field
+  separator, and is refused before the allowlist is consulted. Add names one at a time with
+  `region put <name> *`, which also leaves existing names, their flags and their parents alone.
 
 `trigger test` originates a probe on the channel, naming a mode the way a request sent by hand
 does; `trigger private` sends a test request to the one repeater whose key is given, and the
@@ -144,9 +160,10 @@ The reads change nothing and cannot be replayed into anything, which is what kee
 argument simple. There is deliberately **no `set`** among them: we do not yet know which values
 we would write, and a write would need an argument this design has not had to make.
 
-**The two groups match differently, and the difference is the point.** The first four are
+**The two groups match differently, and the difference is the point.** The first five are
 *families*: the boundary rule lets `set autoreply` cover `set autoreply.hops 8` and the rest,
-one entry instead of five, and `trigger test` its optional id and mode letter. The reads are
+one entry instead of five, `trigger test` its optional id and mode letter, and `region` its
+subcommands. The reads are
 *exact* — each admits the command it names and nothing else. A family silently admits children
 nobody listed, and `get radio` was admitting
 `get radio.rxgain`, `get radio.fem.rxgain` and `get radio foo` that way. Harmless values, but

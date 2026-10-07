@@ -374,6 +374,16 @@ static inline bool mqttCtrlCommandAllowed(const char* command, size_t len) {
     { "trigger test",  false },   // covers the optional 8-hex correlation id and mode
     { "trigger private", false }, // the target key, and the optional id after it
 
+    // The region map, whole: `region` alone reads it; put, def, allowf, denyf, remove,
+    // default, home and save change it. Admitted in full on the operator's decision
+    // (2026-10-07): a scope rollout across a fleet is a signed publish per node instead
+    // of a visit per node. A remote `denyf *` or `remove` can cut a repeater out of its
+    // own area, so the sending tool says what those do before it signs; the node does
+    // not second-guess a signed command. `region def` lines carry `|`, which is the
+    // envelope's field separator, so they cannot travel this way: `region put` one name
+    // at a time does the same job and leaves existing names alone.
+    { "region", false },
+
     // Reads. Each admits exactly the command it names. All read-only: they change
     // nothing and cannot be replayed into anything, which is what keeps the
     // argument for having them simple. Deliberately no `set` here.

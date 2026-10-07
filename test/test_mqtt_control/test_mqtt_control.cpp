@@ -270,6 +270,28 @@ TEST(Allowlist, AcceptsAutoReplyParametersAndTheTrigger) {
   EXPECT_FALSE(allowed("triggerprivate x"));   // the boundary rule, as for the others
 }
 
+TEST(Allowlist, AdmitsTheWholeRegionFamily) {
+  // Operator decision 2026-10-07: complete control of the region map over the control
+  // plane, so a scope rollout is a signed publish per node. One family entry; every
+  // subcommand rides its boundary rule.
+  EXPECT_TRUE(allowed("region"));
+  EXPECT_TRUE(allowed("region put se-jkp *"));
+  EXPECT_TRUE(allowed("region allowf se-jkp"));
+  EXPECT_TRUE(allowed("region denyf *"));
+  EXPECT_TRUE(allowed("region remove se06"));
+  EXPECT_TRUE(allowed("region default se-jkp-mul"));
+  EXPECT_TRUE(allowed("region home se-jkp"));
+  EXPECT_TRUE(allowed("region save"));
+  EXPECT_TRUE(allowed("region def se-jkp"));
+  EXPECT_FALSE(allowed("regions"));            // the boundary rule: not the family
+  EXPECT_FALSE(allowed("regionx put se"));
+  // A `region def` line with the tree syntax carries '|', the envelope's field
+  // separator, and is refused before the allowlist is consulted. `region put` is the
+  // way to add a name remotely, which is also what leaves existing names alone.
+  EXPECT_FALSE(allowed("region def se-jkp-mul|* se-jkp|* se|* eu"));
+  EXPECT_FALSE(mqttCtrlIsTransmitCommand("region put se-jkp *", strlen("region put se-jkp *")));
+}
+
 TEST(Allowlist, AdmitsTheSlotSettingsThroughTheAutoReplyFamily) {
   // Sprint F04 added three settings, and the point of checking rather than assuming
   // is that nobody touched this list: the "set autoreply" family entry admits them
@@ -828,6 +850,16 @@ TEST(BroadcastGuard, RecognisesTheBroadcastTopic) {
   EXPECT_FALSE(mqttCtrlTopicIsBroadcast("meshcore/JKG/all/res"));
   EXPECT_FALSE(mqttCtrlTopicIsBroadcast("all/cmd"));   // no region segment
   EXPECT_FALSE(mqttCtrlTopicIsBroadcast(NULL));
+}
+
+TEST(BroadcastGuard, ARegionCommandMayBeAddressedToEveryNode) {
+  // A scope rollout is one signed publish to meshcore/{IATA}/all/cmd: every node that
+  // verifies it adds the name. Setting a value costs no airtime, so the broadcast guard
+  // has nothing to say about it; only a trigger is refused that way.
+  const char* cmd = "region put se-jkp *";
+  bool transmit = mqttCtrlIsTransmitCommand(cmd, strlen(cmd));
+  EXPECT_FALSE(transmit);
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlTransmitTopicResult(transmit, "meshcore/JKG/all/cmd"));
 }
 
 TEST(BroadcastGuard, ATransmitCommandMayNotBeAddressedToEveryNode) {
