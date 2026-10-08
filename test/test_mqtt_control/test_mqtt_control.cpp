@@ -1485,3 +1485,48 @@ TEST(Denylist, TheAutomaticUpdateSettingsTravelAndTheManualFlashStillDoesNot) {
   EXPECT_TRUE(allowed("ota check"));
   EXPECT_FALSE(allowed("ota update"));
 }
+
+// ---- the cross-check fixture for mccontrol (ar-11) ------------------------------------
+//
+// Writes every command mccontrol's tables know, with this firmware's verdict, to
+// test/data/command-verdicts.txt (one "allowed|<command>" or "denied|<command>" per
+// line). mccontrol's test reads the same file and asserts its denylist.py and the
+// ar-11 row of firmware.py agree with every line, so the two cannot drift apart
+// without a red test on one side. Runs on the host, writes beside the tests.
+
+TEST(CrossCheck, EveryKnownCommandsVerdictIsWritten) {
+  const char* commands[] = {
+    "ver", "get name", "get autoreply", "region", "neighbors", "get radio", "get repeat",
+    "get flood.max", "get flood.max.unscoped", "get txdelay", "get direct.txdelay", "get rxdelay",
+    "get af", "get cad", "get int.thresh", "get mqtt.status", "get mqtt.cmd", "get mqtt.iata",
+    "get mqtt.interval", "board", "memory", "clock", "ota check", "get stats", "get ota",
+    "set autoreply on", "set autoreply.mode flood", "set autoreply.hops 3", "set autoreply.delay 60",
+    "set autoreply.direct.flood on", "set autoreply.private on", "set autoreply.region se-jkp",
+    "set autoreply.slot 1", "set autoreply.slots 16", "set autoreply.window 10 120",
+    "trigger test", "trigger test F", "region put se-jkp *", "region allowf se-jkp", "region denyf se-jkp",
+    "region remove se06", "region default se-jkp", "region home se-jkp", "region save",
+    "set txdelay 0.5", "set direct.txdelay 0.3", "set rxdelay 0", "set af 9.0", "set cad on",
+    "set int.thresh 1", "set flood.max 8", "set flood.max.unscoped 2", "set path.hash.mode 0",
+    "set loop.detect 0", "set multi.acks on", "set mqtt.iata JKG", "set mqtt.interval 5",
+    "set mqtt.status on", "set mqtt.packets on", "set mqtt.raw on", "set mqtt.neighbors on",
+    "set mqtt.presets 2", "set mqtt1.preset meshat.se", "set mqtt1.server mqtt.louie.se",
+    "set mqtt2.username mcoar", "set mqtt2.password x", "set mqtt3.preset custom",
+    "set name Foo", "reboot", "clkreboot", "clear stats", "neighbor.remove 4AC61A7F",
+    "powersaving on", "gps on", "set ota.auto on", "set ota.check.hours 12",
+    // the denied groups
+    "set prv.key 00", "set public.key 00", "set mqtt.cmd off", "set mqtt.cmd.slot 2", "get mqtt.cmd.pubkey",
+    "set wifi.pwd x", "get wifi.ssid", "password x", "get guest.password", "set alert.psk 00",
+    "get bridge.secret", "get snmp.community", "get mqtt.owner", "set owner.info x", "get tls.x",
+    "get prv.key", "get mqtt1.password", "get mqtt6.token", "erase", "start webconfig", "ota update",
+    "poweroff", "shutdown", "set bootloader.ver 2", "set lat 57.78", "get lon", "set role repeater",
+    "set repeat off", "set freq 869.6", "set radio.rxgain 1", "set tx 20", "set extra.sf 1",
+    "set dutycycle 10", "tempradio 869 62.5 8 8", "advert", "alert test", "set advert.interval 1",
+    "time 1900000000", "log", "stats-core", "floodscan", "set", "get",
+  };
+  FILE* f = fopen("test/data/command-verdicts.txt", "w");
+  ASSERT_NE(nullptr, f) << "run from the repository root";
+  for (const char* c : commands) {
+    fprintf(f, "%s|%s\n", allowed(c) ? "allowed" : "denied", c);
+  }
+  fclose(f);
+}
