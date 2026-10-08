@@ -36,6 +36,23 @@ means the radio came up, WiFi and the bridge reached the broker, and the owner c
 the node. Until then any reboot (watchdog, power) returns to the previous image, and the
 control plane comes back with it. A bad release therefore costs one boot, not a visit.
 
+## Automatic, but paced
+
+```
+set ota.auto on            # default off
+set ota.check.hours 24     # 1-168
+get ota                    # channel, auto, last check's result, whether an update is scheduled
+```
+
+With `ota.auto on` the node checks the channel at the interval and, when a newer signed build is
+on offer, updates -- after a hold-off of 0-60 minutes drawn from its own key, so a region's
+nodes spread across the hour rather than flash in the same minute, and never between 00:00 and
+06:00 node-local (`set timezone.offset`), when the mesh is being measured. The update then
+takes the same path as `ota update`: bridge paused, image verified, reboot, and the old image
+back if the new one never verifies a command. The schedule is `OtaAutoLogic.h`, host-tested in
+`test_ota_auto`. `set ota.auto on` is a setting and travels over the control plane; `ota update`
+itself does not.
+
 ## The channel
 
 `OTA_MANIFEST_BASE` is baked in by `build.sh` (`OTA_MANIFEST_BASE_URL`), so a node only ever

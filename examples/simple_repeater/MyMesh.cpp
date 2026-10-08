@@ -1968,6 +1968,15 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     strcpy(reply, "Err - neighbors not enabled in this build");
 #endif
 #ifdef WITH_MQTT_BRIDGE
+  } else if (strcmp(command, "get ota") == 0) {
+#if defined(OTA_MANIFEST_BASE)
+    sprintf(reply, "> channel %s, auto %s/%uh, last check %s, next %s",
+            OTA_MANIFEST_BASE, mqtt_control.otaAuto() ? "on" : "off", (unsigned)mqtt_control.otaCheckHours(),
+            _ota_last_result[0] ? _ota_last_result : "(none yet)",
+            _ota_auto_start_at ? "scheduled" : "-");
+#else
+    strcpy(reply, "> no channel in this build (built without build.sh)");
+#endif
   } else if (strcmp(command, "set mqtt.cmd on") == 0 && mqtt_control.slot() == 0) {
     autoSetupMqttControl(reply);
   } else if (mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply)) {
@@ -2106,6 +2115,39 @@ void MyMesh::markRunningImageValidOnce() {
 void MyMesh::markRunningImageValidOnce() {}
 #endif
 
+#if defined(WITH_MQTT_BRIDGE) && defined(OTA_MANIFEST_BASE)
+// Automatic pull OTA (ar-11): `set ota.auto on`. A check when the interval is up; when a
+// newer signed build is on offer, the update is scheduled after this node's own hold-off
+// (0..60 min from its key, so a region spreads over the hour) and never in the night
+// window, through the same deferred path `ota update` uses -- the bridge is paused,
+// the image verified, the node rebooted, and the old image returns if the new one
+// never verifies a command (docs/ota.md). The schedule is OtaAutoLogic.h.
+void MyMesh::autoOtaTick() {
+  if (!mqtt_control.otaAuto() || _ota_update_at != 0) return;
+  uint32_t now = getRTCClock()->getCurrentTime();
+  if (now == 0) return;
+  uint32_t local_now = now + (uint32_t)((int32_t)_cli.getObserverPrefs()->timezone_offset * 3600);   // hours
+  if (_ota_auto_start_at) {
+    if (local_now >= _ota_auto_start_at) {
+      _ota_auto_start_at = 0;
+      Serial.println("OTA: automatic update starting");
+      beginDeferredOtaUpdate();
+    }
+    return;
+  }
+  if (!otaAutoCheckDue(now, _ota_last_check, mqtt_control.otaCheckHours())) return;
+  _ota_last_check = now;
+  char reply[160];
+  bool available = _board->otaFromManifest(getFirmwareVer(), true, reply);
+  StrHelper::strncpy(_ota_last_result, reply, sizeof(_ota_last_result));
+  Serial.print("OTA: automatic check: "); Serial.println(reply);
+  if (!available) return;
+  uint32_t holdoff = otaAutoHoldoffSecs(self_id.pub_key, PUB_KEY_SIZE);
+  _ota_auto_start_at = otaAutoStartAt(local_now, holdoff);
+  Serial.printf("OTA: update scheduled in %lu s\n", (unsigned long)(_ota_auto_start_at - local_now));
+}
+#endif
+
 // The result topic is built once in setupMqttControl and is empty when the node
 // has no region, in which case there is no control plane to answer on.
 void MyMesh::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
@@ -2169,6 +2211,7 @@ void MyMesh::loop() {
   }
 
 #if defined(WITH_MQTT_BRIDGE) && defined(OTA_MANIFEST_BASE)
+  autoOtaTick();
   if (_ota_update_at && millisHasNowPassed(_ota_update_at)) { // deferred `ota update`
     _ota_update_at = 0;                                       // clear timer
     // The "Beginning update..." reply has now gone out. Free the bridge for heap

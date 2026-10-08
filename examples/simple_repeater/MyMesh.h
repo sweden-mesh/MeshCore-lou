@@ -129,6 +129,10 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   void setupMqttControl(MQTTBridge* bridge);
   void autoSetupMqttControl(char* reply);
   void markRunningImageValidOnce();
+  void autoOtaTick();
+  uint32_t _ota_last_check = 0;        // unix secs of the last automatic check (RAM: a reboot re-checks)
+  uint32_t _ota_auto_start_at = 0;     // local unix secs the scheduled update may start, 0 = none
+  char _ota_last_result[64] = {0};
   void loopMqttControl();
   void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                 const char* reply);

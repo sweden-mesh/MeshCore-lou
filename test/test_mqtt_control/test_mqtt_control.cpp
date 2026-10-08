@@ -1476,3 +1476,12 @@ TEST(SignedResult, AnR1OrAShortLineIsNotSplitAsSigned) {
   char out[MQTTCTRL_MAX_RESULT];
   EXPECT_EQ(0u, mqttCtrlFormatSignedResult(out, 100, "meshcore/JKG/x/res", 1, 0, "ver", "v", testSigner, NULL));   // no room for a signature
 }
+
+TEST(Denylist, TheAutomaticUpdateSettingsTravelAndTheManualFlashStillDoesNot) {
+  EXPECT_TRUE(allowed("set ota.auto on"));
+  EXPECT_TRUE(allowed("set ota.check.hours 12"));
+  EXPECT_TRUE(allowed("get ota"));
+  EXPECT_TRUE(allowed("get ota.auto"));
+  EXPECT_TRUE(allowed("ota check"));
+  EXPECT_FALSE(allowed("ota update"));
+}
