@@ -16,12 +16,28 @@ Ed25519 signature by the command key this node was given.
 
 ```
 set mqtt.cmd.pubkey <64 hex characters>   # serial only; the PUBLIC half of the signing key
-set mqtt.cmd on
-set mqtt.cmd.slot <n>                 # the MQTT slot to listen and answer on; reboot to apply
-get mqtt.cmd                          # state, and the highest command counter seen
+set mqtt.cmd on                           # with no slot set: takes one, see below; reboot to apply
+get mqtt.cmd                              # state, and the highest command counter seen
 ```
 
-All three are needed. With `mqtt.cmd on` but no command key, every command is refused -- and,
+**`set mqtt.cmd on` with no slot configured sets the node up by itself** (2026-10-08): it
+takes the first of slots 3-6 whose preset is `none`, gives it the built-in `mccontrol` preset
+-- the default command broker, `mqtts://mqtt.louie.se:8883`, token login like the collectors
+-- with packets filtered off (status and neighbours still publish there, which the plane's
+statistics use), points the control plane at that slot, enables it, and answers
+`OK - slot 3, mccontrol (mqtts://mqtt.louie.se:8883), packets off; reboot to apply`. Slots 1
+and 2 are the observer's own and are never taken. A board that runs two slots at once (no
+PSRAM) with both analyzer slots up has no room for a third, and the reply says so and names
+the cure -- turn one off (`set mqtt2.preset none`) -- rather than doing it for you: the
+observer's defaults are the owner's to change. A region running its own broker sets the slot
+by hand as before:
+
+```
+set mqttN.preset custom · set mqttN.server mqtts://broker.example:8883 · set mqttN.audience broker.example
+set mqtt.cmd.slot <n>                     # the MQTT slot to listen and answer on; reboot to apply
+```
+
+The key and the slot are both needed. With `mqtt.cmd on` but no command key, every command is refused -- and,
 importantly, *discarded*. The node holds one staged command at a time and a full slot drops
 the newer arrival, so a refusal that left the slot occupied would silently swallow every
 later command for the rest of the boot, including the ones sent once a key was finally

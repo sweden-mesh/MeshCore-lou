@@ -1394,3 +1394,27 @@ TEST(Topics, TheWholeKeyFormFitsTheSignedMessageAndIsRefusedWhenItCannot) {
   EXPECT_FALSE(mqttCtrlBuildTopic("", KEY64, "cmd", out, sizeof(out)));
   EXPECT_FALSE(mqttCtrlBuildTopic("JKG", "", "cmd", out, sizeof(out)));
 }
+
+// ---- `set mqtt.cmd on` picks a slot (2026-10-08) -------------------------------------
+
+TEST(AutoSlot, TheFirstFreeSlotFromThreeUp) {
+  const char* presets[6] = { "analyzer-us", "analyzer-eu", "none", "none", "none", "none" };
+  EXPECT_EQ(2, mqttCtrlPickSlot(presets, 6));           // slot 3
+  const char* busy3[6] = { "analyzer-us", "analyzer-eu", "meshat.se", "", "none", "none" };
+  EXPECT_EQ(3, mqttCtrlPickSlot(busy3, 6));             // an empty name is free too
+  const char* upper[6] = { "none", "none", "NONE", "none", "none", "none" };
+  EXPECT_EQ(2, mqttCtrlPickSlot(upper, 6));             // case does not matter
+}
+
+TEST(AutoSlot, SlotsOneAndTwoAreNeverTakenEvenWhenFree) {
+  const char* presets[6] = { "none", "none", "custom", "custom", "custom", "custom" };
+  EXPECT_EQ(-1, mqttCtrlPickSlot(presets, 6));
+}
+
+TEST(AutoSlot, NoFreeSlotIsSaidNotGuessed) {
+  const char* presets[6] = { "analyzer-us", "analyzer-eu", "meshat.se", "custom", "meshrank", "waev" };
+  EXPECT_EQ(-1, mqttCtrlPickSlot(presets, 6));
+  const char* three[3] = { "analyzer-us", "analyzer-eu", "custom" };
+  EXPECT_EQ(-1, mqttCtrlPickSlot(three, 3));
+  EXPECT_EQ(-1, mqttCtrlPickSlot(NULL, 6));
+}

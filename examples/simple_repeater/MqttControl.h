@@ -72,6 +72,8 @@ public:
   bool isEnabled() const { return _enabled; }
   uint32_t counter() const { return _counter; }
   uint8_t slot() const { return _slot; }
+  // `set mqtt.cmd on` with no slot configured chooses one (MyMesh::autoSetupMqttControl).
+  void setSlotAndEnable(uint8_t slot) { _slot = slot; _enabled = true; save(); }
   const char* pubkey() const { return _pubkey; }
 
   // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.

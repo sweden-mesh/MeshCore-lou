@@ -285,6 +285,21 @@ static inline bool mqttCtrlBuildTopic(const char* iata, const char* leaf, const 
   return n > 0 && (size_t)n < out_size && (size_t)n <= MQTTCTRL_MAX_TOPIC;
 }
 
+// Which MQTT slot `set mqtt.cmd on` takes when none is configured (2026-10-08):
+// the first of slots 3..6 whose preset is `none`. Slots 1 and 2 are the observer's
+// own defaults and are never taken, whatever they hold. `presets` is the per-slot
+// preset name, `slot_count` how many the build has. Returns the 0-based index, or
+// -1 when every candidate is in use -- then the caller says so rather than picks.
+#define MQTTCTRL_FIRST_AUTO_SLOT 2
+static inline int mqttCtrlPickSlot(const char* const* presets, int slot_count) {
+  if (presets == NULL) return -1;
+  for (int i = MQTTCTRL_FIRST_AUTO_SLOT; i < slot_count; i++) {
+    const char* name = presets[i];
+    if (name == NULL || name[0] == 0 || strcasecmp(name, "none") == 0) return i;
+  }
+  return -1;
+}
+
 // Assemble the exact bytes the signature covers: the topic, a newline, then the
 // signed part of the payload.
 //

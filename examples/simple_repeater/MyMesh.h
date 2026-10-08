@@ -127,6 +127,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   char _ctrl_result[MQTTCTRL_MAX_TOPIC + 1];
   const char* _ctrl_topics[2];
   void setupMqttControl(MQTTBridge* bridge);
+  void autoSetupMqttControl(char* reply);
   void loopMqttControl();
   void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                 const char* reply);

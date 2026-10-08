@@ -640,6 +640,10 @@ public:
    *  usefully-configurable servers; RUNTIME_MQTT_SLOTS carries a spare for
    *  reconfiguration. Safe to call before begin(). */
   static int getMaxActiveSlots();
+  /** Could one more slot be activated now? What `set mqtt.cmd on` asks before it takes a
+   *  slot for the control plane (2026-10-08): the active-slot cap is the observer's and
+   *  is reported, never worked around. */
+  bool hasRoomForAnotherSlot() const { return activatedSlotCount() < _max_active_slots; }
   /** Resolved origin for MQTT JSON: node_name when mqtt_origin is empty, else mqtt_origin (with quote stripping). */
   static void getEffectiveMqttOrigin(const NodePrefs* np, const MQTTPrefs* obs, char* buf, size_t buf_size);
   static const char* effectiveNtpPrimary(const MQTTPrefs* obs);
