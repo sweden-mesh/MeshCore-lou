@@ -71,3 +71,36 @@ static inline bool otaImageHashOk(const uint8_t digest[32], const char* sha256_h
   for (int i = 0; i < 32; i++) diff |= digest[i] ^ expected[i];
   return diff == 0;
 }
+
+// Is the build on offer newer than the one running? (2026-10-08, operator ruling: the
+// auto-reply revision `ar-N` decides.) Compared in this order:
+//   1. the `-ar-N-` revision in each version string: a higher N is an update, a lower N
+//      never is -- a channel cannot roll a node back by accident;
+//   2. with the same revision, the build number (4th version component) when both have one;
+//   3. else the commit hash: different is an update, which is upstream's rule for images
+//      that carry no build number.
+// `hash_equal` is the caller's shared-prefix compare of the two hashes.
+enum OtaVerdict { OTA_UP_TO_DATE = 0, OTA_NEWER = 1, OTA_OLDER = 2 };
+
+static inline int otaRevisionOf(const char* version) {
+  if (version == NULL) return -1;
+  const char* p = strstr(version, "-ar-");
+  if (p == NULL) return -1;
+  p += 4;
+  if (*p < '0' || *p > '9') return -1;
+  int n = 0;
+  while (*p >= '0' && *p <= '9') { n = n * 10 + (*p - '0'); p++; }
+  return n;
+}
+
+static inline OtaVerdict otaUpdateVerdict(const char* own_version, const char* avail_version,
+                                          int own_build, int avail_build, bool hash_equal) {
+  int own_ar = otaRevisionOf(own_version), avail_ar = otaRevisionOf(avail_version);
+  if (own_ar >= 0 && avail_ar >= 0 && own_ar != avail_ar) {
+    return avail_ar > own_ar ? OTA_NEWER : OTA_OLDER;
+  }
+  if (own_build >= 0 && avail_build >= 0 && own_build != avail_build) {
+    return avail_build > own_build ? OTA_NEWER : OTA_OLDER;
+  }
+  return hash_equal ? OTA_UP_TO_DATE : OTA_NEWER;
+}

@@ -36,6 +36,15 @@ means the radio came up, WiFi and the bridge reached the broker, and the owner c
 the node. Until then any reboot (watchdog, power) returns to the previous image, and the
 control plane comes back with it. A bad release therefore costs one boot, not a visit.
 
+## What "newer" means
+
+The auto-reply revision in the version string decides: a manifest offering `ar-12` to a node
+on `ar-11` is an update, one offering `ar-10` never is -- a channel cannot roll a node back by
+mistake. Within the same revision the build number (the fourth version component, set by
+`FIRMWARE_BUILD_NUMBER` at build time) decides, and without build numbers the commit hash, as
+upstream does. `ota check` says which: `update available: ... (ar-10 -> ar-11)`,
+`... (2 behind)`, or `up to date: the channel offers an older build`.
+
 ## Automatic, but paced
 
 ```

@@ -83,6 +83,30 @@ TEST(OtaVerify, AManifestFromThePythonSignerVerifiesHere) {
       "https://github.com/the-louie/MeshCore-observer/releases/download/v1.17.1-ar-11/x.bin", sig));
 }
 
+
+// ---- newer-than: the ar-N revision decides -------------------------------------------
+
+TEST(OtaNewer, TheRevisionDecidesAndNeverRollsBack) {
+  EXPECT_EQ(11, otaRevisionOf("esp32s3-v1.17.1-ar-11-5d863f47"));
+  EXPECT_EQ(10, otaRevisionOf("esp32s3-v1.17.1.3-ar-10-42f48ce9"));
+  EXPECT_EQ(-1, otaRevisionOf("v1.16.0.37-observer-9670035"));
+  EXPECT_EQ(OTA_NEWER, otaUpdateVerdict("esp32s3-v1.17.1-ar-10-42f48ce9", "esp32s3-v1.17.1-ar-11-5d863f47", -1, -1, false));
+  EXPECT_EQ(OTA_OLDER, otaUpdateVerdict("esp32s3-v1.17.1-ar-11-5d863f47", "esp32s3-v1.17.1-ar-10-42f48ce9", -1, -1, false));
+  // a lower revision with a higher build number or a different base is still older
+  EXPECT_EQ(OTA_OLDER, otaUpdateVerdict("esp32s3-v1.17.1-ar-11-aaaa", "esp32s3-v1.18.0.9-ar-10-bbbb", 0, 9, false));
+}
+
+TEST(OtaNewer, WithinARevisionTheBuildNumberThenTheHash) {
+  EXPECT_EQ(OTA_NEWER, otaUpdateVerdict("x-v1.17.1.2-ar-11-aaaa", "x-v1.17.1.3-ar-11-bbbb", 2, 3, false));
+  EXPECT_EQ(OTA_OLDER, otaUpdateVerdict("x-v1.17.1.3-ar-11-aaaa", "x-v1.17.1.2-ar-11-bbbb", 3, 2, false));
+  EXPECT_EQ(OTA_UP_TO_DATE, otaUpdateVerdict("x-v1.17.1.3-ar-11-aaaa", "x-v1.17.1.3-ar-11-aaaa", 3, 3, true));
+  // no build numbers: the hash, as upstream does
+  EXPECT_EQ(OTA_UP_TO_DATE, otaUpdateVerdict("x-v1.17.1-ar-11-aaaa", "x-v1.17.1-ar-11-aaaa", -1, -1, true));
+  EXPECT_EQ(OTA_NEWER, otaUpdateVerdict("x-v1.17.1-ar-11-aaaa", "x-v1.17.1-ar-11-bbbb", -1, -1, false));
+  // one side without a revision (an upstream image): falls to the build number / hash
+  EXPECT_EQ(OTA_NEWER, otaUpdateVerdict("v1.16.0.37-observer-9670035", "x-v1.17.1-ar-11-bbbb", 37, -1, false));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

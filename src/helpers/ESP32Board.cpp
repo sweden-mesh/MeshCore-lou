@@ -332,20 +332,13 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   size_t m = (lh < lc) ? lh : lc;
   bool hash_equal = (m >= 7 && strncmp(avail_hash, cur_hash, m) == 0);
 
-  bool same_base = (own_base[0] && avail_base[0] && strcmp(own_base, avail_base) == 0);
-  bool have_builds = (own_build >= 0 && avail_build >= 0);
-  bool diff_base = (own_base[0] && avail_base[0] && !same_base);
-
-  int behind = 0;
-  bool up_to_date;
-  if (same_base && have_builds) {
-    behind = avail_build - own_build;
-    up_to_date = (behind <= 0);
-  } else if (diff_base) {
-    up_to_date = false;  // different base version is always an update
-  } else {
-    up_to_date = hash_equal;  // unknown build numbers -> fall back to hash
-  }
+  // Newer or not (OtaVerifyLogic.h, operator ruling 2026-10-08): the ar-N revision
+  // decides first and never rolls back, then the build number, then the hash.
+  (void)own_base; (void)avail_base;
+  OtaVerdict verdict = otaUpdateVerdict(own_version, avail_version, own_build, avail_build, hash_equal);
+  int behind = (own_build >= 0 && avail_build >= 0) ? avail_build - own_build : 0;
+  bool up_to_date = (verdict != OTA_NEWER);
+  bool older = (verdict == OTA_OLDER);
 
   // Display strings carry the short commit hash in the same form as the asset
   // filename, e.g. "v1.16.0.2 (5acfdd7)" (or just the hash if there's no version).
@@ -361,12 +354,15 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   // a partition-change build). `ota check` ignores the return and just shows the
   // reply; `ota update` uses it to decide whether to actually schedule the flash.
   if (dry_run) {
-    if (up_to_date) {
+    int own_ar = otaRevisionOf(own_version), avail_ar = otaRevisionOf(avail_version);
+    if (older) {
+      snprintf(reply, 160, "up to date: the channel offers an older build (%s)", avail_disp);
+    } else if (up_to_date) {
       snprintf(reply, 160, "up to date: %s", avail_disp);
-    } else if (same_base && have_builds) {
+    } else if (own_ar >= 0 && avail_ar >= 0 && avail_ar > own_ar) {
+      snprintf(reply, 160, "update available: %s -> %s (ar-%d -> ar-%d)%s", own_disp, avail_disp, own_ar, avail_ar, pc_note);
+    } else if (behind > 0) {
       snprintf(reply, 160, "update available: %s -> %s (%d behind)%s", own_disp, avail_disp, behind, pc_note);
-    } else if (diff_base) {
-      snprintf(reply, 160, "update available: %s -> %s (new base)%s", own_disp, avail_disp, pc_note);
     } else {
       snprintf(reply, 160, "update available: %s -> %s%s", own_disp, avail_disp, pc_note);
     }
@@ -379,7 +375,8 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
     return false;
   }
   if (up_to_date) {
-    snprintf(reply, 160, "OK: already up to date: %s", avail_disp);
+    if (older) snprintf(reply, 160, "OK: the channel offers an older build (%s); not taken", avail_disp);
+    else       snprintf(reply, 160, "OK: already up to date: %s", avail_disp);
     return false;
   }
 
