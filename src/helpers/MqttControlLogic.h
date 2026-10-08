@@ -44,7 +44,7 @@
 #define MQTTCTRL_MAX_COMMAND    160
 #define MQTTCTRL_MAX_REPLY      160
 // r1|counter|code|command|reply, plus the separators and a terminator.
-#define MQTTCTRL_MAX_RESULT     (2 + 12 + 6 + MQTTCTRL_MAX_COMMAND + MQTTCTRL_MAX_REPLY + 8)
+#define MQTTCTRL_MAX_RESULT     (2 + 12 + 6 + MQTTCTRL_MAX_COMMAND + MQTTCTRL_MAX_REPLY + 8 + 129)   // + "|" and a 128-hex signature (r2)
 #define MQTTCTRL_MAX_SIGNED     (MQTTCTRL_MAX_TOPIC + 1 + MQTTCTRL_MAX_PAYLOAD)
 
 // A command may not claim to be valid indefinitely: a signer cannot mint one that
@@ -574,9 +574,67 @@ static inline size_t mqttCtrlFormatResult(char* out, size_t out_size, uint32_t c
   return ((size_t)n >= out_size) ? out_size - 1 : (size_t)n;
 }
 
+// The signed result (2026-10-08, ships with ar-11): `r2|counter|code|command|reply|<sig>`,
+// the signature 128 hex of Ed25519 by the node's own identity key over
+// "<result topic>\n" + "r2|counter|code|command|reply" -- the same shape as a
+// command's signature, so one verifier serves both. A result line is published
+// where anyone can read and anyone can write, so an unsigned `r1` lets a stranger
+// publish "ok" in a node's name; `r2` lets a tool check the node said it, with the
+// key the node's topic already names. Tools accept both for the mixed field; an
+// `r1` is shown as "unverified result".
+//
+// The signer is a callback so this stays host-testable: the firmware passes the
+// identity's sign; a test passes its own key. The reply is last and shortens
+// first: the line is cut so the separator and the whole signature always fit.
+typedef void (*MqttCtrlSigner)(void* ctx, uint8_t sig[64], const uint8_t* msg, size_t msg_len);
+
+static inline size_t mqttCtrlFormatSignedResult(char* out, size_t out_size, const char* topic,
+                                                uint32_t counter, int code, const char* command,
+                                                const char* reply, MqttCtrlSigner sign, void* ctx) {
+  if (out == NULL || out_size == 0 || topic == NULL || sign == NULL) return 0;
+  out[0] = 0;
+  const size_t tail = 1 + 2 * 64;                       // "|" + 128 hex
+  if (out_size <= tail + 1) return 0;
+  size_t budget = out_size - 1 - tail;                   // what the unsigned line may take
+  int n = snprintf(out, budget + 1, "r2%c%u%c%d%c%s%c%s",
+                   MQTTCTRL_FIELD_SEP, (unsigned)counter,
+                   MQTTCTRL_FIELD_SEP, code,
+                   MQTTCTRL_FIELD_SEP, command != NULL ? command : "",
+                   MQTTCTRL_FIELD_SEP, reply != NULL ? reply : "");
+  if (n < 0) { out[0] = 0; return 0; }
+  size_t line_len = ((size_t)n > budget) ? budget : (size_t)n;
+
+  // the bytes under the signature: topic, newline, the (possibly cut) line
+  size_t topic_len = strlen(topic);
+  if (topic_len == 0 || topic_len > MQTTCTRL_MAX_TOPIC) { out[0] = 0; return 0; }
+  uint8_t msg[MQTTCTRL_MAX_TOPIC + 1 + MQTTCTRL_MAX_RESULT];
+  if (topic_len + 1 + line_len > sizeof(msg)) { out[0] = 0; return 0; }
+  memcpy(msg, topic, topic_len);
+  msg[topic_len] = '\n';
+  memcpy(msg + topic_len + 1, out, line_len);
+
+  uint8_t sig[64];
+  sign(ctx, sig, msg, topic_len + 1 + line_len);
+  static const char hex_digits[] = "0123456789ABCDEF";   // not HEX: Arduino's Print.h defines it
+  char* p = out + line_len;
+  *p++ = MQTTCTRL_FIELD_SEP;
+  for (int i = 0; i < 64; i++) { *p++ = hex_digits[sig[i] >> 4]; *p++ = hex_digits[sig[i] & 0x0F]; }
+  *p = 0;
+  return line_len + tail;
+}
+
+// The bytes a verifier of `r2` checks: "<topic>\n" + everything before the last
+// separator. Returns the signature's hex start, or NULL when the line is not an r2.
+static inline const char* mqttCtrlSignedResultSplit(const char* line, size_t len, size_t* line_len) {
+  if (line == NULL || len < 2 + 1 + 128 || strncmp(line, "r2", 2) != 0) return NULL;
+  if (line[len - 129] != MQTTCTRL_FIELD_SEP) return NULL;
+  *line_len = len - 129;
+  return line + len - 128;
+}
+
 // Is this the broadcast topic, meshcore/{IATA}/all/cmd, rather than one node's?
-// The per-node leaf is 8 hex characters, which can never spell "all", so matching
-// the tail is unambiguous.
+// The per-node leaf is the node's key in hex (8 or 64 characters), which can never
+// spell "all", so matching the tail is unambiguous.
 static inline bool mqttCtrlTopicIsBroadcast(const char* topic) {
   if (topic == NULL) return false;
   static const char SUFFIX[] = "/all/cmd";

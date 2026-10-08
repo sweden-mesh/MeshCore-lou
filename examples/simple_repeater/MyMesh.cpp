@@ -2085,9 +2085,14 @@ void MyMesh::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutco
 
   // A refusal runs no command and leaves the reply empty; the code field still
   // says why, which is what lets a requester tell "refused" from "never arrived".
+  // Signed with this node's identity key (r2, ar-11): a result is published where
+  // anyone can write, and the signature is what makes it this node's word.
   char payload[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatResult(payload, sizeof(payload), outcome.counter,
-                                  (int)result, outcome.command, reply);
+  size_t n = mqttCtrlFormatSignedResult(payload, sizeof(payload), _ctrl_result, outcome.counter,
+                                        (int)result, outcome.command, reply,
+                                        [](void* ctx, uint8_t sig[64], const uint8_t* msg, size_t len) {
+                                          ((mesh::LocalIdentity*)ctx)->sign(sig, msg, (int)len);
+                                        }, &self_id);
   if (n == 0) return;
 
   bridge->publishControlResult(_ctrl_result, payload, n, MQTTCTRL_RESULT_QOS);

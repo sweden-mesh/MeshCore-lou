@@ -1418,3 +1418,61 @@ TEST(AutoSlot, NoFreeSlotIsSaidNotGuessed) {
   EXPECT_EQ(-1, mqttCtrlPickSlot(three, 3));
   EXPECT_EQ(-1, mqttCtrlPickSlot(NULL, 6));
 }
+
+// ---- signed results: r2 (2026-10-08, ar-11) ------------------------------------------
+
+static uint8_t T_PUB[32], T_PRV[64];
+static void testSigner(void* ctx, uint8_t sig[64], const uint8_t* msg, size_t len) {
+  (void)ctx;
+  ed25519_sign(sig, msg, len, T_PUB, T_PRV);
+}
+static void makeTestKey() {
+  uint8_t seed[32];
+  for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(0x11 + i);
+  ed25519_create_keypair(T_PUB, T_PRV, seed);
+}
+
+TEST(SignedResult, TheLineIsR2WithTheNodesSignatureOverTopicAndLine) {
+  makeTestKey();
+  const char* topic = "meshcore/JKG/4AC61A7FF4800A079A7311CA606A4C7037FE6943D40E53932230142829A4F786/res";
+  char out[MQTTCTRL_MAX_RESULT];
+  size_t n = mqttCtrlFormatSignedResult(out, sizeof(out), topic, 42, 0, "get txdelay", "> 0.5", testSigner, NULL);
+  ASSERT_GT(n, 0u);
+  std::string s(out, n);
+  EXPECT_EQ(0u, s.find("r2|42|0|get txdelay|> 0.5|"));
+  size_t line_len = 0;
+  const char* sig_hex = mqttCtrlSignedResultSplit(out, n, &line_len);
+  ASSERT_NE(nullptr, sig_hex);
+  EXPECT_EQ(std::string("r2|42|0|get txdelay|> 0.5"), std::string(out, line_len));
+  // a verifier rebuilds "<topic>\n<line>" and checks with the node's key
+  std::string msg = std::string(topic) + "\n" + std::string(out, line_len);
+  uint8_t sig[64];
+  hexToBytes(std::string(sig_hex, 128).c_str(), sig, sizeof(sig));
+  EXPECT_EQ(1, ed25519_verify(sig, (const uint8_t*)msg.data(), msg.size(), T_PUB));
+  // ... and not with another topic, nor with a changed reply
+  std::string other = std::string("meshcore/JKG/all/cmd") + "\n" + std::string(out, line_len);
+  EXPECT_EQ(0, ed25519_verify(sig, (const uint8_t*)other.data(), other.size(), T_PUB));
+  std::string changed = std::string(topic) + "\n" + "r2|42|0|get txdelay|> 0.6";
+  EXPECT_EQ(0, ed25519_verify(sig, (const uint8_t*)changed.data(), changed.size(), T_PUB));
+}
+
+TEST(SignedResult, TheReplyShortensSoTheSignatureAlwaysFits) {
+  makeTestKey();
+  std::string huge(400, 'x');
+  char out[MQTTCTRL_MAX_RESULT];
+  size_t n = mqttCtrlFormatSignedResult(out, sizeof(out), "meshcore/JKG/4AC61A7F/res", 7, 0, "get radio", huge.c_str(), testSigner, NULL);
+  ASSERT_GT(n, 0u);
+  EXPECT_EQ(sizeof(out) - 1, n);                          // full, not over
+  size_t line_len = 0;
+  ASSERT_NE(nullptr, mqttCtrlSignedResultSplit(out, n, &line_len));
+  EXPECT_EQ(sizeof(out) - 1 - 129, line_len);             // the line gave way, the signature did not
+  EXPECT_EQ(std::string("r2|7|0|get radio|"), std::string(out, 17));
+}
+
+TEST(SignedResult, AnR1OrAShortLineIsNotSplitAsSigned) {
+  size_t line_len = 0;
+  EXPECT_EQ(nullptr, mqttCtrlSignedResultSplit("r1|42|0|get txdelay|> 0.5", 25, &line_len));
+  EXPECT_EQ(nullptr, mqttCtrlSignedResultSplit("r2|42|0|x|y|abc", 15, &line_len));
+  char out[MQTTCTRL_MAX_RESULT];
+  EXPECT_EQ(0u, mqttCtrlFormatSignedResult(out, 100, "meshcore/JKG/x/res", 1, 0, "ver", "v", testSigner, NULL));   // no room for a signature
+}

@@ -264,13 +264,23 @@ A node that verified a command publishes the outcome to its own result topic:
 
 ```
 meshcore/{IATA}/{NODE}/res
-r1|<counter>|<code>|<command>|<reply>
+r2|<counter>|<code>|<command>|<reply>|<128 hex Ed25519 signature>      ar-11 and later
+r1|<counter>|<code>|<command>|<reply>                                   up to ar-10
 ```
+
+**The result is signed by the node** from ar-11: Ed25519 by the node's own identity key over
+`"<result topic>\n" + "r2|<counter>|<code>|<command>|<reply>"` -- the same shape as a command's
+signature, so one verifier serves both, and the key to check with is the one the topic names.
+A result topic is a place anyone with the broker's credentials can write, so an unsigned line
+let a stranger publish `ok` in a node's name; now a tool shows a result as *verified* when the
+signature checks, *unverified* for an `r1` from older firmware, and a bad signature as what it
+is. The reply shortens so the signature always fits the line.
 
 The counter is the one the requester chose, which makes it the correlation id: the topic says
 which node answered, the counter says which question it answered. Split on the first four
-separators and take the remainder as the reply — a command can never contain a separator
-(`mqttCtrlCommandCharsOk` refuses it), so only the reply can, and only at the end.
+separators and take the remainder as the reply, then (for `r2`) cut the last separator and the
+128 hex after it -- a command can never contain a separator (`mqttCtrlCommandCharsOk` refuses
+it), so only the reply can, and only in the middle.
 
 It is published at **QoS 1, not retained**. The QoS is not there for delivery: in this bridge a
 QoS 0 publish is a synchronous write from the calling task, and the result is published from the
