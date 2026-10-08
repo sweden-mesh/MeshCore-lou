@@ -101,7 +101,7 @@ node keeps its own.
 ```
 feature enabled → command key set → signature valid
   → counter strictly greater than the stored one → not expired
-  → rate limit → command on the allowlist
+  → rate limit → command not on the deny list
   → store the counter → run it → publish the result
 ```
 
@@ -122,27 +122,45 @@ feature enabled → command key set → signature valid
 
 ## What may be sent
 
-Auto-reply parameters, the two test triggers, the region map, and a set of read-only parameter
-gets:
+**Everything the CLI answers, except a deny list.** Until 2026-10-08 this was an allowlist of
+fourteen entries; the operator's decision that day makes the control plane a command centre for a
+repeater's owner, and the list to review is now what is *refused*
+(`mqttCtrlCommandDenied` in `src/helpers/MqttControlLogic.h`, one test per group in
+`test/test_mqtt_control`). A command must begin with an admitted verb -- `set`, `get`,
+`region`, `trigger test`, `trigger private`, `neighbor.remove`, `sensor`, `gps`, `powersaving`,
+`clock`, and exactly `ver`, `reboot`, `clkreboot`, `neighbors`, `board`, `memory`,
+`clear stats`, `ota check` -- and match nothing below. A verb the CLI grows later does not reach
+the mesh until someone adds it.
+
+| denied | why |
+|---|---|
+| `set prv.key`, `set public.key` | identity: a changed key is a different node, and the fleet, the maps and every history line lose it |
+| `set mqtt.cmd*` (`.slot`, `.pubkey`), `get mqtt.cmd.pubkey` | the plane itself: a signed command that repoints the slot or the key silently removes the node from control, and only a serial visit undoes that. The standard MQTT settings -- `mqttN.*`, `mqtt.presets`, `mqtt.iata`, `mqtt.*` -- are deliberately admitted: a broker may go away and another must be reachable without a visit |
+| `password`, `wifi.pwd`, `wifi.ssid`, `guest.password`, `alert.psk`, `bridge.secret`, `snmp.community`, `mqtt.email`, `mqtt.owner`, `owner.info`, `tls*`, `get prv*`, `get mqttN.password/.token/.username` | credentials and ownership, read and written: a result is public on the broker, and a write of these takes over something other than the node. The secrets are denied by bare prefix, so no suffix reaches them |
+| `erase`, `start *` (webconfig, the SoftAP OTA), `ota update`, `poweroff`, `shutdown`, `set bootloader.ver` | no way back from the road. `reboot` and `clkreboot` are admitted: settings need them to apply. `ota check` is admitted as a read; `ota update` waits for a signed image and rollback |
+| `set lat`, `set lon`, `get lat`, `get lon`, `set role`, `set repeat` | position is evidence the whole mesh relies on, and whether a node publishes where it is belongs to its owner per node (the advert), not to a signed read whose result is public; `repeat off` is how a leaked key would silence a region in ten commands |
+| `set freq`, `set radio*`, `set tx`, `set extra.sf`, `set dutycycle`, `tempradio` | a wrong value takes the node off the mesh with no remote way back |
+| `advert*`, `alert *`, `set advert.interval`, `set flood.advert.interval` | transmissions; `trigger` is the one sanctioned transmit, on its own budget |
+| `time <epoch>` | the clock judges expiry; `time` steps it forward by any amount. `clock sync` steps it to the node's own now and is admitted |
+| `log`, `stats-*` | serial-only already (`sender_timestamp == 0`); listed so the two gates agree |
+
+What this admits that the allowlist did not: every tuning write (`txdelay`, `rxdelay`, `af`,
+`cad`, `int.thresh`, `flood.max*`, `path.hash.mode`, `loop.detect`, `multi.acks`, ...), every
+`mqtt.*` and `mqttN.*` setting, `set name`, every read that names no secret, `neighbors`,
+`reboot`. A `set` of a key the CLI does not know travels and is answered "unknown": the deny
+list bounds what a command may *do*, not whether it is well formed, and the CLI stays the
+authority on the latter.
+
+The auto-reply family and the triggers are as before:
 
 ```
 set autoreply on|off · set autoreply.hops · set autoreply.direct.flood
 set autoreply.slot · set autoreply.window · set autoreply.slots
 set autoreply.region · set autoreply.mode · set autoreply.private
 get autoreply* · trigger test [<id>] [<F|P|D|S>] · trigger private <64 hex> [<id>]
-
 region · region put <name> [<parent>] · region allowf <name> · region denyf <name>
 region remove <name> · region default <name> · region home <name> · region save
-
-get txdelay · get direct.txdelay · get rxdelay · get af
-get cad · get int.thresh · get radio
-get repeat · get flood.max · get flood.max.unscoped
-ver · get name
 ```
-
-`ver` is there so a tool can ask a whole region which firmware each node runs, which is how a
-fleet that takes months to flash is told apart without a visit; `get name` so the same tool can
-label what answered. The name is in every advert the node floods, so it reveals nothing.
 
 **The region map is admitted whole**, so a scope rollout across a fleet is one signed publish
 per node -- or one to `meshcore/{IATA}/all/cmd`, since changing the map costs no airtime and the
@@ -153,7 +171,7 @@ prints it, so a change can be checked from the result topic. Two things to know 
   on purpose; the node does not second-guess a signed command, so the tool that sends them is
   where the question gets asked.
 - `region def` with the tree syntax (`a|* b|*`) carries `|`, which is the envelope's field
-  separator, and is refused before the allowlist is consulted. Add names one at a time with
+  separator, and is refused before the deny list is consulted. Add names one at a time with
   `region put <name> *`, which also leaves existing names, their flags and their parents alone.
 
 `trigger test` originates a probe on the channel, naming a mode the way a request sent by hand
@@ -161,34 +179,21 @@ does; `trigger private` sends a test request to the one repeater whose key is gi
 answer comes back to this node alone. Both are described in
 [Repeater auto-reply](autoreply.md).
 
-The reads change nothing and cannot be replayed into anything, which is what keeps the security
-argument simple. There is deliberately **no `set`** among them: we do not yet know which values
-we would write, and a write would need an argument this design has not had to make.
+The deny list is deliberately independent of the second guard: MQTT commands run with the
+node's clock rather than the `0` that marks a locally-privileged caller, so `set prv.key`,
+`erase`, `log`, the `stats-*` dumps and `set mqtt.cmd.pubkey` refuse them anyway. Either alone
+should be enough; both together mean one of them can be wrong.
 
-**The two groups match differently, and the difference is the point.** The first five are
-*families*: the boundary rule lets `set autoreply` cover `set autoreply.hops 8` and the rest,
-one entry instead of five, `trigger test` its optional id and mode letter, and `region` its
-subcommands. The reads are
-*exact* — each admits the command it names and nothing else. A family silently admits children
-nobody listed, and `get radio` was admitting
-`get radio.rxgain`, `get radio.fem.rxgain` and `get radio foo` that way. Harmless values, but
-this list exists to be read by an operator deciding what a node exposes, and an entry that
-admits more than it says defeats that. Adding `get af.thing` to `CommonCLI` later cannot reach
-the mesh without someone also adding it here.
+**The deny list matches with the boundary rule, and the secrets without one.** A family entry
+ends at end-of-string, a space or a dot, so `set radio` denies `set radio.rxgain` but not a
+setting that merely starts with the same letters, and `set tx` does not deny `set txdelay`.
+The secrets (`prv`, `password`, `wifi.pwd`, the command key, ...) are denied by bare prefix,
+because `CommonCLI`'s own `handleGetCmd` matches with an unbounded `memcmp` and `get prv.keyx`
+would otherwise reach the key's handler.
 
-Everything else is refused before it reaches the CLI. The allowlist is deliberately independent
-of the second guard: MQTT commands run with the node's clock rather than the `0` that marks a
-locally-privileged caller, so `set prv.key`, `erase` and `set mqtt.cmd.pubkey` refuse them anyway.
-Either alone should be enough; both together mean one of them can be wrong.
-
-**The allowlist is the tighter of the two gates and must stay that way.** It requires a match to
-end at end-of-string, a space or a dot; `CommonCLI`'s own `handleGetCmd` matches with an
-unbounded `memcmp`, so `get afxyz` would answer if it ever reached there. Do not relax the
-boundary rule to save allowlist entries.
-
-A node on older firmware will not know some of these and answers that it does not. That is the
-mixed fleet working as intended, and a reader must record it as "did not answer" rather than as
-an absent setting.
+A node on older firmware refuses most of this with `not-allowed`. That is the mixed fleet
+working as intended, and a reader must record it as "did not answer" rather than as an absent
+setting.
 
 ### A transmit command may not be broadcast
 
@@ -209,20 +214,21 @@ anything.
 ## What is not defended
 
 - **Confidentiality.** Commands and results are public on a public broker. Nothing secret may
-  appear in either — which is what the allowlist keeps true.
-  **What a result may never carry,** and so what may never be allowlisted as a read: any key
+  appear in either — which is what the deny list keeps true.
+  **What a result may never carry,** and so what the deny list refuses as a read: any key
   (`prv.key`, the command key, `mqtt.owner`, `bridge.secret`), any credential (`password`,
-  `guest.password`, `wifi.pwd`, a slot's `password`, `token` or `username`), where the node's
-  other brokers are (`mqttN.server`), which network it is on (`wifi.ssid`), and where or whose
-  it is (`lat`, `lon`, `owner.info`) — an advert may publish a position, but that is the
-  operator's choice to make per node, not something a signed stranger's read should decide.
-  The node's `name` is the one exception: every advert carries it, so it is readable.
-  `NothingAResultMayNeverCarryCanBeRead` pins the list. What *is* readable is timing and
-  radio configuration, which anyone in range could infer by listening.
+  `guest.password`, `wifi.pwd`, a slot's `password`, `token` or `username`), which network it
+  is on (`wifi.ssid`), and where or whose it is (`lat`, `lon`, `owner.info`) — an advert may
+  publish a position, but that is the operator's choice to make per node, not something a
+  signed read whose result is public should decide. A slot's `server` and `preset` are
+  readable since 2026-10-08, because they are settable over this plane and a change must be
+  checkable. `NothingAResultMayNeverCarryCanBeRead` pins the list. What else is readable is
+  configuration, which anyone in range could largely infer by listening.
 - **Availability.** Anyone can flood the broker. The node's rate limit bounds the airtime
   consequence; it cannot make the broker quiet.
-- **A compromised command key.** Whoever holds it can do anything on the allowlist. Rotation
-  currently needs serial access.
+- **A compromised command key.** Whoever holds it can do anything not on the deny list, which
+  since 2026-10-08 is most of what a repeater does — short of silencing it, moving it, re-keying
+  it or taking it off the control plane. Rotation needs serial access.
 
 ## The result
 
@@ -263,7 +269,7 @@ are refused; nothing readable is lost.
 | 10 | expired |
 | 11 | expiry too far in the future |
 | 12 | no trusted clock; expiry fails closed |
-| 14 | not on the allowlist — a permanent no |
+| 14 | on the deny list, or not an admitted verb — a permanent no |
 | 17 | rate limited — ask again later |
 | 18 | a transmit command addressed to every node at once |
 

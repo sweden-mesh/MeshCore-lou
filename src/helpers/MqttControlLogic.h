@@ -332,26 +332,28 @@ static inline bool mqttCtrlPrefixWithBoundary(const char* command, size_t len,
   return command[plen] == ' ' || command[plen] == '.';
 }
 
-// The allowlist. Only auto-reply parameters and the test trigger travel this way.
+// The command surface: a deny list over admitted verbs.
 //
-// This is the security boundary, and it is deliberately independent of the
-// sender_timestamp policy: passing a non-zero timestamp already makes the
-// locally-privileged commands refuse a remote caller, and this list means a
-// mistake there is still not a compromise. Either alone should keep 'set prv.key'
-// unreachable; both together mean one of them can be wrong.
-// How one allowlist entry matches.
+// Until 2026-10-08 this was an allowlist of fourteen entries. The operator's
+// decision that day (planning/mccontrol/u17-blacklist-proposal.md in the
+// workspace) makes the control plane a command centre: every repeater command
+// travels this way EXCEPT what is listed here as denied. The list is the thing
+// to review, so it is grouped by why, and each group is pinned by a test.
 //
-// A *family* entry uses the boundary rule, so `set autoreply` covers
-// `set autoreply.hops 8` and every other autoreply setting -- one entry instead
-// of five, which is why the boundary rule exists at all.
+// This remains the security boundary, and it remains independent of the
+// sender_timestamp policy: the remote path never passes 0, so `set prv.key`,
+// `erase`, `log`, the `stats-*` dumps and the command key stay serial-only even
+// if a line here were lost. Both gates must be wrong for one of those to run.
 //
-// An *exact* entry admits the bare command and nothing else. The cost of a family
-// is that it admits children nobody listed: `get radio` silently admitted
-// `get radio.rxgain` and `get radio.fem.rxgain`, and `get radio foo` besides.
-// Those are harmless read-only values, but this list exists to be *reviewed*, and
-// an entry that admits more than it says defeats the review. None of the reads
-// have children worth reaching, so all of them are exact -- and a `get af.thing`
-// added to the CLI later cannot reach the mesh without someone adding it here too.
+// Three rules shape the lists:
+//  1. A command must start with an ADMITTED VERB (`set`, `get`, `region`, ...).
+//     A verb the CLI grows later does not reach the mesh until someone adds it.
+//  2. It must match no DENIED FAMILY. Families use the boundary rule, so
+//     `set mqtt.cmd` denies `set mqtt.cmd`, `set mqtt.cmd.slot 2` and
+//     `set mqtt.cmd.pubkey ...` alike, and `set radio` denies every `radio.*`.
+//  3. Reads of credentials are denied by family too, and the per-slot broker
+//     credentials (`get mqttN.password`, `.token`, `.username`) by a digit rule,
+//     since there are six slots and the number is not part of the name.
 struct MqttCtrlAllowEntry {
   const char* text;
   bool exact;
@@ -363,59 +365,121 @@ static inline bool mqttCtrlExactCommand(const char* command, size_t len, const c
   return len == tlen && strncasecmp(command, text, tlen) == 0;
 }
 
+// `get mqttN.<leaf>` for any slot digit N: the credential reads of a broker slot.
+static inline bool mqttCtrlIsSlotCredentialRead(const char* command, size_t len) {
+  static const char* const leaves[] = { ".password", ".token", ".username" };
+  const char* head = "get mqtt";
+  size_t hlen = strlen(head);
+  if (len < hlen + 2 || strncasecmp(command, head, hlen) != 0) return false;
+  if (command[hlen] < '0' || command[hlen] > '9') return false;
+  const char* rest = command + hlen + 1;
+  size_t rlen = len - hlen - 1;
+  for (size_t i = 0; i < sizeof(leaves) / sizeof(leaves[0]); i++) {
+    size_t llen = strlen(leaves[i]);
+    if (rlen >= llen && strncasecmp(rest, leaves[i], llen) == 0 &&
+        (rlen == llen || rest[llen] == ' ' || rest[llen] == '.')) return true;
+  }
+  return false;
+}
+
+static inline bool mqttCtrlCommandDenied(const char* command, size_t len) {
+  static const char* const denied[] = {
+    // identity: a changed key is a different node; the fleet, the maps and every
+    // history line lose it.
+    "set prv.key", "set public.key",
+    // the plane itself: a signed command that repoints the key or the slot the
+    // node listens on silently removes it from control, and only a serial visit
+    // undoes that. The standard Observer MQTT settings (mqttN.*, mqtt.presets,
+    // mqtt.iata, mqtt.*) are deliberately NOT here: a broker may go away and
+    // another must be reachable without a visit (operator, 2026-10-08).
+    "set mqtt.cmd", "get mqtt.cmd.pubkey",
+    // credentials and ownership: a result is published where anyone can read it,
+    // and a write of these is a takeover of something other than the node.
+    "set wifi.pwd", "get wifi.pwd", "set wifi.ssid", "get wifi.ssid",
+    "set password", "get password", "password",
+    "set guest.password", "get guest.password",
+    "set alert.psk", "get alert.psk",
+    "set bridge.secret", "get bridge.secret",
+    "set snmp.community", "get snmp.community",
+    "set mqtt.email", "get mqtt.email", "set mqtt.owner", "get mqtt.owner",
+    "set owner.info", "get owner.info",
+    "set tls", "get tls", "tls.bundletest", "get prv.key",
+    // destructive, or no way back from the road. `reboot` and `clkreboot` are
+    // admitted (operator, 2026-10-08): settings need them to apply. `ota check`
+    // is admitted; `ota update` waits for a signed image and rollback
+    // (planning/firmware/TODO.md section 11).
+    "erase", "start", "ota update", "poweroff", "shutdown", "set bootloader.ver",
+    // position and role: position is evidence the whole mesh relies on, and
+    // `repeat off` is how a leaked key silences a region in ten commands. The
+    // position read stays out too: whether a node publishes where it is belongs
+    // to its owner per node (the advert), not to a signed read whose result is
+    // public on the broker.
+    "set lat", "set lon", "get lat", "get lon", "set role", "set repeat",
+    // radio: a wrong value takes the node off the mesh with no remote way back.
+    "set freq", "set radio", "set tx", "set extra.sf", "set dutycycle", "tempradio",
+    // airtime: `trigger` is the one sanctioned transmit, on its own budget.
+    "advert", "alert", "set advert.interval", "set flood.advert.interval",
+    // the clock: expiry is judged against it. `time <epoch>` steps it forward by
+    // any amount; `clock sync` steps it to the node's own now and is harmless.
+    "time",
+    // serial-only already (sender_timestamp == 0); listed so the two gates agree.
+    "log", "stats-core", "stats-packets", "stats-radio", "stats-radio-diag",
+  };
+  for (size_t i = 0; i < sizeof(denied) / sizeof(denied[0]); i++) {
+    if (mqttCtrlPrefixWithBoundary(command, len, denied[i])) return true;
+  }
+  // The secrets, denied by bare prefix with no boundary at all: the CLI's own
+  // matching is an unbounded memcmp, so `get prv.keyx` would reach the key's
+  // handler, and nothing legitimate starts with these letters.
+  static const char* const secrets[] = {
+    "get prv", "set prv", "get password", "set password", "get guest.password",
+    "get wifi.pwd", "set wifi.pwd", "get alert.psk", "set alert.psk",
+    "get bridge.secret", "set bridge.secret", "get snmp.community", "set snmp.community",
+    "get mqtt.cmd.pubkey", "set mqtt.cmd", "get tls", "set tls",
+  };
+  for (size_t i = 0; i < sizeof(secrets) / sizeof(secrets[0]); i++) {
+    size_t plen = strlen(secrets[i]);
+    if (len >= plen && strncasecmp(command, secrets[i], plen) == 0) return true;
+  }
+  return mqttCtrlIsSlotCredentialRead(command, len);
+}
+
 static inline bool mqttCtrlCommandAllowed(const char* command, size_t len) {
   if (!mqttCtrlCommandCharsOk(command, len)) return false;
+  if (mqttCtrlCommandDenied(command, len)) return false;
 
-  static const MqttCtrlAllowEntry allowed[] = {
-    // Families. The boundary rule is load-bearing on these three: make them exact
-    // and `set autoreply.hops 8` and `trigger test a1b2c3d4` both stop working.
-    { "set autoreply", false },   // covers on|off and every autoreply.* setting
-    { "get autoreply", false },
-    { "trigger test",  false },   // covers the optional 8-hex correlation id and mode
-    { "trigger private", false }, // the target key, and the optional id after it
+  // A bare `set` or `get`, or one with nothing after the space, names no setting;
+  // refused here so a typo never reaches the CLI's unbounded memcmp.
+  if (mqttCtrlExactCommand(command, len, "set") || mqttCtrlExactCommand(command, len, "get") ||
+      mqttCtrlExactCommand(command, len, "set ") || mqttCtrlExactCommand(command, len, "get ")) return false;
 
-    // The region map, whole: `region` alone reads it; put, def, allowf, denyf, remove,
-    // default, home and save change it. Admitted in full on the operator's decision
-    // (2026-10-07): a scope rollout across a fleet is a signed publish per node instead
-    // of a visit per node. A remote `denyf *` or `remove` can cut a repeater out of its
-    // own area, so the sending tool says what those do before it signs; the node does
-    // not second-guess a signed command. `region def` lines carry `|`, which is the
-    // envelope's field separator, so they cannot travel this way: `region put` one name
-    // at a time does the same job and leaves existing names alone.
-    { "region", false },
-
-    // Reads. Each admits exactly the command it names. All read-only: they change
-    // nothing and cannot be replayed into anything, which is what keeps the
-    // argument for having them simple. Deliberately no `set` here.
-    { "get txdelay",        true },
-    { "get direct.txdelay", true },
-    { "get rxdelay",        true },
-    { "get af",             true },
-    { "get cad",            true },
-    { "get int.thresh",     true },
-    { "get radio",          true },
-
-    // How this node takes part in flooding, which the topology model otherwise
-    // has to infer from traffic. That inference has been wrong before: every node
-    // was once treated as a repeater, which counted phones and companions as
-    // relays. A node that can be asked settles it directly.
-    { "get repeat",              true },   // does it forward at all
-    { "get flood.max",           true },
-    { "get flood.max.unscoped",  true },
-
-    // Which firmware a node runs. A fleet that takes months to flash is by nature
-    // mixed, and this is how a tool finds out which nodes carry a given change
-    // without a visit. Read-only; the version string names no key and no address.
-    { "ver",                     true },
-    // The node's name. Every advert it sends carries it in clear to the whole mesh,
-    // so a result that repeats it reveals nothing; position and owner stay out.
-    { "get name",                true },
+  static const MqttCtrlAllowEntry verbs[] = {
+    // Families. The boundary rule is load-bearing: make `set` exact and nothing
+    // after it travels; make `trigger test` exact and the correlation id stops.
+    { "set", false },
+    { "get", false },
+    { "region", false },           // the whole map: read, put, allowf, denyf, remove, save
+    { "trigger test", false },     // the optional 8-hex correlation id and mode
+    { "trigger private", false },  // the target key, and the optional id after it
+    { "neighbor.remove", false },  // one entry of the neighbour table; it refills
+    { "sensor", false },           // sensor get/set
+    { "gps", false },              // gps on/off
+    { "powersaving", false },      // powersaving on/off
+    { "clock", false },            // the clock, and `clock sync` to the node's own now
+    // Exact: the bare command and nothing else.
+    { "ver", true },
+    { "reboot", true },
+    { "clkreboot", true },
+    { "neighbors", true },
+    { "board", true },
+    { "memory", true },
+    { "clear stats", true },       // resets counters, nothing else
+    { "ota check", true },         // reports the available build; flashes nothing
   };
-
-  for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++) {
-    bool ok = allowed[i].exact
-                ? mqttCtrlExactCommand(command, len, allowed[i].text)
-                : mqttCtrlPrefixWithBoundary(command, len, allowed[i].text);
+  for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++) {
+    bool ok = verbs[i].exact
+                ? mqttCtrlExactCommand(command, len, verbs[i].text)
+                : mqttCtrlPrefixWithBoundary(command, len, verbs[i].text);
     if (ok) return true;
   }
   return false;

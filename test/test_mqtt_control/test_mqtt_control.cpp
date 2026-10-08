@@ -296,15 +296,15 @@ TEST(Allowlist, AdmitsTheNodeNameAsAnExactRead) {
   // Operator decision 2026-10-07. The name is already in every advert the node floods,
   // so reading it back over the control plane reveals nothing the air does not.
   EXPECT_TRUE(allowed("get name"));
-  EXPECT_FALSE(allowed("set name x"));
-  EXPECT_FALSE(allowed("get name.x"));
+  EXPECT_TRUE(allowed("set name x"));          // a name is a label, not identity (2026-10-08)
+  EXPECT_TRUE(allowed("get name.x"));          // a read; the CLI answers or does not
 }
 
 TEST(Allowlist, AdmitsVerAsAnExactRead) {
   // Operator decision 2026-10-07: a tool asks a fleet which firmware each node runs.
   EXPECT_TRUE(allowed("ver"));
   EXPECT_FALSE(allowed("ver x"));            // exact: nothing after it
-  EXPECT_FALSE(allowed("version"));
+  EXPECT_FALSE(allowed("version"));          // not a verb the list admits
   EXPECT_FALSE(mqttCtrlIsTransmitCommand("ver", 3));
 }
 
@@ -340,7 +340,7 @@ TEST(Allowlist, BlocksTheCommandsThatWouldOwnTheNode) {
   EXPECT_FALSE(allowed("set password hunter2"));
   EXPECT_FALSE(allowed("start webconfig"));
   EXPECT_FALSE(allowed("set repeat off"));
-  EXPECT_FALSE(allowed("reboot"));
+  EXPECT_TRUE(allowed("reboot"));              // admitted 2026-10-08: settings need it to apply
 }
 
 TEST(Allowlist, TheControlPlaneCannotBeSwitchedOffRemotely) {
@@ -413,12 +413,17 @@ TEST(ControlSlot, DegenerateInputIsRefused) {
 }
 
 TEST(Allowlist, IsNotFooledByPrefixTricks) {
-  // Boundary matching: an allowed prefix must be followed by end-of-string or a
-  // space, or 'set autoreply.hopsX' rides in on 'set autoreply'.
-  EXPECT_FALSE(allowed("set autoreplyX 1"));
-  EXPECT_FALSE(allowed("get autoreplyZZZ"));
+  // Boundary matching on the verbs: `trigger tests` is not `trigger test`, and a
+  // verb run into another word is no verb. A `set` of a key the CLI does not
+  // know travels and is answered "unknown", which is the blacklist's bargain.
   EXPECT_FALSE(allowed("trigger tests"));
   EXPECT_FALSE(allowed("trigger testing"));
+  EXPECT_FALSE(allowed("regionx put se"));
+  EXPECT_FALSE(allowed("setautoreply on"));
+  // And the secrets are denied by bare prefix, so no suffix reaches them.
+  EXPECT_FALSE(allowed("get prv.keyx"));
+  EXPECT_FALSE(allowed("set passwordx y"));
+  EXPECT_FALSE(allowed("get mqtt.cmd.pubkeyx"));
 }
 
 TEST(Allowlist, RequiresTheCommandToStartWithTheAllowedText) {
@@ -924,27 +929,38 @@ TEST(Allowlist, AdmitsTheReadOnlyParameterGets) {
   EXPECT_TRUE(allowed("get radio"));
 }
 
-TEST(Allowlist, AReadDoesNotAdmitTheMatchingWrite) {
-  // The whole argument for widening is that a read changes nothing. If any of
-  // these let a `set` through, that argument is gone.
-  EXPECT_FALSE(allowed("set txdelay 0.5"));
-  EXPECT_FALSE(allowed("set direct.txdelay 0.3"));
-  EXPECT_FALSE(allowed("set rxdelay 0"));
-  EXPECT_FALSE(allowed("set af 9.0"));
-  EXPECT_FALSE(allowed("set cad on"));
-  EXPECT_FALSE(allowed("set int.thresh 1"));
+TEST(Allowlist, TheTuningWritesTravelAndTheRadioOnesDoNot) {
+  // The blacklist admits the timing and flood tuning (what the control plane is
+  // for), and keeps the radio parameters out: a wrong value there takes the node
+  // off the mesh with no remote way back.
+  EXPECT_TRUE(allowed("set txdelay 0.5"));
+  EXPECT_TRUE(allowed("set direct.txdelay 0.3"));
+  EXPECT_TRUE(allowed("set rxdelay 0"));
+  EXPECT_TRUE(allowed("set af 9.0"));
+  EXPECT_TRUE(allowed("set cad on"));
+  EXPECT_TRUE(allowed("set int.thresh 1"));
+  EXPECT_TRUE(allowed("set flood.max 8"));
   EXPECT_FALSE(allowed("set radio 869.618,62.5,8,8"));
+  EXPECT_FALSE(allowed("set radio.rxgain 1"));
+  EXPECT_FALSE(allowed("set freq 869.618"));
+  EXPECT_FALSE(allowed("set tx 20"));
+  EXPECT_FALSE(allowed("set extra.sf 1"));
+  EXPECT_FALSE(allowed("set dutycycle 10"));
+  EXPECT_FALSE(allowed("tempradio 869.618 62.5 8 8"));
 }
 
-TEST(Allowlist, StaysTighterThanTheCliItGuards) {
-  // CommonCLI's handleGetCmd matches with an unbounded memcmp, so `get afxyz`
-  // would answer if it ever reached there. The allowlist requires end-of-string,
-  // a space or a dot, and is the tighter gate -- keep it that way rather than
-  // relaxing the boundary to save entries.
-  EXPECT_FALSE(allowed("get afxyz"));
-  EXPECT_FALSE(allowed("get radiofoo"));
-  EXPECT_FALSE(allowed("get txdelayx"));
-  EXPECT_FALSE(allowed("get int.threshold"));
+TEST(Allowlist, ADeniedFamilyCannotBeReachedByRunningIntoAnotherWord) {
+  // The deny list uses the boundary rule, so `set radio` denies `set radio.rxgain`
+  // but not a setting that merely starts with the letters; and the other way, a
+  // denied name cannot be dodged by a suffix: the boundary is what the CLI's own
+  // unbounded memcmp would then match, so both sides are pinned.
+  EXPECT_FALSE(allowed("set radio.fem.rxgain 1"));
+  EXPECT_FALSE(allowed("set mqtt.cmd.slot 2"));
+  EXPECT_TRUE(allowed("set radio.watchdog on") == false);   // under the radio family, denied
+  EXPECT_TRUE(allowed("set mqtt.interval 5"));              // not mqtt.cmd
+  EXPECT_TRUE(allowed("set latency 1") == true);            // `set lat` with a boundary only
+  EXPECT_FALSE(allowed("set lat 57.78"));
+  EXPECT_FALSE(allowed("set lat.x 1"));
 }
 
 TEST(Allowlist, NothingAResultMayNeverCarryCanBeRead) {
@@ -952,14 +968,22 @@ TEST(Allowlist, NothingAResultMayNeverCarryCanBeRead) {
   // returns is public. docs/mqtt-control.md lists what must therefore never be
   // readable; this is that list, and a widening that admits one of them fails here.
   const char* never[] = {
-    "get prv.key", "get public.key", "get password", "get guest.password",
-    "get wifi.pwd", "get wifi.ssid", "get bridge.secret",
-    "get mqtt.owner", "get mqtt.cmd.pubkey",
-    "get mqtt1.password", "get mqtt1.username", "get mqtt1.token", "get mqtt1.server",
-    "get mqtt2.password", "get mqtt6.token",
-    "get lat", "get lon", "get owner.info",
+    "get prv.key", "get password", "get guest.password",
+    "get wifi.pwd", "get wifi.ssid", "get bridge.secret", "get alert.psk",
+    "get snmp.community", "get mqtt.email",
+    "get mqtt.owner", "get mqtt.cmd.pubkey", "get owner.info", "get tls.x",
+    "get mqtt1.password", "get mqtt1.username", "get mqtt1.token",
+    "get mqtt2.password", "get mqtt6.token", "get mqtt3.username x",
+    "get lat", "get lon",
   };
   for (const char* command : never) EXPECT_FALSE(allowed(command)) << command;
+  // The public key is what names the node to the whole mesh, so it is readable;
+  // a broker's host name is settable over this plane now, so reading it back is
+  // part of the same job. `get mqtt.cmd` is state and counter, not the key.
+  EXPECT_TRUE(allowed("get public.key"));
+  EXPECT_TRUE(allowed("get mqtt1.server"));
+  EXPECT_TRUE(allowed("get mqtt1.preset"));
+  EXPECT_TRUE(allowed("get mqtt.cmd"));
 }
 
 TEST(Allowlist, TheWideningAddedNoPrivilegedCommand) {
@@ -972,6 +996,99 @@ TEST(Allowlist, TheWideningAddedNoPrivilegedCommand) {
   EXPECT_FALSE(allowed("get mqtt.owner"));
   EXPECT_FALSE(allowed("get"));
   EXPECT_FALSE(allowed("get "));
+  EXPECT_FALSE(allowed("set"));
+  EXPECT_FALSE(allowed("set "));
+}
+
+// ---- the deny list of 2026-10-08, group by group ------------------------------
+
+TEST(Denylist, TheStandardMqttSettingsTravelButTheControlSlotAndKeyDoNot) {
+  // A broker may go away; another must be reachable without a visit.
+  EXPECT_TRUE(allowed("set mqtt1.preset meshat.se"));
+  EXPECT_TRUE(allowed("set mqtt2.server mqtt.example.org"));
+  EXPECT_TRUE(allowed("set mqtt2.username mcoar"));
+  EXPECT_TRUE(allowed("set mqtt2.password x"));       // a write, to a broker the signer chose
+  EXPECT_TRUE(allowed("set mqtt.presets 2"));
+  EXPECT_TRUE(allowed("set mqtt.iata GOT"));
+  EXPECT_TRUE(allowed("set mqtt.interval 10"));
+  EXPECT_TRUE(allowed("set mqtt.status on"));
+  EXPECT_FALSE(allowed("set mqtt.cmd off"));
+  EXPECT_FALSE(allowed("set mqtt.cmd.slot 0"));
+  EXPECT_FALSE(allowed("set mqtt.cmd.pubkey 00"));
+}
+
+TEST(Denylist, RebootIsAdmittedAndTheRestOfTheDestructiveGroupIsNot) {
+  EXPECT_TRUE(allowed("reboot"));
+  EXPECT_TRUE(allowed("clkreboot"));
+  EXPECT_FALSE(allowed("reboot now"));                 // exact: nothing after it
+  EXPECT_FALSE(allowed("erase"));
+  EXPECT_FALSE(allowed("start webconfig"));
+  EXPECT_FALSE(allowed("start ota"));
+  EXPECT_FALSE(allowed("start ota ap"));
+  EXPECT_FALSE(allowed("poweroff"));
+  EXPECT_FALSE(allowed("shutdown"));
+  EXPECT_FALSE(allowed("set bootloader.ver 2"));
+  EXPECT_FALSE(allowed("password hunter2"));
+  EXPECT_FALSE(allowed("set password hunter2"));
+}
+
+TEST(Denylist, OtaCheckIsAReadAndOtaUpdateWaitsForASignedImage) {
+  EXPECT_TRUE(allowed("ota check"));
+  EXPECT_FALSE(allowed("ota check x"));
+  EXPECT_FALSE(allowed("ota update"));
+  EXPECT_FALSE(allowed("ota"));
+}
+
+TEST(Denylist, PositionAndRoleStayLocal) {
+  EXPECT_FALSE(allowed("set lat 57.78"));
+  EXPECT_FALSE(allowed("set lon 14.27"));
+  EXPECT_FALSE(allowed("set role repeater"));
+  EXPECT_FALSE(allowed("set repeat off"));
+  EXPECT_FALSE(allowed("set repeat on"));
+  EXPECT_TRUE(allowed("get repeat"));
+}
+
+TEST(Denylist, NothingThatTransmitsExceptTheTrigger) {
+  EXPECT_FALSE(allowed("advert"));
+  EXPECT_FALSE(allowed("advert.zerohop"));
+  EXPECT_FALSE(allowed("alert test"));
+  EXPECT_FALSE(allowed("set advert.interval 1"));
+  EXPECT_FALSE(allowed("set flood.advert.interval 1"));
+  EXPECT_TRUE(allowed("set alert.hashtag x"));         // the reporter's settings, not its secret
+  EXPECT_FALSE(allowed("set alert.psk 00"));
+  EXPECT_TRUE(allowed("trigger test"));
+}
+
+TEST(Denylist, TheClockCannotBeSteppedByAnyAmount) {
+  // Expiry is judged against the node's clock. `time <epoch>` moves it forward
+  // arbitrarily; `clock sync` moves it to the node's own now, which is nothing.
+  EXPECT_FALSE(allowed("time 1900000000"));
+  EXPECT_TRUE(allowed("clock"));
+  EXPECT_TRUE(allowed("clock sync"));
+}
+
+TEST(Denylist, TheSerialOnlyDumpsAreListedSoTheTwoGatesAgree) {
+  EXPECT_FALSE(allowed("log"));
+  EXPECT_FALSE(allowed("stats-core"));
+  EXPECT_FALSE(allowed("stats-packets"));
+  EXPECT_FALSE(allowed("stats-radio"));
+  EXPECT_FALSE(allowed("stats-radio-diag"));
+  EXPECT_FALSE(allowed("tls.bundletest"));
+}
+
+TEST(Denylist, TheAdmittedBareCommandsAndNothingUnlisted) {
+  EXPECT_TRUE(allowed("neighbors"));
+  EXPECT_TRUE(allowed("neighbor.remove 4AC61A7F"));
+  EXPECT_TRUE(allowed("board"));
+  EXPECT_TRUE(allowed("memory"));
+  EXPECT_TRUE(allowed("clear stats"));
+  EXPECT_FALSE(allowed("clear"));
+  EXPECT_TRUE(allowed("gps on"));
+  EXPECT_TRUE(allowed("powersaving off"));
+  EXPECT_TRUE(allowed("sensor get gps"));
+  EXPECT_FALSE(allowed("neighborsx"));
+  EXPECT_FALSE(allowed("floodscan"));                  // a verb nobody listed
+  EXPECT_FALSE(allowed("setx autoreply on"));
 }
 
 // ---- the boundary rule itself -------------------------------------------------
@@ -1122,8 +1239,13 @@ TEST(PrivateKey, GuardTwo_NeitherReadingNorWritingItIsOnTheAllowlist) {
   EXPECT_FALSE(allowed("set prv.key"));
   EXPECT_FALSE(allowed("get prv.keyx"));
 
-  // Nor smuggled in behind a command that is allowed.
-  EXPECT_FALSE(allowed("get autoreply; get prv.key"));
+  // A key command behind an admitted one travels as a `get` whose tail the CLI
+  // ignores (there is no command separator in the CLI), and the first word is
+  // what both gates judge: `get autoreply` answers, and nothing reads the key.
+  EXPECT_TRUE(allowed("get autoreply; get prv.key"));
+  EXPECT_NE(0, memcmp("get autoreply; get prv.key", "get prv.key", 11));
+  EXPECT_FALSE(allowed("get prv.key x"));
+  EXPECT_FALSE(allowed("get prv.key.x"));
 }
 
 TEST(PrivateKey, ATrailingKeyCommandRidesThroughTheAllowlistAndDiesAtTheHandler) {
@@ -1176,24 +1298,16 @@ TEST(ExactEntries, AReadAdmitsOnlyTheBareCommand) {
   EXPECT_TRUE(allowed("get direct.txdelay"));
 }
 
-TEST(ExactEntries, ChildrenOfAReadAreNoLongerAdmitted) {
-  // These exist in CommonCLI and were reachable over MQTT purely because the
-  // boundary rule treats '.' as a separator.
-  EXPECT_FALSE(allowed("get radio.rxgain"));
-  EXPECT_FALSE(allowed("get radio.fem.rxgain"));
-
-  // And one that does not exist yet: adding `get af.thing` to the CLI later must
-  // not publish it to the mesh as a side effect.
-  EXPECT_FALSE(allowed("get af.anything"));
-  EXPECT_FALSE(allowed("get txdelay.x"));
-}
-
-TEST(ExactEntries, ATrailingArgumentOnAReadIsRefused) {
-  // A get takes no argument. The CLI would ignore the tail and answer anyway, so
-  // refusing here keeps the allowlist the tighter gate.
-  EXPECT_FALSE(allowed("get radio foo"));
-  EXPECT_FALSE(allowed("get af 1"));
-  EXPECT_FALSE(allowed("get txdelay 0.5"));
+TEST(ExactEntries, ChildrenOfAReadAreAdmittedUnderTheBlacklist) {
+  // Under the allowlist these were refused so that the list stayed reviewable.
+  // Under the blacklist (2026-10-08) every read not naming a secret travels: a
+  // `get radio.rxgain` reveals a gain setting, and a `get af.thing` added to the
+  // CLI later answers or does not. What a result may never carry is pinned in
+  // NothingAResultMayNeverCarryCanBeRead, which is now the list to review.
+  EXPECT_TRUE(allowed("get radio.rxgain"));
+  EXPECT_TRUE(allowed("get radio.fem.rxgain"));
+  EXPECT_TRUE(allowed("get af.anything"));
+  EXPECT_TRUE(allowed("get radio foo"));          // the CLI ignores the tail and answers
 }
 
 TEST(ExactEntries, TheFamiliesStillMatchAsPrefixes) {
@@ -1237,18 +1351,14 @@ TEST(FloodReads, TheFloodBehaviourGetsAreAdmitted) {
   EXPECT_TRUE(allowed("get flood.max.unscoped"));
 }
 
-TEST(FloodReads, ExactMatchingKeepsTheTwoFloodEntriesApart) {
-  // `get flood.max` is exact, so it does not swallow `.unscoped` -- which is why
-  // that one needs its own entry rather than riding in on a prefix.
-  EXPECT_FALSE(allowed("get flood.max.anything"));
-  EXPECT_FALSE(allowed("get repeater"));
-  EXPECT_FALSE(allowed("get repeat on"));
-}
-
-TEST(FloodReads, TheMatchingWritesAreStillRefused) {
-  // `set repeat off` silences a node's forwarding. Doing that remotely to someone
-  // else's repeater would take it out of the mesh, so it stays off the allowlist.
+TEST(FloodReads, TheFloodWritesTravelAndRepeatStaysLocal) {
+  // The flood limits are tuning, which is what the control plane is for.
+  // `set repeat off` silences a node's forwarding: doing that remotely to someone
+  // else's repeater takes it out of the mesh, and it is how a leaked key would
+  // silence a region, so it stays denied (operator, 2026-10-08).
+  EXPECT_TRUE(allowed("set flood.max 3"));
+  EXPECT_TRUE(allowed("set flood.max.unscoped 2"));
   EXPECT_FALSE(allowed("set repeat off"));
-  EXPECT_FALSE(allowed("set flood.max 3"));
-  EXPECT_FALSE(allowed("set flood.max.unscoped 2"));
+  EXPECT_FALSE(allowed("set repeat on"));
+  EXPECT_TRUE(allowed("get repeat"));
 }
