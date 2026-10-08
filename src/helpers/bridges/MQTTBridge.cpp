@@ -335,6 +335,32 @@ void MQTTBridge::formatMqttStatusReply(char* buf, size_t bufsize, const MQTTPref
 // accepted publishes, err = cumulative failures (socket error / network timeout).
 // Outbox should read ~0 (QoS0 publishes synchronously); a rising err isolates a
 // broker whose uplink is dropping writes.
+void MQTTBridge::formatNodeStatsReply(char* buf, size_t bufsize) {
+  if (buf == nullptr || bufsize == 0) return;
+  MQTTBridge* b = s_mqtt_bridge_instance;
+  long battery_mv = -1, uptime_secs = -1, noise_floor = -999, tx_air_secs = -1, rx_air_secs = -1;
+  long packets_sent = -1, packets_received = -1, errors = -1, recv_errors = -1, queue_len = -1;
+  if (b != nullptr) {
+    // The same reads buildStatusMessage makes for the status payload.
+    if (b->_board) battery_mv = b->_board->getBattMilliVolts();
+    if (b->_ms) uptime_secs = b->_ms->getMillis() / 1000;
+    if (b->_dispatcher) {
+      errors = b->_dispatcher->getErrFlags();
+      tx_air_secs = b->_dispatcher->getTotalAirTime() / 1000;
+      rx_air_secs = b->_dispatcher->getReceiveAirTime() / 1000;
+      packets_sent = (long)(b->_dispatcher->getNumSentFlood() + b->_dispatcher->getNumSentDirect());
+      packets_received = (long)(b->_dispatcher->getNumRecvFlood() + b->_dispatcher->getNumRecvDirect());
+    }
+    if (b->_radio) {
+      noise_floor = (int16_t)b->_radio->getNoiseFloor();
+      recv_errors = (long)b->_radio->getPacketsRecvErrors();
+    }
+    if (b->_initialized) queue_len = b->_queue_count;
+  }
+  mqttFormatNodeStats(buf, bufsize, battery_mv, uptime_secs, noise_floor, tx_air_secs, rx_air_secs,
+                      packets_sent, packets_received, errors, recv_errors, queue_len);
+}
+
 void MQTTBridge::formatMqttStatsReply(char* buf, size_t bufsize) {
   if (buf == nullptr || bufsize == 0) return;
   if (s_mqtt_bridge_instance == nullptr || !s_mqtt_bridge_instance->_initialized) {

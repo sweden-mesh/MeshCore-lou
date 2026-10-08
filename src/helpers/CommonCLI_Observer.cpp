@@ -812,6 +812,12 @@ bool CommonCLI::handleObserverGetCmd(uint32_t sender_timestamp, const char* conf
     formatMQTTPresetListReply(reply, 160, start);
   } else if (memcmp(config, "mqtt.stats", 10) == 0) {
     MQTTBridge::formatMqttStatsReply(reply, 160);
+  } else if (memcmp(config, "stats", 5) == 0 && (config[5] == '\0' || config[5] == ' ' ||
+                                                config[5] == '\n' || config[5] == '\r')) {
+    // The node's own counters, readable over the control plane (2026-10-08): the
+    // `stats-*` dumps stay serial-only, this is the status block's values in one
+    // bounded line. Any sender_timestamp: it reveals what every status publish does.
+    MQTTBridge::formatNodeStatsReply(reply, 160);
   } else if (memcmp(config, "mqtt.status", 11) == 0) {
     MQTTBridge::formatMqttStatusReply(reply, 160, &_mqtt_prefs);
   } else if (memcmp(config, "mqtt.packets", 12) == 0) {

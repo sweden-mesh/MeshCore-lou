@@ -1362,3 +1362,11 @@ TEST(FloodReads, TheFloodWritesTravelAndRepeatStaysLocal) {
   EXPECT_FALSE(allowed("set repeat on"));
   EXPECT_TRUE(allowed("get repeat"));
 }
+
+TEST(Denylist, TheNodesCountersAreReadableAndTheDumpsAreNot) {
+  // `get stats` (2026-10-08) is the status block's values in one line; it travels
+  // as any read does. The serial-only dumps it replaces do not.
+  EXPECT_TRUE(allowed("get stats"));
+  EXPECT_FALSE(allowed("stats-core"));
+  EXPECT_FALSE(allowed("stats-radio"));
+}
