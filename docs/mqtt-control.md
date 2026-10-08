@@ -67,7 +67,13 @@ meshcore/{IATA}/all/cmd        to every node in the region
 meshcore/{IATA}/{NODE}/res     the node's answer
 ```
 
-`{NODE}` is the first four bytes of the node's public key, in hex.
+`{NODE}` is the node's **whole public key**, 64 upper-case hex characters -- the same id the
+observer's own `status` and `packets` topics carry. Until 2026-10-08 (builds up to ar-10) it
+was the first four bytes; the whole key is what a broker needs so that one ACL pattern -- the
+login username `v1_<key>` must appear in the topic -- keeps each node to its own `cmd` and
+`res`. Tools keep showing the first eight hex characters as the node's name. A tool that
+talks to both forms addresses a node by whichever its firmware carries; the broadcast topic
+is the same for both.
 
 **The prefix must be `meshcore/`.** The broker permits that namespace and silently discards
 everything else: a publish elsewhere is accepted, QoS-1 acked, and dropped, with no error the

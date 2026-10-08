@@ -11,7 +11,6 @@
 // elsewhere is accepted, acked and dropped, with no error visible to the sender.
 // Measured against mqtt.meshat.se on 2026-09-01: meshcore/JKG/<node>/cmd arrives,
 // meshhealth/v1/JKG/<node>/cmd does not. This is the topic CLAUDE.md specified.
-#define MQTTCTRL_TOPIC_PREFIX "meshcore/"
 
 // Same shape as AutoReply's: the filesystem call differs per platform, and each
 // feature keeps its own copy rather than adding a shared header upstream edits.
@@ -100,9 +99,7 @@ void MqttControl::save() {
 
 static bool buildOne(const char* iata, const char* leaf, const char* suffix,
                      char* out, size_t out_size) {
-  if (iata == NULL || iata[0] == 0 || leaf == NULL || out == NULL) return false;
-  int n = snprintf(out, out_size, "%s%s/%s/%s", MQTTCTRL_TOPIC_PREFIX, iata, leaf, suffix);
-  return n > 0 && (size_t)n < out_size;
+  return mqttCtrlBuildTopic(iata, leaf, suffix, out, out_size);
 }
 
 bool MqttControl::buildTopic(const char* iata, const char* node_hex,

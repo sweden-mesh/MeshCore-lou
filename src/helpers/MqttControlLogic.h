@@ -268,6 +268,23 @@ static inline MqttCtrlResult mqttCtrlParseEnvelope(const char* payload, size_t l
   return MQTTCTRL_OK;
 }
 
+// The topics this node listens and answers on: meshcore/{IATA}/{leaf}/{suffix}.
+//
+// The leaf is the node's FULL public key, 64 upper-case hex characters, as the
+// observer's own status and packet topics name it (`setDeviceID`). Until
+// 2026-10-08 it was the first four bytes; the whole key is what a broker needs so
+// that one ACL pattern -- the login username `v1_<key>` must appear in the topic --
+// keeps each node to its own `cmd` and `res`. The 8-hex id stays what people see.
+// The longest form, `meshcore/XXXX/<64 hex>/cmd`, is 82 characters, inside
+// MQTTCTRL_MAX_TOPIC. The broadcast leaf is the word `all`.
+static inline bool mqttCtrlBuildTopic(const char* iata, const char* leaf, const char* suffix,
+                                      char* out, size_t out_size) {
+  if (iata == NULL || iata[0] == 0 || leaf == NULL || leaf[0] == 0 || suffix == NULL ||
+      out == NULL || out_size == 0) return false;
+  int n = snprintf(out, out_size, "meshcore/%s/%s/%s", iata, leaf, suffix);
+  return n > 0 && (size_t)n < out_size && (size_t)n <= MQTTCTRL_MAX_TOPIC;
+}
+
 // Assemble the exact bytes the signature covers: the topic, a newline, then the
 // signed part of the payload.
 //

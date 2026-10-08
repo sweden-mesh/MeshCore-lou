@@ -1370,3 +1370,27 @@ TEST(Denylist, TheNodesCountersAreReadableAndTheDumpsAreNot) {
   EXPECT_FALSE(allowed("stats-core"));
   EXPECT_FALSE(allowed("stats-radio"));
 }
+
+// ---- the topics name the node by its whole key (2026-10-08) -----------------------
+
+static const char* KEY64 = "4AC61A7FF4800A079A7311CA606A4C7037FE6943D40E53932230142829A4F786";
+
+TEST(Topics, TheLeafIsTheWholeKeyAndTheBroadcastIsTheWordAll) {
+  char out[MQTTCTRL_MAX_TOPIC + 1];
+  ASSERT_TRUE(mqttCtrlBuildTopic("JKG", KEY64, "cmd", out, sizeof(out)));
+  EXPECT_STREQ("meshcore/JKG/4AC61A7FF4800A079A7311CA606A4C7037FE6943D40E53932230142829A4F786/cmd", out);
+  ASSERT_TRUE(mqttCtrlBuildTopic("JKG", KEY64, "res", out, sizeof(out)));
+  EXPECT_EQ(81u, strlen(out));                      // 9 + 3 + 1 + 64 + 1 + 3
+  ASSERT_TRUE(mqttCtrlBuildTopic("JKG", "all", "cmd", out, sizeof(out)));
+  EXPECT_STREQ("meshcore/JKG/all/cmd", out);
+}
+
+TEST(Topics, TheWholeKeyFormFitsTheSignedMessageAndIsRefusedWhenItCannot) {
+  char out[MQTTCTRL_MAX_TOPIC + 1];
+  ASSERT_TRUE(mqttCtrlBuildTopic("JKG", KEY64, "cmd", out, sizeof(out)));
+  EXPECT_LE(strlen(out), (size_t)MQTTCTRL_MAX_TOPIC);
+  char tiny[40];
+  EXPECT_FALSE(mqttCtrlBuildTopic("JKG", KEY64, "cmd", tiny, sizeof(tiny)));
+  EXPECT_FALSE(mqttCtrlBuildTopic("", KEY64, "cmd", out, sizeof(out)));
+  EXPECT_FALSE(mqttCtrlBuildTopic("JKG", "", "cmd", out, sizeof(out)));
+}

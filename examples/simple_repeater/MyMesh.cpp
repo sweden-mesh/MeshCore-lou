@@ -1994,8 +1994,8 @@ void MyMesh::setupMqttControl(MQTTBridge* bridge) {
   if (iata == NULL || iata[0] == 0) return;      // no region, no control plane
   if (mqtt_control.slot() == 0) return;          // no slot to listen on
 
-  char node_hex[MAX_ADVERT_DATA_SIZE];
-  mesh::Utils::toHex(node_hex, self_id.pub_key, 4);   // first four bytes name the node
+  char node_hex[PUB_KEY_SIZE * 2 + 1];
+  mesh::Utils::toHex(node_hex, self_id.pub_key, PUB_KEY_SIZE);   // the whole key names the node (2026-10-08)
 
   if (!MqttControl::buildTopic(iata, node_hex, _ctrl_topic, sizeof(_ctrl_topic))) return;
   if (!MqttControl::buildBroadcastTopic(iata, _ctrl_broadcast, sizeof(_ctrl_broadcast))) return;
