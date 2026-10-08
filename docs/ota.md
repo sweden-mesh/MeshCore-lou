@@ -21,7 +21,7 @@ mismatch or a short download aborts the slot untouched (`OtaVerifyLogic.h`, host
 
 ```
 { "version": "v1.17.1.3-ar-11-abc1234", "baseVersion": "v1.17.1", "build": 3,
-  "file": "https://github.com/the-louie/MeshCore-observer-autoreply/releases/download/v1.17.1.3-ar-11/Heltec_v3_repeater_observer_mqtt-v1.17.1.3-ar-11-abc1234.bin",
+  "file": "https://github.com/the-louie/MeshCore-observer/releases/download/v1.17.1.3-ar-11/Heltec_v3_repeater_observer_mqtt-v1.17.1.3-ar-11-abc1234.bin",
   "sha256": "<64 hex of the image>",
   "sig": "<128 hex, Ed25519 by the release key over sha256|version|file>",
   "partSig": "<the partition signature of the build>" }
@@ -57,8 +57,8 @@ itself does not.
 
 `OTA_MANIFEST_BASE` is baked in by `build.sh` (`OTA_MANIFEST_BASE_URL`), so a node only ever
 takes updates from the channel it was flashed from. The ar-11 channel is the GitHub releases of
-`the-louie/MeshCore-observer-autoreply`
-(`https://github.com/the-louie/MeshCore-observer-autoreply/releases/latest/download/<variant>.json`);
+`the-louie/MeshCore-observer`
+(`https://github.com/the-louie/MeshCore-observer/releases/latest/download/<variant>.json`);
 GitHub redirects `latest/download` to the asset, and the node follows it over TLS.
 
 ## Cutting a release that nodes will take
