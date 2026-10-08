@@ -2075,7 +2075,36 @@ void MyMesh::loopMqttControl() {
   // and this fleet runs several firmware versions at once, so that ambiguity is
   // exactly what makes it unreadable.
   if (outcome.authentic) publishMqttControlResult(result, outcome, reply);
+
+  // Rollback (ar-11): a freshly flashed image is pending until it proves itself, and
+  // the proof is this -- the radio is up, WiFi and the bridge reached the broker, and
+  // the control plane verified a signed command, so the owner can still reach the
+  // node. Marked valid here and nowhere earlier; until then a reboot (watchdog, power)
+  // returns to the previous image, and the control plane comes back with it.
+  if (outcome.authentic) markRunningImageValidOnce();
 }
+
+#ifdef ESP_PLATFORM
+#include <esp_ota_ops.h>
+// The Arduino core would mark the image valid at boot; verifyRollbackLater() says
+// we will do it ourselves, after the image has shown it can be commanded.
+extern "C" bool verifyRollbackLater() { return true; }
+
+void MyMesh::markRunningImageValidOnce() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
+      state == ESP_OTA_IMG_PENDING_VERIFY) {
+    esp_ota_mark_app_valid_cancel_rollback();
+    MESH_DEBUG_PRINTLN("OTA: running image marked valid after a verified command");
+  }
+}
+#else
+void MyMesh::markRunningImageValidOnce() {}
+#endif
 
 // The result topic is built once in setupMqttControl and is empty when the node
 // has no region, in which case there is no control plane to answer on.

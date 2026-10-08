@@ -128,6 +128,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   const char* _ctrl_topics[2];
   void setupMqttControl(MQTTBridge* bridge);
   void autoSetupMqttControl(char* reply);
+  void markRunningImageValidOnce();
   void loopMqttControl();
   void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                 const char* reply);

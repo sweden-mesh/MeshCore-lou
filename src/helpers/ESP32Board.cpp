@@ -73,8 +73,10 @@ bool ESP32Board::startOTAUpdate(const char* id, char reply[], bool force_ap) {
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <HTTPUpdate.h>
+#include <Update.h>
 #include <ArduinoJson.h>
+#include <mbedtls/sha256.h>
+#include "OtaVerifyLogic.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_partition.h>
@@ -290,12 +292,26 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   bool legacy_partition_change = doc["partitionChange"] | false;
   char manifest_partsig[256] = {0};
   strncpy(manifest_partsig, doc["partSig"] | "", sizeof(manifest_partsig) - 1);
+  // The signed image (ar-11): the image's SHA-256 and the release key's signature
+  // over "sha256|version|file". Checked before a byte is downloaded.
+  char manifest_sha[OTA_SHA256_HEX_LEN + 1] = {0}, manifest_sig[OTA_SIG_HEX_LEN + 1] = {0};
+  strncpy(manifest_sha, doc["sha256"] | "", sizeof(manifest_sha) - 1);
+  strncpy(manifest_sig, doc["sig"] | "", sizeof(manifest_sig) - 1);
   doc.clear();
 
   if (!file_url[0]) {
     strcpy(reply, "ERR: manifest missing file");
     return false;
   }
+#if defined(OTA_RELEASE_PUBKEY)
+  if (!otaManifestSignatureOk(OTA_RELEASE_PUBKEY, manifest_sha, avail_version, file_url, manifest_sig)) {
+    strcpy(reply, "ERR: manifest not signed by the release key - refused");
+    return false;
+  }
+#else
+  strcpy(reply, "ERR: no release key in this build - an unsigned image is never flashed");
+  return false;
+#endif
 
   // Partition compatibility: prefer the precise per-build signature — compare the
   // target build's partition layout (manifest partSig) to what's actually flashed
@@ -394,26 +410,80 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
 #endif
   uclient.setTimeout(20000);
 
-  // Console progress to the USB serial (always on; MESH_DEBUG is off on the default
-  // observer profile). Non-capturing lambdas + a file-static decile, so the global
-  // httpUpdate object never holds a dangling reference after this function returns.
-  static int ota_progress_decile;
-  ota_progress_decile = -1;
-  httpUpdate.onProgress([](int cur, int total) {
-    if (total <= 0) return;
-    int d = (int)((int64_t)cur * 10 / total);
-    if (d != ota_progress_decile) { ota_progress_decile = d; Serial.printf("OTA: %d%%\n", d * 10); }
-  });
-  httpUpdate.onEnd([]() { Serial.println("OTA: write complete, rebooting..."); });
-  httpUpdate.rebootOnUpdate(true);  // reboots into the new image on success
-  t_httpUpdate_return ret = httpUpdate.update(uclient, file_url);
-
-  // Only reached on failure (success reboots inside update()).
-  inhibit_sleep = false;
-  snprintf(reply, 160, "ERR: OTA failed (%d): %s", (int)ret,
-           httpUpdate.getLastErrorString().c_str());
-  Serial.print("OTA: FAILED - "); Serial.println(reply);
-  return false;
+  // The image is streamed through SHA-256 into the inactive slot by hand rather than
+  // through HTTPUpdate, which checks the transfer and not the content: the hash the
+  // signed manifest names must match what was written before the slot is made
+  // bootable, and a mismatch aborts the slot untouched (Update.abort()).
+  HTTPClient ota_http;
+  ota_http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);   // GitHub's releases/latest/download redirects
+  ota_http.setTimeout(20000);
+  if (!ota_http.begin(uclient, file_url)) {
+    inhibit_sleep = false;
+    strcpy(reply, "ERR: image connect failed");
+    return false;
+  }
+  int code = ota_http.GET();
+  if (code != HTTP_CODE_OK) {
+    ota_http.end(); inhibit_sleep = false;
+    snprintf(reply, 160, "ERR: image HTTP %d", code);
+    return false;
+  }
+  int total = ota_http.getSize();
+  if (total <= 0) {
+    ota_http.end(); inhibit_sleep = false;
+    strcpy(reply, "ERR: image has no length");
+    return false;
+  }
+  if (!Update.begin((size_t)total, U_FLASH)) {
+    ota_http.end(); inhibit_sleep = false;
+    snprintf(reply, 160, "ERR: no room for %d bytes: %s", total, Update.errorString());
+    return false;
+  }
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  mbedtls_sha256_starts(&sha, 0);
+  WiFiClient* stream = ota_http.getStreamPtr();
+  static uint8_t chunk[1024];
+  int written = 0, decile = -1;
+  bool io_ok = true;
+  while (ota_http.connected() && written < total) {
+    size_t avail = stream->available();
+    if (avail == 0) { delay(1); continue; }
+    int n = stream->readBytes(chunk, avail > sizeof(chunk) ? sizeof(chunk) : avail);
+    if (n <= 0) { io_ok = false; break; }
+    mbedtls_sha256_update(&sha, chunk, (size_t)n);
+    if (Update.write(chunk, (size_t)n) != (size_t)n) { io_ok = false; break; }
+    written += n;
+    int d = (int)((int64_t)written * 10 / total);
+    if (d != decile) { decile = d; Serial.printf("OTA: %d%%\n", d * 10); }
+  }
+  ota_http.end();
+  uint8_t digest[32];
+  mbedtls_sha256_finish(&sha, digest);
+  mbedtls_sha256_free(&sha);
+  if (!io_ok || written != total) {
+    Update.abort(); inhibit_sleep = false;
+    snprintf(reply, 160, "ERR: image short: %d of %d bytes", written, total);
+    Serial.print("OTA: FAILED - "); Serial.println(reply);
+    return false;
+  }
+  if (!otaImageHashOk(digest, manifest_sha)) {
+    Update.abort(); inhibit_sleep = false;
+    strcpy(reply, "ERR: image hash does not match the signed manifest - slot discarded");
+    Serial.print("OTA: FAILED - "); Serial.println(reply);
+    return false;
+  }
+  if (!Update.end(true)) {
+    inhibit_sleep = false;
+    snprintf(reply, 160, "ERR: OTA finish failed: %s", Update.errorString());
+    Serial.print("OTA: FAILED - "); Serial.println(reply);
+    return false;
+  }
+  Serial.println("OTA: verified and written, rebooting...");
+  snprintf(reply, 160, "OK: %s written and verified, rebooting", avail_disp);
+  delay(200);
+  ESP.restart();
+  return true;
 #endif  // OTA_MANIFEST_BASE && OTA_VARIANT
 }
 #else
