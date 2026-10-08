@@ -408,10 +408,10 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
     strcpy(reply, "ERR: image connect failed");
     return false;
   }
-  int code = ota_http.GET();
-  if (code != HTTP_CODE_OK) {
+  int img_code = ota_http.GET();
+  if (img_code != HTTP_CODE_OK) {
     ota_http.end(); inhibit_sleep = false;
-    snprintf(reply, 160, "ERR: image HTTP %d", code);
+    snprintf(reply, 160, "ERR: image HTTP %d", img_code);
     return false;
   }
   int total = ota_http.getSize();
@@ -428,14 +428,14 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   mbedtls_sha256_context sha;
   mbedtls_sha256_init(&sha);
   mbedtls_sha256_starts(&sha, 0);
-  WiFiClient* stream = ota_http.getStreamPtr();
+  WiFiClient* img = ota_http.getStreamPtr();
   static uint8_t chunk[1024];
   int written = 0, decile = -1;
   bool io_ok = true;
   while (ota_http.connected() && written < total) {
-    size_t avail = stream->available();
+    size_t avail = img->available();
     if (avail == 0) { delay(1); continue; }
-    int n = stream->readBytes(chunk, avail > sizeof(chunk) ? sizeof(chunk) : avail);
+    int n = img->readBytes(chunk, avail > sizeof(chunk) ? sizeof(chunk) : avail);
     if (n <= 0) { io_ok = false; break; }
     mbedtls_sha256_update(&sha, chunk, (size_t)n);
     if (Update.write(chunk, (size_t)n) != (size_t)n) { io_ok = false; break; }

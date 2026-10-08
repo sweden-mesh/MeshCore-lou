@@ -1,4 +1,5 @@
 #include "MyMesh.h"
+#include <helpers/OtaAutoLogic.h>
 #include <algorithm>
 #include <stdlib.h>  // for qsort()
 #include <helpers/RxReservePacketManager.h>
@@ -2138,7 +2139,7 @@ void MyMesh::autoOtaTick() {
   if (!otaAutoCheckDue(now, _ota_last_check, mqtt_control.otaCheckHours())) return;
   _ota_last_check = now;
   char reply[160];
-  bool available = _board->otaFromManifest(getFirmwareVer(), true, reply);
+  bool available = _cli.getBoard()->otaFromManifest(getFirmwareVer(), true, reply);
   StrHelper::strncpy(_ota_last_result, reply, sizeof(_ota_last_result));
   Serial.print("OTA: automatic check: "); Serial.println(reply);
   if (!available) return;
