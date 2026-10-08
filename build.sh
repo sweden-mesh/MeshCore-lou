@@ -201,12 +201,24 @@ build_firmware() {
   # locally built firmware. Note that PLATFORMIO_BUILD_FLAGS cannot reliably
   # override a -D coming from build_flags (SCons reorders -U/-D), which is why
   # the .ini declarations were removed rather than overridden.
-  OTA_MANIFEST_BASE_URL="${OTA_MANIFEST_BASE_URL:-https://observer.gessaman.com/v}"
+  # The auto-reply fork's channel (2026-10-08, ar-11): the GitHub releases of the fork.
+  # `releases/latest/download/<asset>` redirects to the newest release's asset, so one
+  # baked-in base serves every release; the node follows the redirect over TLS.
+  OTA_MANIFEST_BASE_URL="${OTA_MANIFEST_BASE_URL:-https://github.com/the-louie/MeshCore-observer-autoreply/releases/latest/download}"
+
+  # The release key's public half (64 hex). An image is flashed only when the manifest's
+  # signature by this key verifies (OtaVerifyLogic.h); a build without it refuses every
+  # update, which is what a local dev build should do. The private half never enters the
+  # tree: build-all.sh signs with OTA_RELEASE_KEY_FILE outside it.
+  OTA_PUBKEY_FLAG=""
+  if [ -n "$OTA_RELEASE_PUBKEY" ]; then
+    OTA_PUBKEY_FLAG="-DOTA_RELEASE_PUBKEY='\"${OTA_RELEASE_PUBKEY}\"'"
+  fi
 
   # add firmware version info to end of existing platformio build flags in environment vars.
   # OTA_VARIANT is the env name ($1) — it selects this build's slim per-variant manifest
   # (<OTA_MANIFEST_BASE>/<OTA_VARIANT>.json) that the observer pull-OTA fetches.
-  export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DFIRMWARE_BUILD_DATE='\"${FIRMWARE_BUILD_DATE}\"' -DFIRMWARE_VERSION='\"${EMBEDDED_VERSION_STRING}\"' -DOTA_VARIANT='\"$1\"' -DOTA_MANIFEST_BASE='\"${OTA_MANIFEST_BASE_URL}\"'"
+  export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DFIRMWARE_BUILD_DATE='\"${FIRMWARE_BUILD_DATE}\"' -DFIRMWARE_VERSION='\"${EMBEDDED_VERSION_STRING}\"' -DOTA_VARIANT='\"$1\"' -DOTA_MANIFEST_BASE='\"${OTA_MANIFEST_BASE_URL}\"' ${OTA_PUBKEY_FLAG}"
 
   # disable debug flags if requested
   disable_debug_flags

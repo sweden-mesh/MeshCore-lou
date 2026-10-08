@@ -224,37 +224,23 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   HTTPClient http;
   WiFiClientSecure mclient;  // only used for the HTTPS (update) path
 
-  if (dry_run) {
-    // `ota check`: fetch over PLAIN HTTP. With no TLS handshake the fetch costs
-    // negligible heap, so the check runs with the MQTT bridge UP even on no-PSRAM
-    // — where the cert-bundle TLS verify would otherwise exhaust internal heap
-    // alongside the two live MQTT TLS sessions (free heap collapses to a few KB
-    // and the handshake + the bridge both fail). This only reads version info; the
-    // firmware download below (ota update) is always TLS-verified. Requires the
-    // manifest host to serve /v over HTTP (no forced HTTPS redirect).
-    if (strncmp(OTA_MANIFEST_BASE, "https://", 8) == 0) {
-      snprintf(murl, sizeof(murl), "http://%s/%s.json", OTA_MANIFEST_BASE + 8, OTA_VARIANT);
-    } else {
-      snprintf(murl, sizeof(murl), "%s/%s.json", OTA_MANIFEST_BASE, OTA_VARIANT);
-    }
-    if (!http.begin(murl)) {
-      strcpy(reply, "ERR: manifest connect failed");
-      return false;
-    }
-  } else {
-    // `ota update`: HTTPS. The bridge is torn down for an update so heap is free,
-    // and integrity matters because we're about to flash.
+  // The manifest is signed (sig by the release key, checked below), so the pipe's
+  // integrity no longer matters -- but the channel is GitHub's releases from ar-11,
+  // which serve over HTTPS only and redirect `latest/download` to the asset, so the
+  // fetch is TLS either way. On a board without PSRAM with two TLS slots up, the
+  // handshake can run out of heap: `ota check` then answers "manifest connect
+  // failed" honestly, and `ota update` (which pauses the bridge first) still works.
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-    mclient.setCACertBundle(rootca_crt_bundle_start, bundle_len);
+  mclient.setCACertBundle(rootca_crt_bundle_start, bundle_len);
 #else
-    mclient.setCACertBundle(rootca_crt_bundle_start);
+  mclient.setCACertBundle(rootca_crt_bundle_start);
 #endif
-    mclient.setTimeout(15000);
-    snprintf(murl, sizeof(murl), "%s/%s.json", OTA_MANIFEST_BASE, OTA_VARIANT);
-    if (!http.begin(mclient, murl)) {
-      strcpy(reply, "ERR: manifest connect failed");
-      return false;
-    }
+  mclient.setTimeout(15000);
+  snprintf(murl, sizeof(murl), "%s/%s.json", OTA_MANIFEST_BASE, OTA_VARIANT);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  if (!http.begin(mclient, murl)) {
+    strcpy(reply, "ERR: manifest connect failed");
+    return false;
   }
 
   if (!dry_run) { Serial.print("OTA: checking manifest "); Serial.println(murl); }

@@ -43,3 +43,17 @@ takes updates from the channel it was flashed from. The ar-11 channel is the Git
 `the-louie/MeshCore-observer-autoreply`
 (`https://github.com/the-louie/MeshCore-observer-autoreply/releases/latest/download/<variant>.json`);
 GitHub redirects `latest/download` to the asset, and the node follows it over TLS.
+
+## Cutting a release that nodes will take
+
+```
+scripts/sign_manifest.py --keygen ~/.config/mccontrol/release.key     # once; mode 600; never in a repo
+OTA_RELEASE_KEY_FILE=~/.config/mccontrol/release.key VARIANT_TAG=ar-11 bash build-all.sh
+scripts/release.sh                                                    # tags, pushes, uploads images + manifests
+```
+
+`build-all.sh` bakes the key's public half into every image and writes a signed
+`<variant>.json` beside each; `publish-release.sh` uploads both. Without the key file the
+images build but say so, and refuse every update. A node on a build whose baked-in key
+differs from the one that signed the manifest refuses too -- rotating the release key means
+flashing once by cable.

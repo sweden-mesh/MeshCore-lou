@@ -70,6 +70,19 @@ TEST(OtaVerify, TheHashIsComparedAsBytesWhateverTheCase) {
   EXPECT_FALSE(otaImageHashOk(digest, "9f86"));
   EXPECT_FALSE(otaImageHashOk(digest, NULL));
 }
+TEST(OtaVerify, AManifestFromThePythonSignerVerifiesHere) {
+  // scripts/sign_manifest.py with seed 55x32 over sha256("a firmware image"), this
+  // version and file: the release tooling and the node must agree on the bytes.
+  const char* pub = "C6822637C7D310EC57627BE00BA259D253749F4AAF644470CFFBE53A35F73242";
+  const char* sha = "8354d20f1a8ac4e9dd7b7a9dcba2a2be34a5ffbef65eeeb688885e00cc403810";
+  const char* sig = "008d9368536cac3d7cd0175160ee5669e626622c43d9279f8057e2b9ce5d1bb6"
+                    "63b480481b159ad87ad02cb27de2771225fca164341067b0c67b2f719f1b8a05";
+  EXPECT_TRUE(otaManifestSignatureOk(pub, sha, "esp32s3-v1.17.1-ar-11-abc1234",
+      "https://github.com/the-louie/MeshCore-observer-autoreply/releases/download/v1.17.1-ar-11/x.bin", sig));
+  EXPECT_FALSE(otaManifestSignatureOk(pub, sha, "esp32s3-v1.17.1-ar-11-abc1235",
+      "https://github.com/the-louie/MeshCore-observer-autoreply/releases/download/v1.17.1-ar-11/x.bin", sig));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
