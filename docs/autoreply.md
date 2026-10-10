@@ -285,13 +285,11 @@ the key names the *target*; the node's own key goes into the packet by construct
 - `get autoreply.private`
 - `set autoreply.private on|off`
 
-**Default:** `off`
+**Default:** `on` (since 2026-09-20)
 
-Whether a test request sent to this repeater alone, off the channel, is answered. It is an
-unauthenticated packet that makes the node transmit, and a node should not gain a new way to be
-made to transmit by being upgraded — so it stays off until an operator turns it on. What the
-request is, how the answer travels and what it costs is under
-[A private request](#a-private-request).
+Whether a test request sent to this repeater alone, off the channel, is answered -- privately,
+to the sender's key. A node that stored `off` keeps it. What the request is, how the answer
+travels and what it costs is under [A private request](#a-private-request).
 
 #### Show the current state
 

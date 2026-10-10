@@ -44,7 +44,7 @@ Which slot (operator 2026-10-10, from ar-12):
 every command that would change it is refused with the reason, by serial or over the plane:
 `set mqttN.<anything>` for that slot, and `set mqtt.analyzer.us|eu on|off`, which write slots
 1 and 2. Over the plane such a command would cut the line it arrived on. To change the slot,
-move the plane first with `set mqtt.cmd.slot`, which is serial only.
+move the plane first with `set mqtt.cmd.slot`, which the command plane does not admit.
 
 When no slot can run another connection the reply says so and names the cure -- turn one off
 (`set mqtt2.preset none`) -- rather than doing it for you. A slot for a different command
@@ -165,6 +165,27 @@ Sent that way, its `r2` result is held until the ping settles and then carries t
 `OK - pong in 230 ms on slot 2 (mqtts, jwt)` or `Err - no pong in 10 s: ...` -- once. It puts
 nothing on the air. The broker's half (`mcbroker`) answers a ping only on the session's own
 key, at most once per key per 10 s, never on `all`, and never fans the ping out.
+
+## v2: commands and results sealed end to end (ar-13)
+
+From ar-13 a node also accepts a **v2** command on its own topic, readable only by the holder
+of the command key and the node (firmware TODO 17, byte contract in 17a):
+
+```
+v2|<counter>|<expiry>|<base64url(ciphertext || tag)>|<128-hex Ed25519 signature>
+r3|<counter>|<base64url(ciphertext || tag)>
+```
+
+The key is HKDF-SHA256 over the X25519 agreement of the command key and the node's identity,
+with info `mccontrol-v2|` + the node's command topic, derived once per command key (at boot and
+after `set mqtt.cmd.pubkey`) and kept in RAM. ChaCha20-Poly1305; the nonce is the direction
+(0 command, 1 result), seven zero bytes and the command's counter, big-endian -- the counter
+is strictly increasing and persisted before the command runs, so no nonce repeats. Commands are
+padded to 64 or 160 bytes, results to 256 or 512, so length does not name the command. The node
+opens the AEAD first and drops a forgery before any other work; then the counter, expiry,
+rate limits and deny list apply to the opened text exactly as for v1. The outer signature is
+for the broker. A v2 command is answered with an `r3`; a v1 command with `r2`, as before.
+Broadcasts stay v1. A tool sends v2 only to a node whose `ver` is ar-13 or later.
 
 ## The envelope
 

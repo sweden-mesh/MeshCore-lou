@@ -5,6 +5,8 @@
 #include <helpers/AutoReplyLogic.h>
 #include <helpers/IdentityStore.h>
 #include <helpers/MqttControlLogic.h>
+#include <helpers/MqttControlV2.h>
+#include <helpers/TxtDataHelpers.h>
 
 
 // One staged command, copied out of the MQTT event task so nothing expensive
@@ -46,10 +48,11 @@ struct MqttCommandRunner {
 // persisted per node, and chosen by the requester.
 struct MqttCtrlOutcome {
   bool authentic;                            // signature verified; safe to publish
+  bool v2;                                   // came sealed (v2), so is answered sealed (r3)
   uint32_t counter;                          // the request's counter
   char command[MQTTCTRL_MAX_COMMAND + 1];    // echoed back, NUL-terminated
 
-  MqttCtrlOutcome() : authentic(false), counter(0) { command[0] = 0; }
+  MqttCtrlOutcome() : authentic(false), v2(false), counter(0) { command[0] = 0; }
 };
 
 class MqttControl {
@@ -64,6 +67,12 @@ class MqttControl {
   bool _ota_auto;
   uint8_t _ota_check_hours;
   MqttControlStaged _staged;
+  // The v2 key for this node's own command topic (TODO 17a): derived once per command
+  // key, at boot and when the key changes, and kept in RAM only.
+  uint8_t _v2_key[MQTTV2_KEY_LEN];
+  bool _v2_ready;
+  char _v2_key_for[PUB_KEY_SIZE * 2 + 1];      // the command key it was derived from
+  char _v2_topic[MQTTCTRL_MAX_TOPIC + 1];      // the only topic a v2 command may arrive on
   MqttCtrlBudget _commands;
   MqttCtrlBudget _transmits;
 
@@ -82,6 +91,15 @@ public:
   bool otaAuto() const { return _ota_auto; }
   uint8_t otaCheckHours() const { return _ota_check_hours; }
   const char* pubkey() const { return _pubkey; }
+  // The command key the v2 key was derived from, "" when none.
+  const char* v2KeyFor() const { return _v2_key_for; }
+  void setV2Key(const uint8_t key[MQTTV2_KEY_LEN], const char* key_for, const char* topic) {
+    memcpy(_v2_key, key, MQTTV2_KEY_LEN);
+    StrHelper::strncpy(_v2_key_for, key_for, sizeof(_v2_key_for));
+    StrHelper::strncpy(_v2_topic, topic, sizeof(_v2_topic));
+    _v2_ready = key_for[0] != 0;
+  }
+  const uint8_t* v2Key() const { return _v2_key; }
 
   // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
   static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);

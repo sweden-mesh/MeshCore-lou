@@ -42,11 +42,13 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 // MqttControlLogic.h is the independent second guard on the same door.
 MqttControl::MqttControl()
   : _fs(NULL), _enabled(false), _counter(0), _slot(0),
-    _ota_auto(false), _ota_check_hours(OTA_AUTO_CHECK_HOURS_DEFAULT),
+    _ota_auto(false), _ota_check_hours(OTA_AUTO_CHECK_HOURS_DEFAULT), _v2_ready(false),
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW)
 {
   _pubkey[0] = 0;
+  _v2_key_for[0] = 0;
+  _v2_topic[0] = 0;
   _staged.pending = false;
   _staged.payload_len = 0;
   _staged.topic[0] = 0;
@@ -148,30 +150,43 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
                                   MqttCommandRunner* runner, char* reply, size_t reply_size,
                                   MqttCtrlOutcome* out) {
   if (reply != NULL && reply_size > 0) reply[0] = 0;
-  if (out != NULL) { out->authentic = false; out->counter = 0; out->command[0] = 0; }
+  if (out != NULL) { out->authentic = false; out->v2 = false; out->counter = 0; out->command[0] = 0; }
   if (!_staged.pending) return MQTTCTRL_OK;
 
   MqttCtrlResult result = MQTTCTRL_OK;
   MqttCtrlEnvelope env;
+  char v2_text[MQTTV2_CMD_PAD_LARGE + 1];
 
   do {
-    result = mqttCtrlParseEnvelope(_staged.payload, _staged.payload_len, &env);
-    if (result != MQTTCTRL_OK) break;
+    if (mqttV2IsEnvelope(_staged.payload, _staged.payload_len)) {
+      // Sealed (v2): only on this node's own topic -- a broadcast stays v1 -- and the
+      // AEAD opened before anything else is believed. The tag proves the holder of the
+      // command key, which is what the v1 signature check proves below.
+      if (!_v2_ready) { result = MQTTCTRL_ERR_NO_OWNER_KEY; break; }
+      if (strcmp(_staged.topic, _v2_topic) != 0) { result = MQTTCTRL_ERR_BAD_VERSION; break; }
+      result = mqttV2OpenCommand(_v2_key, _staged.payload, _staged.payload_len, &env, v2_text);
+      if (result != MQTTCTRL_OK) break;
+      if (env.command_len > MQTTCTRL_MAX_COMMAND) { result = MQTTCTRL_ERR_TOO_LONG; break; }
+      if (out != NULL) out->v2 = true;
+    } else {
+      result = mqttCtrlParseEnvelope(_staged.payload, _staged.payload_len, &env);
+      if (result != MQTTCTRL_OK) break;
 
-    // The signature is checked before anything it protects, and over the topic as
-    // well as the body: without the topic bound in, a command signed for one node
-    // could be captured and republished on another's, and each node's own counter
-    // would never notice.
-    uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-    size_t signed_len = 0;
-    if (!mqttCtrlBuildSignedMessage(_staged.topic, &env, signed_bytes,
-                                    sizeof(signed_bytes), &signed_len)) {
-      result = MQTTCTRL_ERR_TOO_LONG;
-      break;
-    }
-    if (!owner.verify(env.signature, signed_bytes, signed_len)) {
-      result = MQTTCTRL_ERR_SIG_INVALID;   // parsed as hex, did not verify
-      break;
+      // The signature is checked before anything it protects, and over the topic as
+      // well as the body: without the topic bound in, a command signed for one node
+      // could be captured and republished on another's, and each node's own counter
+      // would never notice.
+      uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
+      size_t signed_len = 0;
+      if (!mqttCtrlBuildSignedMessage(_staged.topic, &env, signed_bytes,
+                                      sizeof(signed_bytes), &signed_len)) {
+        result = MQTTCTRL_ERR_TOO_LONG;
+        break;
+      }
+      if (!owner.verify(env.signature, signed_bytes, signed_len)) {
+        result = MQTTCTRL_ERR_SIG_INVALID;   // parsed as hex, did not verify
+        break;
+      }
     }
     // Past this line the sender held the command key, so the outcome is safe to
     // publish however it turns out -- and the counter and command it signed are

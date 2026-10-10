@@ -2070,6 +2070,7 @@ void MyMesh::setupMqttControl(MQTTBridge* bridge) {
 
   _ctrl_topics[0] = _ctrl_topic;
   _ctrl_topics[1] = _ctrl_broadcast;
+  refreshMqttControlV2Key();
   bridge->setControlSink(this, _ctrl_topics, 2, mqtt_control.slot() - 1);
 }
 
@@ -2158,6 +2159,7 @@ void MyMesh::describeMqttControl(char* reply) {
 // stack than that task has, and executing a command runs a flash write that would
 // stall the network stack's own thread.
 void MyMesh::loopMqttControl() {
+  refreshMqttControlV2Key();
   if (!mqtt_control.hasPending()) return;
 
   // A staged command is always resolved -- run or discarded -- never left in the
@@ -2267,9 +2269,41 @@ void MyMesh::autoOtaTick() {
 
 // The result topic is built once in setupMqttControl and is empty when the node
 // has no region, in which case there is no control plane to answer on.
+// The v2 key (TODO 17a): X25519 of this node's identity and the command key, through
+// HKDF with this node's command topic. Derived when the key it was made from is not the
+// one now set -- at boot, and after `set mqtt.cmd.pubkey` -- and never otherwise: every
+// v2 message after that costs symmetric work only.
+void MyMesh::refreshMqttControlV2Key() {
+  const char* owner_hex = mqtt_control.pubkey();
+  if (_ctrl_topic[0] == 0 || strcmp(owner_hex, mqtt_control.v2KeyFor()) == 0) return;
+  uint8_t key[MQTTV2_KEY_LEN] = {0};
+  uint8_t owner[PUB_KEY_SIZE];
+  if (mqttCtrlOwnerReady(owner_hex) == MQTTCTRL_OK
+      && mesh::Utils::fromHex(owner, PUB_KEY_SIZE, owner_hex)) {
+    uint8_t shared[PUB_KEY_SIZE];
+    self_id.calcSharedSecret(shared, owner);
+    mqttV2DeriveKey(shared, _ctrl_topic, key);
+    memset(shared, 0, sizeof(shared));
+    mqtt_control.setV2Key(key, owner_hex, _ctrl_topic);
+  } else {
+    mqtt_control.setV2Key(key, "", _ctrl_topic);
+  }
+  memset(key, 0, sizeof(key));
+}
+
 void MyMesh::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                       const char* reply) {
   if (bridge == NULL || _ctrl_result[0] == 0) return;
+
+  // A sealed command is answered sealed (r3): code, command and reply readable only by
+  // the command key's holder. Its tag stands where r2's signature does.
+  if (outcome.v2) {
+    static char sealed[MQTTV2_MAX_RESULT];   // loop task only; too big for its stack
+    size_t n = mqttV2BuildResult(mqtt_control.v2Key(), outcome.counter, (int)result,
+                                 outcome.command, reply, sealed, sizeof(sealed));
+    if (n > 0) bridge->publishControlResult(_ctrl_result, sealed, n, MQTTCTRL_RESULT_QOS);
+    return;
+  }
 
   // A refusal runs no command and leaves the reply empty; the code field still
   // says why, which is what lets a requester tell "refused" from "never arrived".

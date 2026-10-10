@@ -142,6 +142,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   void pingMqttControl(char* reply);
   void describeMqttControl(char* reply);
   void loopMqttPing();
+  void refreshMqttControlV2Key();
   void loopMqttControl();
   void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                 const char* reply);
