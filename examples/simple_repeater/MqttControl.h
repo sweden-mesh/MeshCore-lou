@@ -29,9 +29,9 @@ struct MqttCommandRunner {
 /**
  * \brief  Accepts signed commands over MQTT and runs them through the node's CLI.
  *
- * The broker this rides on publishes its own credentials, so anyone can publish to
- * any topic on it. Nothing here trusts the transport: a command is executed only if
- * it carries an Ed25519 signature by the key set with 'set mqtt.cmd.pubkey' over the
+ * A login to the broker this rides on costs nothing to make, and any login may
+ * publish a command to any node. Nothing here trusts the transport: a command is
+ * executed only if it carries an Ed25519 signature by the key set with 'set mqtt.cmd.pubkey' over the
  * topic and body together, its counter has never been seen before, it has not
  * expired, it is on the allowlist, and the rate limiter still has budget.
  *
@@ -110,7 +110,7 @@ public:
   // verification happens before the rate limiter (deliberately -- the limiters
   // spend budget when asked, so every stateless check runs first), which means a
   // bad-signature refusal is not rate limited. Publishing those would let anyone
-  // on a broker whose credentials are public drive unlimited publishes out of
+  // who can log in to the broker drive unlimited publishes out of
   // this node by sending garbage. A flag set at the point of truth, rather than
   // a classification of result codes, so a code added later cannot drift into
   // the wrong half.

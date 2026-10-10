@@ -8,8 +8,8 @@ signed publish rather than another flashing round.
 
 ## The threat model in one line
 
-`mqtt.meshat.se` and brokers like it publish their credentials. **Anyone can publish to any
-topic**, so nothing here trusts the transport: a command runs only if it carries a valid
+A login to the command broker costs nothing to make, and **any login may publish a command to
+any node**, so nothing here trusts the transport: a command runs only if it carries a valid
 Ed25519 signature by the command key this node was given.
 
 ## Turning it on
@@ -29,8 +29,8 @@ statistics use), points the control plane at that slot, enables it, and answers
 and 2 are the observer's own and are never taken. A board that runs two slots at once (no
 PSRAM) with both analyzer slots up has no room for a third, and the reply says so and names
 the cure -- turn one off (`set mqtt2.preset none`) -- rather than doing it for you: the
-observer's defaults are the owner's to change. A region running its own broker sets the slot
-by hand as before:
+observer's defaults are the owner's to change. A slot for a different command broker is set
+by hand:
 
 ```
 set mqttN.preset custom · set mqttN.server mqtts://broker.example:8883 · set mqttN.audience broker.example
@@ -61,15 +61,15 @@ control plane rides a broker of its own on another:
 
 ```
 set mqtt1.preset meshat.se            # stats, unchanged
-set mqtt2.preset custom               # plus the custom broker settings for slot 2
+set mqtt2.preset custom               # plus slot 2's server and audience
 set mqtt.cmd.slot 2
 reboot
 ```
 
 **If the slot used to hold a JWT preset, check how it signs in.** On a custom slot the audience
 is the switch for JWT, and `set mqttN.preset custom` does not clear it — so the slot goes on
-opening TLS and presenting a token to a plain broker, while `get mqttN.preset` and
-`get mqttN.server` read exactly as intended. `get mqtt.stats` ends each slot with the mode it
+opening TLS and presenting a token where a password login was meant, while `get mqttN.preset`
+and `get mqttN.server` read exactly as intended. `get mqtt.stats` ends each slot with the mode it
 is really in — `s2=11/0 pw` or `s2=0/4 jwt` — and `set mqttN.audience` with no value clears it.
 
 The slot is read at boot, when the subscriptions are made. It cannot be set remotely: a signed
@@ -241,8 +241,9 @@ anything.
 
 ## What is not defended
 
-- **Confidentiality.** Commands and results are public on a public broker. Nothing secret may
-  appear in either — which is what the deny list keeps true.
+- **Confidentiality.** Commands and results are public: every login reads every result, and the
+  plaintext listener carries both in the clear. Nothing secret may appear in either — which is
+  what the deny list keeps true.
   **What a result may never carry,** and so what the deny list refuses as a read: any key
   (`prv.key`, the command key, `mqtt.owner`, `bridge.secret`), any credential (`password`,
   `guest.password`, `wifi.pwd`, a slot's `password`, `token` or `username`), which network it
@@ -271,10 +272,10 @@ r1|<counter>|<code>|<command>|<reply>                                   up to ar
 **The result is signed by the node** from ar-11: Ed25519 by the node's own identity key over
 `"<result topic>\n" + "r2|<counter>|<code>|<command>|<reply>"` -- the same shape as a command's
 signature, so one verifier serves both, and the key to check with is the one the topic names.
-A result topic is a place anyone with the broker's credentials can write, so an unsigned line
-let a stranger publish `ok` in a node's name; now a tool shows a result as *verified* when the
-signature checks, *unverified* for an `r1` from older firmware, and a bad signature as what it
-is. The reply shortens so the signature always fits the line.
+Nothing here trusts the transport with a node's name either: an unsigned line could be
+published as `ok` in a node's name by anything the broker lets write there; now a tool shows a
+result as *verified* when the signature checks, *unverified* for an `r1` from older firmware,
+and a bad signature as what it is. The reply shortens so the signature always fits the line.
 
 The counter is the one the requester chose, which makes it the correlation id: the topic says
 which node answered, the counter says which question it answered. Split on the first four
@@ -295,8 +296,8 @@ earlier field is bounded, so a clamped line still parses.
 
 **Only an outcome whose signature verified is published.** Verification runs before the rate
 limiter — the limiters spend budget when asked, so every stateless check comes first — which
-means a bad-signature refusal is not rate limited, and publishing those would let anyone on a
-broker with public credentials drive unlimited publishes out of the node. A legitimate
+means a bad-signature refusal is not rate limited, and publishing those would let anyone who
+can log in to the broker drive unlimited publishes out of the node. A legitimate
 requester holds the command key, so its commands always draw an answer whether they succeed or
 are refused; nothing readable is lost.
 

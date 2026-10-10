@@ -18,9 +18,9 @@
 // The firmware holds the state, owns the key and does the I/O; every rule it
 // applies is one of these functions.
 //
-// The broker this rides on publishes its own credentials, so anyone can publish to
-// any topic. Nothing here may ever trust the transport: the signature is the only
-// thing that says who sent a command, and these functions run in the order given
+// A login to the broker this rides on costs nothing to make, and any login may
+// publish a command to any node. Nothing here may ever trust the transport: the
+// signature is the only thing that says who sent a command, and these functions run in the order given
 // in the workspace root's docs/architecture/decisions/001-mqtt-control-envelope.md
 // (that tree is outside this repo, alongside it) -- cheap before
 // expensive, and the signature before anything it protects.
