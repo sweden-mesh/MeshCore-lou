@@ -744,8 +744,18 @@ public:
     return publishToSlot(_control_slot, topic, payload, len, false, qos);
   }
 
+  // The control slot's state, for `get mqtt.cmd` and `mqtt.cmd ping`: whether it is
+  // connected, whether the broker has acknowledged a subscription since it connected,
+  // and how it reaches the broker ("mqtts, jwt").
+  bool controlSlotConnected() const {
+    return _control_slot >= 0 && _slots[_control_slot].connected;
+  }
+  bool controlSubscribed() const { return _control_subscribed; }
+  void controlSlotLink(char* out, size_t out_size) const;
+
 private:
   ControlSink* _control_sink = NULL;
+  volatile bool _control_subscribed = false;
   const char* const* _control_topics = NULL;
   size_t _control_topic_count = 0;
   int _control_slot = -1;

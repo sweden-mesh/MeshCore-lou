@@ -1462,6 +1462,90 @@ TEST(AutoSlot, AnalyzerEuOnCannotTakeSlotTwoBackFromThePlane) {
   EXPECT_FALSE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.us on", 2));
 }
 
+// ---- `mqtt.cmd ping` (TODO 15, ar-12) -------------------------------------------------
+
+static const uint8_t* bytes(const char* s) { return (const uint8_t *) s; }
+
+TEST(Ping, ArmsWithAnEightHexNonce) {
+  MqttCtrlPing p = {};
+  char out[32];
+  ASSERT_TRUE(mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out)));
+  EXPECT_STREQ("ping|a1b2c3d4", out);
+  EXPECT_TRUE(p.in_flight);
+  MqttCtrlPing q = {};
+  EXPECT_FALSE(mqttCtrlArmPing(&q, "a1b2c3", out, sizeof(out)));
+  EXPECT_FALSE(mqttCtrlArmPing(&q, "a1b2c3zz", out, sizeof(out)));
+  EXPECT_FALSE(mqttCtrlArmPing(&q, "a1b2c3d4", out, 8));
+  EXPECT_FALSE(q.in_flight);
+}
+
+TEST(Ping, OnlyThePongWithTheNonceInFlightIsTaken) {
+  MqttCtrlPing p = {};
+  char out[32];
+  mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out));
+  EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|deadbeef"), 13, 50));    // foreign
+  EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3d4x"), 14, 50));   // trailing byte
+  EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3"), 11, 50));      // short
+  EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("ping|a1b2c3d4"), 13, 50));    // our own ping
+  EXPECT_TRUE(p.in_flight);
+  EXPECT_TRUE(mqttCtrlTakePong(&p, bytes("pong|A1B2C3D4"), 13, 230));    // either case
+  EXPECT_FALSE(p.in_flight);
+  EXPECT_EQ(230u, p.answered_ms);
+}
+
+TEST(Ping, ASecondPongIsIgnoredTheNonceIsConsumed) {
+  // Abuse rule 1: a bridged broker's echo, or a replay, finds nothing in flight.
+  MqttCtrlPing p = {};
+  char out[32];
+  mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out));
+  ASSERT_TRUE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3d4"), 13, 100));
+  EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3d4"), 13, 900));
+  EXPECT_EQ(100u, p.answered_ms);
+}
+
+TEST(Ping, AStalePongWithNoPingInFlightChangesNothing) {
+  MqttCtrlPing p = {};
+  EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|00000000"), 13, 5));
+  char out[32];
+  mqttCtrlArmPing(&p, "11111111", out, sizeof(out));
+  p.in_flight = false;                          // the ping timed out
+  EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|11111111"), 13, 20000));
+  EXPECT_EQ(0u, p.answered_ms);
+}
+
+TEST(Ping, APongIsRecognisedBeforeAndNeverParsedAsACommand) {
+  // Abuse rule 5: the check is a prefix compare, and a pong is no envelope.
+  EXPECT_TRUE(mqttCtrlIsPong(bytes("pong|a1b2c3d4"), 13));
+  EXPECT_TRUE(mqttCtrlIsPong(bytes("pong|"), 5));
+  EXPECT_FALSE(mqttCtrlIsPong(bytes("pong"), 4));
+  EXPECT_FALSE(mqttCtrlIsPong(bytes("{\"c\":1}"), 7));
+  EXPECT_FALSE(mqttCtrlIsPong(nullptr, 0));
+  MqttCtrlEnvelope env;
+  EXPECT_NE(MQTTCTRL_OK, mqttCtrlParseEnvelope("pong|a1b2c3d4", 13, &env));
+}
+
+TEST(Ping, TheAnswerNamesTheStepThatFailed) {
+  char out[MQTTCTRL_MAX_REPLY];
+  mqttCtrlPingAnswer(MQTTCTRL_PING_OK, 3, 230, "mqtts, jwt", out, sizeof(out));
+  EXPECT_STREQ("OK - pong in 230 ms on slot 3 (mqtts, jwt)", out);
+  mqttCtrlPingAnswer(MQTTCTRL_PING_NOT_CONNECTED, 3, 0, NULL, out, sizeof(out));
+  EXPECT_STREQ("Err - slot 3 not connected", out);
+  mqttCtrlPingAnswer(MQTTCTRL_PING_PUBLISH_REFUSED, 3, 0, NULL, out, sizeof(out));
+  EXPECT_STREQ("Err - publish refused", out);
+  mqttCtrlPingAnswer(MQTTCTRL_PING_NO_PONG, 3, 0, NULL, out, sizeof(out));
+  EXPECT_STREQ("Err - no pong in 10 s: /cmd is not subscribed or the broker is not answering", out);
+  mqttCtrlPingAnswer(MQTTCTRL_PING_OFF, 0, 0, NULL, out, sizeof(out));
+  EXPECT_STREQ("Err - the command plane is off: set mqtt.cmd on", out);
+}
+
+TEST(Ping, IsAdmittedOverThePlaneExactlyAndIsNoTransmit) {
+  // Abuse rule 6: an owner-signed read inside the command budget; nothing on the air.
+  EXPECT_TRUE(allowed("mqtt.cmd ping"));
+  EXPECT_FALSE(allowed("mqtt.cmd ping all"));
+  EXPECT_FALSE(allowed("mqtt.cmd"));
+  EXPECT_FALSE(mqttCtrlIsTransmitCommand("mqtt.cmd ping", 13));
+}
+
 // ---- signed results: r2 (2026-10-08, ar-11) ------------------------------------------
 
 static uint8_t T_PUB[32], T_PRV[64];
@@ -1556,6 +1640,7 @@ TEST(CrossCheck, EveryKnownCommandsVerdictIsWritten) {
     "set mqtt2.username mcoar", "set mqtt2.password x", "set mqtt3.preset custom",
     "set name Foo", "reboot", "clkreboot", "clear stats", "neighbor.remove 4AC61A7F",
     "powersaving on", "gps on", "set ota.auto on", "set ota.check.hours 12",
+    "mqtt.cmd ping", "set autoreply.legacy off",
     // the denied groups
     "set prv.key 00", "set public.key 00", "set mqtt.cmd off", "set mqtt.cmd.slot 2", "get mqtt.cmd.pubkey",
     "set wifi.pwd x", "get wifi.ssid", "password x", "get guest.password", "set alert.psk 00",

@@ -1980,6 +1980,10 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 #endif
   } else if (strcmp(command, "set mqtt.cmd on") == 0 && mqtt_control.slot() == 0) {
     autoSetupMqttControl(reply);
+  } else if (strcmp(command, "mqtt.cmd ping") == 0) {
+    pingMqttControl(reply);
+  } else if (strcmp(command, "get mqtt.cmd") == 0) {
+    describeMqttControl(reply);
   } else if (mqttCtrlSlotClaimRefused(command, mqtt_control.slot())) {
     strcpy(reply, "Err - slot 2 is the command plane's: set mqtt.cmd.slot <n> to move it first");
   } else if (mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply)) {
@@ -2050,9 +2054,74 @@ void MyMesh::setupMqttControl(MQTTBridge* bridge) {
   if (!MqttControl::buildBroadcastTopic(iata, _ctrl_broadcast, sizeof(_ctrl_broadcast))) return;
   MqttControl::buildResultTopic(iata, node_hex, _ctrl_result, sizeof(_ctrl_result));
 
+  mqttCtrlBuildTopic(iata, node_hex, "ping", _ctrl_ping_topic, sizeof(_ctrl_ping_topic));
+
   _ctrl_topics[0] = _ctrl_topic;
   _ctrl_topics[1] = _ctrl_broadcast;
   bridge->setControlSink(this, _ctrl_topics, 2, mqtt_control.slot() - 1);
+}
+
+// `mqtt.cmd ping`: the broker echoes a ping on our own /ping as a pong on our own /cmd,
+// so a pong proves the slot is up, the publish went through, the /cmd subscription
+// holds and the broker is judging this node's topics -- the whole plane, on the spot.
+// The wait blocks the loop, as `ota update` does: up to 10 s, and only when the plane
+// is broken, since a working one answers in a few hundred ms.
+void MyMesh::pingMqttControl(char* reply) {
+  const int slot = mqtt_control.slot();
+  char link[24];
+  if (!mqtt_control.isEnabled() || slot == 0 || bridge == NULL || _ctrl_ping_topic[0] == 0) {
+    mqttCtrlPingAnswer(MQTTCTRL_PING_OFF, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
+    return;
+  }
+  if (!bridge->controlSlotConnected()) {
+    mqttCtrlPingAnswer(MQTTCTRL_PING_NOT_CONNECTED, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
+    return;
+  }
+
+  uint8_t raw[MQTTCTRL_PING_NONCE_LEN / 2];
+  getRNG()->random(raw, sizeof(raw));
+  char nonce[MQTTCTRL_PING_NONCE_LEN + 1];
+  mesh::Utils::toHex(nonce, raw, sizeof(raw));
+  char payload[sizeof(MQTTCTRL_PING_PREFIX) + MQTTCTRL_PING_NONCE_LEN];
+  mqttCtrlArmPing(&_ping, nonce, payload, sizeof(payload));
+
+  unsigned long start = millis();
+  if (!bridge->publishControlResult(_ctrl_ping_topic, payload, strlen(payload), MQTTCTRL_RESULT_QOS)) {
+    _ping.in_flight = false;
+    mqttCtrlPingAnswer(MQTTCTRL_PING_PUBLISH_REFUSED, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
+    return;
+  }
+  while (_ping.in_flight && millis() - start < MQTTCTRL_PING_TIMEOUT_MS) delay(10);
+  if (_ping.in_flight) {
+    _ping.in_flight = false;
+    mqttCtrlPingAnswer(MQTTCTRL_PING_NO_PONG, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
+    return;
+  }
+  bridge->controlSlotLink(link, sizeof(link));
+  mqttCtrlPingAnswer(MQTTCTRL_PING_OK, slot, _ping.answered_ms - start, link, reply,
+                     MQTTCTRL_MAX_REPLY);
+}
+
+// `get mqtt.cmd` on one line: on/off and the counter as before, then the slot's
+// connection, whether the broker acknowledged the /cmd subscription, and how long
+// ago the key last vouched for a command.
+void MyMesh::describeMqttControl(char* reply) {
+  char age[20];
+  if (_ctrl_last_verified_ms == 0) {
+    strcpy(age, "none yet");
+  } else {
+    sprintf(age, "%lu s ago", (millis() - _ctrl_last_verified_ms) / 1000UL);
+  }
+  const int slot = mqtt_control.slot();
+  if (slot == 0 || bridge == NULL) {
+    sprintf(reply, "> %s, counter %u, no slot", mqtt_control.isEnabled() ? "on" : "off",
+            (unsigned)mqtt_control.counter());
+    return;
+  }
+  sprintf(reply, "> %s, counter %u, slot %d %s, /cmd %s, last command %s, pongs %u",
+          mqtt_control.isEnabled() ? "on" : "off", (unsigned)mqtt_control.counter(), slot,
+          bridge->controlSlotConnected() ? "connected" : "not connected",
+          bridge->controlSubscribed() ? "subscribed" : "not subscribed", age, (unsigned)_pongs);
 }
 
 // Drained on the loop task, never on the MQTT event task: verification wants more
@@ -2091,7 +2160,10 @@ void MyMesh::loopMqttControl() {
   // silence is indistinguishable from one that is switched off or un-flashed,
   // and this fleet runs several firmware versions at once, so that ambiguity is
   // exactly what makes it unreadable.
-  if (outcome.authentic) publishMqttControlResult(result, outcome, reply);
+  if (outcome.authentic) {
+    _ctrl_last_verified_ms = millis();
+    publishMqttControlResult(result, outcome, reply);
+  }
 
   // Rollback (ar-11): a freshly flashed image is pending until it proves itself, and
   // the proof is this -- the radio is up, WiFi and the bridge reached the broker, and

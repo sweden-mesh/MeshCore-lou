@@ -323,6 +323,93 @@ static inline bool mqttCtrlSlotClaimRefused(const char* command, int cmd_slot) {
   return cmd_slot == 2 && command != NULL && strcmp(command, "set mqtt.analyzer.eu on") == 0;
 }
 
+// ---- `mqtt.cmd ping` (operator 2026-10-10) -------------------------------------------
+//
+// Proves the whole plane on the spot: the node publishes `ping|<nonce>` on
+// meshcore/<IATA>/<own key>/ping, and the command broker -- never another client --
+// answers `pong|<nonce>` on the node's own /cmd. A pong is not a command. It is
+// recognised before any signature parsing, so it costs a compare and not an Ed25519
+// verify; it is never staged, executed, answered or logged; and it counts only when
+// it carries the nonce of the one ping in flight, which it then consumes, so a second
+// pong (a bridged broker's echo, a replay) is ignored.
+#define MQTTCTRL_PING_TIMEOUT_MS  10000
+#define MQTTCTRL_PING_NONCE_LEN   8
+#define MQTTCTRL_PONG_PREFIX      "pong|"
+#define MQTTCTRL_PING_PREFIX      "ping|"
+
+struct MqttCtrlPing {
+  char nonce[MQTTCTRL_PING_NONCE_LEN + 1];
+  volatile bool in_flight;             // set on the loop task, cleared by the pong's task
+  volatile uint32_t answered_ms;       // millis() the pong was taken
+};
+
+static inline bool mqttCtrlIsPong(const uint8_t* payload, size_t len) {
+  const size_t n = sizeof(MQTTCTRL_PONG_PREFIX) - 1;
+  return payload != NULL && len >= n && memcmp(payload, MQTTCTRL_PONG_PREFIX, n) == 0;
+}
+
+// Arms `ping` with `nonce` (8 hex) and writes the payload to publish. The nonce is
+// stored before the ping is marked in flight, so a pong racing the publish finds it.
+static inline bool mqttCtrlArmPing(MqttCtrlPing* ping, const char* nonce, char* out,
+                                   size_t out_size) {
+  if (ping == NULL || nonce == NULL || out == NULL) return false;
+  if (strlen(nonce) != MQTTCTRL_PING_NONCE_LEN) return false;
+  for (size_t i = 0; i < MQTTCTRL_PING_NONCE_LEN; i++) {
+    if (!isxdigit((unsigned char)nonce[i])) return false;
+  }
+  int n = snprintf(out, out_size, MQTTCTRL_PING_PREFIX "%s", nonce);
+  if (n <= 0 || (size_t)n >= out_size) return false;
+  memcpy(ping->nonce, nonce, MQTTCTRL_PING_NONCE_LEN + 1);
+  ping->in_flight = true;
+  return true;
+}
+
+// Takes a pong for the ping in flight. True only for exactly `pong|<that nonce>`;
+// anything else -- no ping in flight, another nonce, a trailing byte -- changes nothing.
+static inline bool mqttCtrlTakePong(MqttCtrlPing* ping, const uint8_t* payload, size_t len,
+                                    uint32_t now_ms) {
+  const size_t n = sizeof(MQTTCTRL_PONG_PREFIX) - 1;
+  if (ping == NULL || !ping->in_flight || !mqttCtrlIsPong(payload, len)) return false;
+  if (len != n + MQTTCTRL_PING_NONCE_LEN) return false;
+  if (strncasecmp((const char *) &payload[n], ping->nonce, MQTTCTRL_PING_NONCE_LEN) != 0) return false;
+  ping->answered_ms = now_ms;
+  ping->in_flight = false;
+  return true;
+}
+
+// The step that failed, so the console says what is wrong.
+enum MqttCtrlPingStep {
+  MQTTCTRL_PING_OK,
+  MQTTCTRL_PING_OFF,               // no plane: not on, or no slot
+  MQTTCTRL_PING_NOT_CONNECTED,
+  MQTTCTRL_PING_PUBLISH_REFUSED,
+  MQTTCTRL_PING_NO_PONG,
+};
+
+static inline void mqttCtrlPingAnswer(MqttCtrlPingStep step, int slot, uint32_t elapsed_ms,
+                                      const char* link, char* out, size_t out_size) {
+  if (out == NULL || out_size == 0) return;
+  switch (step) {
+    case MQTTCTRL_PING_OK:
+      snprintf(out, out_size, "OK - pong in %u ms on slot %d (%s)", (unsigned)elapsed_ms, slot,
+               link != NULL ? link : "?");
+      break;
+    case MQTTCTRL_PING_OFF:
+      snprintf(out, out_size, "Err - the command plane is off: set mqtt.cmd on");
+      break;
+    case MQTTCTRL_PING_NOT_CONNECTED:
+      snprintf(out, out_size, "Err - slot %d not connected", slot);
+      break;
+    case MQTTCTRL_PING_PUBLISH_REFUSED:
+      snprintf(out, out_size, "Err - publish refused");
+      break;
+    default:
+      snprintf(out, out_size, "Err - no pong in %d s: /cmd is not subscribed or the broker "
+                              "is not answering", MQTTCTRL_PING_TIMEOUT_MS / 1000);
+      break;
+  }
+}
+
 // Assemble the exact bytes the signature covers: the topic, a newline, then the
 // signed part of the payload.
 //
@@ -530,6 +617,7 @@ static inline bool mqttCtrlCommandAllowed(const char* command, size_t len) {
     { "memory", true },
     { "clear stats", true },       // resets counters, nothing else
     { "ota check", true },         // reports the available build; flashes nothing
+    { "mqtt.cmd ping", true },     // a ping to the broker and back; nothing on the air
   };
   for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++) {
     bool ok = verbs[i].exact

@@ -1656,6 +1656,9 @@ bool MQTTBridge::ensureSlotClient(int index) {
         }
       });
     }
+    // This slot subscribes to the control topics and nothing else, so any SUBACK
+    // since it connected is theirs.
+    slot.client->onSubscribe([this](int /*msg_id*/) { _control_subscribed = true; });
   }
 
   slot.client->onConnect([this, index](bool sessionPresent) {
@@ -1690,6 +1693,7 @@ bool MQTTBridge::ensureSlotClient(int index) {
   });
   slot.client->onDisconnect([this, index](bool sessionPresent) {
     MQTT_DEBUG_PRINTLN("MQTT%d disconnected", index + 1);
+    if (index == _control_slot) _control_subscribed = false;
     _slots[index].disconnect_count++;
     if (_slots[index].first_disconnect_time == 0) {
       _slots[index].first_disconnect_time = millis();
@@ -4443,6 +4447,18 @@ void MQTTBridge::setStatsSources(mesh::Dispatcher* dispatcher, mesh::Radio* radi
   _radio = radio;
   _board = board;
   _ms = ms;
+}
+
+void MQTTBridge::controlSlotLink(char* out, size_t out_size) const {
+  if (_control_slot < 0) { snprintf(out, out_size, "-"); return; }
+  const MQTTSlot& slot = _slots[_control_slot];
+  const char* url = slot.preset ? slot.preset->server_url : slot.broker_uri;
+  const char* end = url ? strstr(url, "://") : NULL;
+  bool jwt = mqttSlotUsesJwt(slot.preset != nullptr,
+                             slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT,
+                             slot.audience[0] != '\0');
+  snprintf(out, out_size, "%.*s, %s", end ? (int)(end - url) : 1, end ? url : "?",
+           mqttSlotAuthLabel(jwt));
 }
 
 #endif

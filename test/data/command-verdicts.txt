@@ -74,6 +74,8 @@ allowed|powersaving on
 allowed|gps on
 allowed|set ota.auto on
 allowed|set ota.check.hours 12
+allowed|mqtt.cmd ping
+allowed|set autoreply.legacy off
 denied|set prv.key 00
 denied|set public.key 00
 denied|set mqtt.cmd off

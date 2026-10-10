@@ -17,7 +17,8 @@ Ed25519 signature by the command key this node was given.
 ```
 set mqtt.cmd.pubkey <64 hex characters>   # serial only; the PUBLIC half of the signing key
 set mqtt.cmd on                           # with no slot set: takes one, see below; reboot to apply
-get mqtt.cmd                              # state, and the highest command counter seen
+get mqtt.cmd                              # state, counter, slot, /cmd subscription, last command
+mqtt.cmd ping                             # the whole plane, end to end, on the spot (ar-12)
 ```
 
 **`set mqtt.cmd on` with no slot configured sets the node up by itself** (2026-10-08): it
@@ -98,6 +99,7 @@ The slot is read at boot, when the subscriptions are made. It cannot be set remo
 meshcore/{IATA}/{NODE}/cmd     to one node
 meshcore/{IATA}/all/cmd        to every node in the region
 meshcore/{IATA}/{NODE}/res     the node's answer
+meshcore/{IATA}/{NODE}/ping    the node's ping; the broker answers `pong|<nonce>` on its /cmd
 ```
 
 `{NODE}` is the node's **whole public key**, 64 upper-case hex characters -- the same id the
@@ -117,6 +119,42 @@ command to a correctly configured node went unanswered — `meshcore/JKG/<node>/
 An earlier version used a project-specific prefix to keep control traffic out of the namespace
 observer tooling watches. That separation was never needed: the tooling matches on the leaf
 (`+/packets`, `+/status`), so `/cmd` and `/res` never collided with it.
+
+## Checking the plane: `get mqtt.cmd` and `mqtt.cmd ping`
+
+`get mqtt.cmd` answers on one line (from ar-12):
+
+```
+> on, counter 41, slot 2 connected, /cmd subscribed, last command 312 s ago, pongs 1
+```
+
+whether the slot is connected, whether the broker acknowledged the subscription since it
+connected, and how long ago the command key last vouched for a command.
+
+`mqtt.cmd ping` proves the rest, at the console and without the owner's laptop. The node
+publishes `ping|<8-hex nonce>` on its own `/ping` and waits up to 10 s for the command broker to
+answer `pong|<same nonce>` on its own `/cmd`. The node's identity key is never a registered
+command key, so a message it put on `/cmd` itself would be dropped by the broker by design; the
+echo has to be the broker's. The answer names the step that failed:
+
+```
+OK - pong in 230 ms on slot 2 (mqtts, jwt)
+Err - slot 2 not connected
+Err - publish refused
+Err - no pong in 10 s: /cmd is not subscribed or the broker is not answering
+```
+
+A pong is not a command. It is recognised before any signature parsing, so it costs a string
+compare, never an Ed25519 verify; it is never executed, answered, logged or counted towards
+the signed command that marks a new OTA image valid; and it is taken only with the nonce of
+the one ping in flight, which it consumes, so a second or a stale pong changes nothing. Only
+`pongs` in `get mqtt.cmd` counts them. The wait holds the console for as long as it takes --
+a few hundred ms on a working plane, 10 s on a broken one.
+
+`mqtt.cmd ping` is admitted over the plane as a read, inside the ten-commands-an-hour budget,
+with its answer published once as an `r2` result. It puts nothing on the air. The broker's half
+(`mcbroker`) answers a ping only on the session's own key, at most once per key per 10 s, never
+on `all`, and never fans the ping out.
 
 ## The envelope
 
