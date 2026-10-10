@@ -327,9 +327,12 @@ anything.
 
 ## What is not defended
 
-- **Confidentiality.** Commands and results are public: every login reads every result, and the
-  plaintext listener carries both in the clear. Nothing secret may appear in either — which is
-  what the deny list keeps true.
+- **Confidentiality, for `v1` and broadcasts.** A `v2` command and its `r3` result are sealed end
+  to end between the owner's key and the node (see the envelope above): the broker and other
+  logins see only the topic, the counter, the expiry and the padded length. A `v1` command, its
+  `r1`/`r2` result and every broadcast are readable by every login, and the plaintext listener
+  carries them in the clear; older firmware and older tools use only these. So nothing secret may
+  appear in a command or a result in any version -- which is what the deny list keeps true.
   **What a result may never carry,** and so what the deny list refuses as a read: any key
   (`prv.key`, the command key, `mqtt.owner`, `bridge.secret`), any credential (`password`,
   `guest.password`, `wifi.pwd`, a slot's `password`, `token` or `username`), which network it
