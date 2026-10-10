@@ -21,16 +21,28 @@ get mqtt.cmd                              # state, and the highest command count
 ```
 
 **`set mqtt.cmd on` with no slot configured sets the node up by itself** (2026-10-08): it
-takes the first of slots 3-6 whose preset is `none`, gives it the built-in `mccontrol` preset
--- the default command broker, `mqtts://mqtt.louie.se:8883`, token login like the collectors
--- with packets filtered off (status and neighbours still publish there, which the plane's
-statistics use), points the control plane at that slot, enables it, and answers
-`OK - slot 3, mccontrol (mqtts://mqtt.louie.se:8883), packets off; reboot to apply`. Slots 1
-and 2 are the observer's own and are never taken. A board that runs two slots at once (no
-PSRAM) with both analyzer slots up has no room for a third, and the reply says so and names
-the cure -- turn one off (`set mqtt2.preset none`) -- rather than doing it for you: the
-observer's defaults are the owner's to change. A slot for a different command broker is set
-by hand:
+takes a free slot, gives it the built-in `mccontrol` preset -- the default command broker,
+`mqtts://mqtt.louie.se:8883`, token login like the collectors -- with packets filtered off
+(status and neighbours still publish there, which the plane's statistics use), points the
+control plane at that slot, enables it, and answers
+`OK - slot 3, mccontrol (mqtts://mqtt.louie.se:8883), packets off; reboot to apply`.
+
+Which slot (operator 2026-10-10, from ar-12):
+
+- **Slot 1 is the observer's and is never taken.**
+- **On a board without PSRAM**, which runs two slots at once, slot 2 is the plane's and is
+  taken first when it holds `none` or the Observer's default `analyzer-eu`. Taking
+  `analyzer-eu` turns that uplink off, and the reply says so:
+  `OK - slot 2 (was analyzer-eu, now off), mccontrol (...), packets off; reboot to apply`.
+  Any other preset in slot 2 is a collector the owner chose and is left alone; the pick moves
+  on to 3-6. Afterwards `set mqtt.analyzer.eu on` is refused while the plane holds slot 2 --
+  move the plane with `set mqtt.cmd.slot <n>` first.
+- **With PSRAM** the pick is the first of slots 3-6 whose preset is `none`; slot 2 is never
+  taken there, whatever it holds.
+
+When no slot can run another connection the reply says so and names the cure -- turn one off
+(`set mqtt2.preset none`) -- rather than doing it for you. A slot for a different command
+broker is set by hand:
 
 ```
 set mqttN.preset custom · set mqttN.server mqtts://broker.example:8883 · set mqttN.audience broker.example

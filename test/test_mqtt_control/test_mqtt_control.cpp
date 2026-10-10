@@ -1397,26 +1397,69 @@ TEST(Topics, TheWholeKeyFormFitsTheSignedMessageAndIsRefusedWhenItCannot) {
 
 // ---- `set mqtt.cmd on` picks a slot (2026-10-08) -------------------------------------
 
+// The last argument is "this board runs two slots at once", which is "no PSRAM".
+static const bool PSRAM = false, NO_PSRAM = true;
+
 TEST(AutoSlot, TheFirstFreeSlotFromThreeUp) {
   const char* presets[6] = { "analyzer-us", "analyzer-eu", "none", "none", "none", "none" };
-  EXPECT_EQ(2, mqttCtrlPickSlot(presets, 6));           // slot 3
+  EXPECT_EQ(2, mqttCtrlPickSlot(presets, 6, PSRAM));    // slot 3
   const char* busy3[6] = { "analyzer-us", "analyzer-eu", "meshat.se", "", "none", "none" };
-  EXPECT_EQ(3, mqttCtrlPickSlot(busy3, 6));             // an empty name is free too
+  EXPECT_EQ(3, mqttCtrlPickSlot(busy3, 6, PSRAM));      // an empty name is free too
   const char* upper[6] = { "none", "none", "NONE", "none", "none", "none" };
-  EXPECT_EQ(2, mqttCtrlPickSlot(upper, 6));             // case does not matter
+  EXPECT_EQ(2, mqttCtrlPickSlot(upper, 6, PSRAM));      // case does not matter
 }
 
-TEST(AutoSlot, SlotsOneAndTwoAreNeverTakenEvenWhenFree) {
-  const char* presets[6] = { "none", "none", "custom", "custom", "custom", "custom" };
-  EXPECT_EQ(-1, mqttCtrlPickSlot(presets, 6));
+TEST(AutoSlot, WithPsramSlotsOneAndTwoAreNeverTaken) {
+  const char* free2[6] = { "none", "none", "custom", "custom", "custom", "custom" };
+  EXPECT_EQ(-1, mqttCtrlPickSlot(free2, 6, PSRAM));
+  const char* eu[6] = { "analyzer-us", "analyzer-eu", "custom", "custom", "custom", "custom" };
+  EXPECT_EQ(-1, mqttCtrlPickSlot(eu, 6, PSRAM));
+  const char* eu_free3[6] = { "analyzer-us", "analyzer-eu", "none", "none", "none", "none" };
+  EXPECT_EQ(2, mqttCtrlPickSlot(eu_free3, 6, PSRAM));
+}
+
+TEST(AutoSlot, WithoutPsramSlotTwoIsTakenFirstWhenEmpty) {
+  const char* presets[6] = { "analyzer-us", "none", "none", "none", "none", "none" };
+  EXPECT_EQ(1, mqttCtrlPickSlot(presets, 6, NO_PSRAM));
+  const char* blank[6] = { "analyzer-us", "", "none", "none", "none", "none" };
+  EXPECT_EQ(1, mqttCtrlPickSlot(blank, 6, NO_PSRAM));
+}
+
+TEST(AutoSlot, WithoutPsramTheObserversDefaultInSlotTwoGivesWay) {
+  // Two slots run at once there: the observer's and the plane's.
+  const char* presets[6] = { "analyzer-us", "analyzer-eu", "none", "none", "none", "none" };
+  EXPECT_EQ(1, mqttCtrlPickSlot(presets, 6, NO_PSRAM));
+  const char* upper[6] = { "analyzer-us", "ANALYZER-EU", "none", "none", "none", "none" };
+  EXPECT_EQ(1, mqttCtrlPickSlot(upper, 6, NO_PSRAM));
+}
+
+TEST(AutoSlot, WithoutPsramACollectorTheOwnerChoseInSlotTwoIsLeftAlone) {
+  const char* presets[6] = { "analyzer-us", "meshat.se", "none", "none", "none", "none" };
+  EXPECT_EQ(2, mqttCtrlPickSlot(presets, 6, NO_PSRAM));
+  const char* custom[6] = { "analyzer-us", "custom", "mcoar", "none", "none", "none" };
+  EXPECT_EQ(3, mqttCtrlPickSlot(custom, 6, NO_PSRAM));
+}
+
+TEST(AutoSlot, SlotOneIsNeverTaken) {
+  const char* presets[6] = { "none", "meshat.se", "custom", "custom", "custom", "custom" };
+  EXPECT_EQ(-1, mqttCtrlPickSlot(presets, 6, NO_PSRAM));
+  EXPECT_EQ(-1, mqttCtrlPickSlot(presets, 6, PSRAM));
 }
 
 TEST(AutoSlot, NoFreeSlotIsSaidNotGuessed) {
   const char* presets[6] = { "analyzer-us", "analyzer-eu", "meshat.se", "custom", "meshrank", "waev" };
-  EXPECT_EQ(-1, mqttCtrlPickSlot(presets, 6));
+  EXPECT_EQ(-1, mqttCtrlPickSlot(presets, 6, PSRAM));
   const char* three[3] = { "analyzer-us", "analyzer-eu", "custom" };
-  EXPECT_EQ(-1, mqttCtrlPickSlot(three, 3));
-  EXPECT_EQ(-1, mqttCtrlPickSlot(NULL, 6));
+  EXPECT_EQ(-1, mqttCtrlPickSlot(three, 3, PSRAM));
+  EXPECT_EQ(-1, mqttCtrlPickSlot(NULL, 6, NO_PSRAM));
+}
+
+TEST(AutoSlot, AnalyzerEuOnCannotTakeSlotTwoBackFromThePlane) {
+  EXPECT_TRUE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.eu on", 2));
+  EXPECT_FALSE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.eu off", 2));
+  EXPECT_FALSE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.eu on", 3));   // the plane is elsewhere
+  EXPECT_FALSE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.eu on", 0));
+  EXPECT_FALSE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.us on", 2));
 }
 
 // ---- signed results: r2 (2026-10-08, ar-11) ------------------------------------------

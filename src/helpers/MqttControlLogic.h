@@ -286,18 +286,41 @@ static inline bool mqttCtrlBuildTopic(const char* iata, const char* leaf, const 
 }
 
 // Which MQTT slot `set mqtt.cmd on` takes when none is configured (2026-10-08):
-// the first of slots 3..6 whose preset is `none`. Slots 1 and 2 are the observer's
-// own defaults and are never taken, whatever they hold. `presets` is the per-slot
-// preset name, `slot_count` how many the build has. Returns the 0-based index, or
-// -1 when every candidate is in use -- then the caller says so rather than picks.
+// the first of slots 3..6 whose preset is `none`. `presets` is the per-slot preset
+// name, `slot_count` how many the build has. Returns the 0-based index, or -1 when
+// every candidate is in use -- then the caller says so rather than picks.
+//
+// Slot 1 is the observer's and is never taken. Slot 2 is taken first, but only on a
+// board that runs two slots at once (no PSRAM; operator 2026-10-10): there the two
+// that run are the observer's and the plane's, and slot 2 is free for it when it holds
+// nothing or the Observer's own default, `analyzer-eu` -- an uplink the owner did not
+// choose. Any other preset there is a collector the owner did choose, and is left
+// alone. With PSRAM slot 2 is never taken, whatever it holds.
 #define MQTTCTRL_FIRST_AUTO_SLOT 2
-static inline int mqttCtrlPickSlot(const char* const* presets, int slot_count) {
+#define MQTTCTRL_SLOT2_DEFAULT   "analyzer-eu"
+
+static inline bool mqttCtrlPresetFree(const char* name) {
+  return name == NULL || name[0] == 0 || strcasecmp(name, "none") == 0;
+}
+
+static inline int mqttCtrlPickSlot(const char* const* presets, int slot_count,
+                                   bool two_slot_board) {
   if (presets == NULL) return -1;
+  if (two_slot_board && slot_count >= 2
+      && (mqttCtrlPresetFree(presets[1]) || strcasecmp(presets[1], MQTTCTRL_SLOT2_DEFAULT) == 0)) {
+    return 1;
+  }
   for (int i = MQTTCTRL_FIRST_AUTO_SLOT; i < slot_count; i++) {
-    const char* name = presets[i];
-    if (name == NULL || name[0] == 0 || strcasecmp(name, "none") == 0) return i;
+    if (mqttCtrlPresetFree(presets[i])) return i;
   }
   return -1;
+}
+
+// `set mqtt.analyzer.eu on` writes slot 2 whatever it holds. Once the command plane
+// has that slot, that would turn the plane off in silence, so it is refused with the
+// reason: moving the plane is the owner's choice, made with `mqtt.cmd.slot`.
+static inline bool mqttCtrlSlotClaimRefused(const char* command, int cmd_slot) {
+  return cmd_slot == 2 && command != NULL && strcmp(command, "set mqtt.analyzer.eu on") == 0;
 }
 
 // Assemble the exact bytes the signature covers: the topic, a newline, then the

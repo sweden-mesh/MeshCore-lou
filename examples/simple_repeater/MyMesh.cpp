@@ -1980,6 +1980,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 #endif
   } else if (strcmp(command, "set mqtt.cmd on") == 0 && mqtt_control.slot() == 0) {
     autoSetupMqttControl(reply);
+  } else if (mqttCtrlSlotClaimRefused(command, mqtt_control.slot())) {
+    strcpy(reply, "Err - slot 2 is the command plane's: set mqtt.cmd.slot <n> to move it first");
   } else if (mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply)) {
     // reply already filled in
 #endif
@@ -2002,21 +2004,25 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 // reconnect: docs/mbedtls-tls-footprint.md records a measured largest-free-block
 // ratchet on this exact path, so the buffers are members and stay that way.
 // `set mqtt.cmd on` with no slot configured, the one line a fresh node needs
-// (operator decision 2026-10-08): take the first free slot from 3 up, give it the
+// (operator decision 2026-10-08): take a free slot (mqttCtrlPickSlot says which:
+// slot 2 first on a board that runs two at once, else 3 up), give it the
 // `mccontrol` preset with packets filtered off (status and neighbours still go,
 // which the plane's statistics use), point the control plane at it, enable, and
-// say what was done. The observer's own slots 1-2 and its active-slot cap are not
-// touched: when the cap is reached the reply names the cure and nothing is set.
+// say what was done. Slot 1 and the active-slot cap are not touched: when the cap
+// is reached the reply names the cure and nothing is set.
 void MyMesh::autoSetupMqttControl(char* reply) {
   MQTTPrefs* obs = _cli.getObserverPrefs();
   const char* presets[RUNTIME_MQTT_SLOTS];
   for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) presets[i] = obs->mqtt_slot_preset[i];
-  int idx = mqttCtrlPickSlot(presets, RUNTIME_MQTT_SLOTS);
+  const bool two_slot_board = MQTTBridge::getMaxActiveSlots() <= 2;
+  int idx = mqttCtrlPickSlot(presets, RUNTIME_MQTT_SLOTS, two_slot_board);
   if (idx < 0) {
     strcpy(reply, "Err - no free slot 3-6: set mqttN.preset none on one, or set mqtt.cmd.slot <n>");
     return;
   }
-  if (bridge != NULL && !bridge->hasRoomForAnotherSlot()) {
+  // Taking slot 2 from analyzer-eu frees the position it takes; anything else needs room.
+  const bool was_analyzer = strcasecmp(presets[idx], MQTTCTRL_SLOT2_DEFAULT) == 0;
+  if (!was_analyzer && bridge != NULL && !bridge->hasRoomForAnotherSlot()) {
     sprintf(reply, "Err - this board runs %d slots at once and all are taken: turn one off "
                    "(set mqtt2.preset none) and send 'set mqtt.cmd on' again",
             MQTTBridge::getMaxActiveSlots());
@@ -2028,7 +2034,8 @@ void MyMesh::autoSetupMqttControl(char* reply) {
   obs->mqtt_slot_packet_filter[idx] = 0;        // packets off; status and neighbours still publish
   _cli.savePrefs(_fs);
   mqtt_control.setSlotAndEnable((uint8_t)(idx + 1));
-  sprintf(reply, "OK - slot %d, mccontrol (%s), packets off; reboot to apply", idx + 1, p->server_url);
+  sprintf(reply, "OK - slot %d%s, mccontrol (%s), packets off; reboot to apply", idx + 1,
+          was_analyzer ? " (was analyzer-eu, now off)" : "", p->server_url);
 }
 
 void MyMesh::setupMqttControl(MQTTBridge* bridge) {
