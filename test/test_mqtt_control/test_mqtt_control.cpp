@@ -1551,6 +1551,15 @@ TEST(Ping, APongIsRecognisedBeforeAndNeverParsedAsACommand) {
   EXPECT_NE(MQTTCTRL_OK, mqttCtrlParseEnvelope("pong|a1b2c3d4", 13, &env));
 }
 
+TEST(Ping, BeforeAnyPingTheStateSaysNone) {
+  // QA: a zeroed state read as "pong in 0 ms" before the first ping.
+  MqttCtrlPing p = {};
+  EXPECT_EQ(MQTTCTRL_PING_NONE, p.last);
+  EXPECT_FALSE(p.waiting);
+  EXPECT_FALSE(mqttCtrlPingPoll(&p, 123));
+  EXPECT_EQ(MQTTCTRL_PING_NONE, p.last);
+}
+
 TEST(Ping, SettlesOnThePongWithTheRoundTrip) {
   MqttCtrlPing p = {};
   char out[32];

@@ -1996,7 +1996,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
   } else if (strcmp(command, "get mqtt.cmd") == 0) {
     describeMqttControl(reply);
   } else if (mqttCtrlTouchesSlot(command, mqtt_control.slot())) {
-    sprintf(reply, "Err - slot %d is the command plane's: set mqtt.cmd.slot over serial first",
+    sprintf(reply, "Err - slot %d is the command plane's: move it with set mqtt.cmd.slot first (not over the plane)",
             mqtt_control.slot());
   } else if (mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply)) {
     // reply already filled in
@@ -2146,7 +2146,7 @@ void MyMesh::describeMqttControl(char* reply) {
   } else if (_ping.last == MQTTCTRL_PING_PUBLISH_REFUSED) {
     strcpy(ping, "publish refused");
   } else {
-    strcpy(ping, "none yet");
+    strcpy(ping, "-");
   }
   sprintf(reply, "> %s, counter %u, slot %d %s, /cmd %s, last command %s, ping %s",
           mqtt_control.isEnabled() ? "on" : "off", (unsigned)mqtt_control.counter(), slot,

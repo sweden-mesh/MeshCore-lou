@@ -138,7 +138,7 @@ observer tooling watches. That separation was never needed: the tooling matches 
 
 whether the slot is connected, whether the broker acknowledged the subscription since it
 connected, how long ago the command key last vouched for a command, and how the last ping
-ended: `pong in N ms`, `no pong in 10 s`, `publish refused`, `waiting` or `none yet`.
+ended: `pong in N ms`, `no pong in 10 s`, `publish refused`, `waiting` or `-` (no ping since boot).
 
 `mqtt.cmd ping` proves the rest, at the console and without the owner's laptop. The node
 publishes `ping|<8-hex nonce>` on its own `/ping`, answers at once, and goes on repeating:

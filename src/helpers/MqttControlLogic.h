@@ -355,14 +355,15 @@ static inline bool mqttCtrlTouchesSlot(const char* command, int cmd_slot) {
 #define MQTTCTRL_PONG_PREFIX      "pong|"
 #define MQTTCTRL_PING_PREFIX      "ping|"
 
-// The step that failed, so the console says what is wrong. NONE: no ping yet.
+// The step that failed, so the console says what is wrong. NONE, first so that a
+// zeroed state reads as no ping yet rather than as a pong in 0 ms.
 enum MqttCtrlPingStep {
+  MQTTCTRL_PING_NONE,
   MQTTCTRL_PING_OK,
   MQTTCTRL_PING_OFF,               // no plane: not on, or no slot
   MQTTCTRL_PING_NOT_CONNECTED,
   MQTTCTRL_PING_PUBLISH_REFUSED,
   MQTTCTRL_PING_NO_PONG,
-  MQTTCTRL_PING_NONE,
 };
 
 // The ping never blocks the loop: it is armed, published, and settled later by
