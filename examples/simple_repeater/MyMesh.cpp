@@ -1453,6 +1453,15 @@ void MyMesh::begin(FILESYSTEM *fs) {
       MESH_DEBUG_PRINTLN("Setting device ID: %s", device_id);
       bridge->setDeviceID(device_id);
 
+      // Each slot's client id ends in a tag only this node can compute: a signature is
+      // deterministic, so the same key gives the same tag on every boot.
+      static const char tag_label[] = "mqtt client id";
+      uint8_t tag_sig[SIGNATURE_SIZE];
+      self_id.sign(tag_sig, (const uint8_t *) tag_label, sizeof(tag_label) - 1);
+      char tag[MQTT_SLOT_CLIENT_TAG_LEN + 1];
+      mesh::Utils::toHex(tag, tag_sig, MQTT_SLOT_CLIENT_TAG_LEN / 2);
+      bridge->setClientIdTag(tag);
+
       // Set firmware version
       bridge->setFirmwareVersion(getFirmwareVer());
 

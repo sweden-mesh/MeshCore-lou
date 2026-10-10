@@ -38,41 +38,45 @@ TEST(SlotAuth, TheLabelIsShortAndSaysWhichOne) {
 // ---- one client id per slot (firmware TODO 13) ----------------------------
 
 static const char* KEY = "A0586238E1C2D3F4A0586238E1C2D3F4A0586238E1C2D3F4A0586238E1C2D3F4";
+static const char* TAG = "9F04C21B";
 
-TEST(SlotClientId, IsTheNodeIdAndTheSlotNumber) {
+TEST(SlotClientId, IsTheNodeIdTheSlotNumberAndThePrivateTag) {
   char id[MQTT_SLOT_CLIENT_ID_SIZE];
-  ASSERT_TRUE(mqttSlotClientId(KEY, 0, id, sizeof(id)));
-  EXPECT_STREQ("A0586238-1", id);
-  ASSERT_TRUE(mqttSlotClientId(KEY, 5, id, sizeof(id)));
-  EXPECT_STREQ("A0586238-6", id);
+  ASSERT_TRUE(mqttSlotClientId(KEY, TAG, 0, id, sizeof(id)));
+  EXPECT_STREQ("A0586238-1-9F04C21B", id);
+  ASSERT_TRUE(mqttSlotClientId(KEY, TAG, 5, id, sizeof(id)));
+  EXPECT_STREQ("A0586238-6-9F04C21B", id);
+  EXPECT_LE(strlen(id), 23u);                  // every MQTT 3.1.1 broker accepts 23
 }
 
 TEST(SlotClientId, NoTwoSlotsOfOneNodeShareOne) {
   // The broker refuses a second login under a held client id, so an Observer slot and
   // the command plane's on one broker must never present the same one.
   char ids[6][MQTT_SLOT_CLIENT_ID_SIZE];
-  for (int i = 0; i < 6; i++) ASSERT_TRUE(mqttSlotClientId(KEY, i, ids[i], sizeof(ids[i])));
+  for (int i = 0; i < 6; i++) ASSERT_TRUE(mqttSlotClientId(KEY, TAG, i, ids[i], sizeof(ids[i])));
   for (int i = 0; i < 6; i++) {
     for (int j = i + 1; j < 6; j++) EXPECT_STRNE(ids[i], ids[j]) << i << " and " << j;
   }
 }
 
-TEST(SlotClientId, TwoNodesDoNotShareOneEither) {
+TEST(SlotClientId, IsNotComputableFromThePublicKeyAlone) {
+  // Two nodes, or one node and a stranger who knows its key, with different tags: the
+  // public part alone does not name the session.
   char a[MQTT_SLOT_CLIENT_ID_SIZE], b[MQTT_SLOT_CLIENT_ID_SIZE];
-  ASSERT_TRUE(mqttSlotClientId("0723BA17", 2, a, sizeof(a)));
-  ASSERT_TRUE(mqttSlotClientId("0106809E", 2, b, sizeof(b)));
+  ASSERT_TRUE(mqttSlotClientId(KEY, TAG, 2, a, sizeof(a)));
+  ASSERT_TRUE(mqttSlotClientId(KEY, "00000000", 2, b, sizeof(b)));
   EXPECT_STRNE(a, b);
 }
 
-TEST(SlotClientId, LeavesTheDefaultUntilTheDeviceIdIsAKey) {
-  // The bridge starts with a placeholder; a shared id built from it would be worse than
-  // esp-mqtt's per-board default.
+TEST(SlotClientId, LeavesTheDefaultUntilTheIdAndTagAreKnown) {
   char id[MQTT_SLOT_CLIENT_ID_SIZE];
-  EXPECT_FALSE(mqttSlotClientId("DEVICE_ID_PLACEHOLDER", 0, id, sizeof(id)));
-  EXPECT_FALSE(mqttSlotClientId("A05862", 0, id, sizeof(id)));
-  EXPECT_FALSE(mqttSlotClientId(nullptr, 0, id, sizeof(id)));
-  EXPECT_FALSE(mqttSlotClientId(KEY, -1, id, sizeof(id)));
-  EXPECT_FALSE(mqttSlotClientId(KEY, 0, id, 4));
+  EXPECT_FALSE(mqttSlotClientId("DEVICE_ID_PLACEHOLDER", TAG, 0, id, sizeof(id)));
+  EXPECT_FALSE(mqttSlotClientId(KEY, "", 0, id, sizeof(id)));        // no tag yet
+  EXPECT_FALSE(mqttSlotClientId(KEY, "9F04C2", 0, id, sizeof(id)));
+  EXPECT_FALSE(mqttSlotClientId(nullptr, TAG, 0, id, sizeof(id)));
+  EXPECT_FALSE(mqttSlotClientId(KEY, nullptr, 0, id, sizeof(id)));
+  EXPECT_FALSE(mqttSlotClientId(KEY, TAG, -1, id, sizeof(id)));
+  EXPECT_FALSE(mqttSlotClientId(KEY, TAG, 0, id, 12));
 }
 
 int main(int argc, char** argv) {

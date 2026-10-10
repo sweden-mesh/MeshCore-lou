@@ -85,8 +85,11 @@ opening TLS and presenting a token where a password login was meant, while `get 
 and `get mqttN.server` read exactly as intended. `get mqtt.stats` ends each slot with the mode it
 is really in — `s2=11/0 pw` or `s2=0/4 jwt` — and `set mqttN.audience` with no value clears it.
 
-**Each slot connects with its own client id**, the node's 8-hex id and the slot number
-(`A0586238-3`), so one node may keep an Observer slot and the command slot on the same broker.
+**Each slot connects with its own client id**, the node's 8-hex id, the slot number and a tag
+derived from the node's private key (`A0586238-3-9F04C21B`), so one node may keep an Observer
+slot and the command slot on the same broker. The tag keeps the id private: a broker closes
+the older session when a new one takes its id, and on a broker with public credentials an id
+computable from the node's key would let anyone knock its slot off.
 Before ar-12 every slot of a board was esp-mqtt's `ESP32_<MAC>`, and a broker refused the
 second login for as long as the first held the id.
 

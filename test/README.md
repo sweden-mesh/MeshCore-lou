@@ -45,7 +45,7 @@ does not reflect the GoogleTest count — run the built binary directly
 | `test_mesh_tables` | `src/helpers/SimpleMeshTables.h` | duplicate suppression: `wasSeen` is a pure query that never inserts, `markSeen` affects only its own packet, and the flood/direct duplicate counters increment on the right path |
 | `test_utf8_helpers` | `src/helpers/UTF8Helpers.h` | truncation that never splits a code point, and rejection of malformed, truncated and unexpected-continuation sequences |
 | `test_webconfig_batch` | `src/helpers/WebConfigBatch.h` | the config-batch / reboot / stop state machine: reqid replay without re-applying, busy only while pending, 25 ms inter-command pacing with inclusive release, and `millis()` rollover. Mirrors `WebConfigServer.cpp`; see the scope note in the header |
-| `test_mqtt_slot_auth` | `src/helpers/MQTTSlotAuth.h` | how a slot signs in (JWT or password, the stale-audience case) and its label; one client id per slot, the node id and slot number, never shared by two slots or two nodes |
+| `test_mqtt_slot_auth` | `src/helpers/MQTTSlotAuth.h` | how a slot signs in (JWT or password, the stale-audience case) and its label; one client id per slot, the node id, slot number and a private tag, never shared by two slots nor computable from the public key |
 | `test_kiss_modem` | `examples/kiss_modem/KissModem.h` | KISS framing over the modem path (`native_kiss_modem` environment) |
 
 ## Conventions (and how to add a suite)

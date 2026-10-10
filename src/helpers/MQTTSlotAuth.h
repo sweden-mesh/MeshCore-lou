@@ -28,20 +28,33 @@ static inline bool mqttSlotUsesJwt(bool has_preset, bool preset_is_jwt, bool has
 // gets cut first.
 static inline const char* mqttSlotAuthLabel(bool uses_jwt) { return uses_jwt ? "jwt" : "pw"; }
 
-// The client id a slot connects with: the node's 8-hex id and the slot number,
-// `A0586238-3`. Left to esp-mqtt every client on a board is `ESP32_<3 MAC bytes>`, so two
-// slots of one node on one broker -- an Observer slot and the command plane's -- shared
-// it, and the broker refused the second login for as long as the first held the id.
-// False, leaving esp-mqtt's default, while the device id is not yet a key.
-#define MQTT_SLOT_CLIENT_ID_SIZE 12
+// The client id a slot connects with: the node's 8-hex id, the slot number and a tag
+// only the node can compute, `A0586238-3-9F04C21B`. Left to esp-mqtt every client on a
+// board is `ESP32_<3 MAC bytes>`, so two slots of one node on one broker -- an Observer
+// slot and the command plane's -- shared it, and the broker refused the second login for
+// as long as the first held the id. The tag is what keeps the id from being public: a
+// broker closes the older session when a new one takes its id, and on a broker whose
+// credentials are public (meshat.se) an id anyone could compute from the node's key would
+// let anyone knock the node's Observer slot off. The caller derives the tag from the
+// node's private key, so it is stable across reboots and reflashes and needs no storage.
+// 21 characters, inside the 23 every MQTT 3.1.1 broker must accept.
+// False, leaving esp-mqtt's default, while the device id or the tag is not yet known.
+#define MQTT_SLOT_CLIENT_ID_SIZE 24
+#define MQTT_SLOT_CLIENT_TAG_LEN 8
 
-static inline bool mqttSlotClientId(const char* device_id, int slot_index, char* out,
-                                    size_t size) {
-  if (device_id == NULL || out == NULL || size < MQTT_SLOT_CLIENT_ID_SIZE) return false;
-  if (slot_index < 0 || slot_index > 8) return false;
-  for (int i = 0; i < 8; i++) {
-    if (!isxdigit((unsigned char)device_id[i])) return false;
+static inline bool mqttSlotHex(const char* s, int n) {
+  if (s == NULL) return false;
+  for (int i = 0; i < n; i++) {
+    if (!isxdigit((unsigned char)s[i])) return false;
   }
-  snprintf(out, size, "%.8s-%d", device_id, slot_index + 1);
+  return true;
+}
+
+static inline bool mqttSlotClientId(const char* device_id, const char* tag, int slot_index,
+                                    char* out, size_t size) {
+  if (out == NULL || size < MQTT_SLOT_CLIENT_ID_SIZE) return false;
+  if (slot_index < 0 || slot_index > 8) return false;
+  if (!mqttSlotHex(device_id, 8) || !mqttSlotHex(tag, MQTT_SLOT_CLIENT_TAG_LEN)) return false;
+  snprintf(out, size, "%.8s-%d-%.8s", device_id, slot_index + 1, tag);
   return true;
 }

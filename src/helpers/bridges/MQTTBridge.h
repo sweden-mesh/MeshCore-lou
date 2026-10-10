@@ -753,9 +753,16 @@ public:
   bool controlSubscribed() const { return _control_subscribed; }
   void controlSlotLink(char* out, size_t out_size) const;
 
+  // The private part of every slot's client id (mqttSlotClientId); call before begin().
+  void setClientIdTag(const char* tag) {
+    strncpy(_client_tag, tag, sizeof(_client_tag) - 1);
+    _client_tag[sizeof(_client_tag) - 1] = 0;
+  }
+
 private:
   ControlSink* _control_sink = NULL;
   volatile bool _control_subscribed = false;
+  char _client_tag[MQTT_SLOT_CLIENT_TAG_LEN + 1] = {0};
   const char* const* _control_topics = NULL;
   size_t _control_topic_count = 0;
   int _control_slot = -1;
