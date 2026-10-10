@@ -313,7 +313,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
     // it is also the scope every reply floods in.
     char name[AUTOREPLY_REGION_NAME_MAX + 1];
     int verdict = autoReplyRegionVerdict(&command[21], name, sizeof(name),
-        [&regions](const char* n) { return regions.findByName(n) != NULL; });
+        [&regions](const char* n) { return autoReplyFindRegion(regions, n) != NULL; });
     if (verdict == AUTOREPLY_REGION_BAD_NAME) {
       sprintf(reply, "Err - a region is %d-%d of a-z 0-9, groups joined by single '-' (se-jkp-mul)",
               AUTOREPLY_REGION_NAME_MIN, AUTOREPLY_REGION_NAME_MAX);
@@ -387,7 +387,8 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
     // request's, and the line says so. Channels last: they are what can be long, and
     // 160 characters hold the longest region and IATA code.
     const char* scope = !_region[0] ? "request scope"
-                      : regions.findByNamePrefix(_region) ? "scope"
+                      : autoReplyFindRegion(regions, _region) || regions.findByNamePrefix(_region)
+                        ? "scope"
                       : "not in table: request scope";
     snprintf(reply, 160, "> %s, mode %s, private %s, direct %s, %d hops, region %s (%s), "
                          "legacy %s: %s",

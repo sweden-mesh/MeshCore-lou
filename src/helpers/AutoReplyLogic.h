@@ -112,6 +112,23 @@ static inline int autoReplyRegionVerdict(const char* arg, char* name, size_t nam
   return known(name) ? AUTOREPLY_REGION_SET : AUTOREPLY_REGION_NOT_IN_TABLE;
 }
 
+// The region table's entry for an `autoreply.region` name, whatever case the table
+// spells it in: the name is stored folded, but `region put SE-JKP` keeps the capitals,
+// and the scope must still be found. A '#' in front of a table name is ignored, as the
+// table's own lookups do. `Map` is anything with getCount() and getByIdx(i)->name --
+// RegionMap on the node, a small fake in the host suite. NULL when there is none.
+template <typename Map>
+static inline auto autoReplyFindRegion(const Map& map, const char* name)
+    -> decltype(map.getByIdx(0)) {
+  if (name == NULL || name[0] == 0) return NULL;
+  for (int i = 0; i < map.getCount(); i++) {
+    const char* n = map.getByIdx(i)->name;
+    if (n[0] == '#') n++;
+    if (strcasecmp(n, name) == 0) return map.getByIdx(i);
+  }
+  return NULL;
+}
+
 // The two channels a node answers on, each empty when it answers nothing there:
 // '#test-<region>', and while `legacy` is on '#test-<iata>' beside it -- with or
 // without a region, so an upgrade never silences a node. A region spelled like the

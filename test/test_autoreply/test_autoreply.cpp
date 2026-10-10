@@ -1927,3 +1927,36 @@ TEST(ChannelMatch, OnlyReadyChannelsWithTheHashAndNoMoreThanAsked) {
   EXPECT_EQ(1, autoReplyMatchingChannels(hashes, both, 2, 0x0B, idx, 1));
   EXPECT_EQ(0, autoReplyMatchingChannels(hashes, both, 2, 0x0C, idx, 4));
 }
+
+// ---- the region table looked up without regard to case (ar-13) -------------
+
+struct FakeEntry { char name[31]; };
+struct FakeMap {
+  std::vector<FakeEntry> e;
+  int getCount() const { return (int)e.size(); }
+  const FakeEntry* getByIdx(int i) const { return &e[i]; }
+};
+
+TEST(FindRegion, IgnoresCaseAndALeadingHash) {
+  FakeMap m{{{"SE-JKP"}, {"#se-jkp-mul"}, {"jkg"}}};
+  EXPECT_EQ(&m.e[0], autoReplyFindRegion(m, "se-jkp"));
+  EXPECT_EQ(&m.e[1], autoReplyFindRegion(m, "se-jkp-mul"));
+  EXPECT_EQ(&m.e[2], autoReplyFindRegion(m, "JKG"));
+}
+
+TEST(FindRegion, WholeNamesOnlyAndNothingForNothing) {
+  FakeMap m{{{"se-jkp-mul"}}};
+  EXPECT_EQ(nullptr, autoReplyFindRegion(m, "se-jkp"));      // no prefix match here
+  EXPECT_EQ(nullptr, autoReplyFindRegion(m, ""));
+  EXPECT_EQ(nullptr, autoReplyFindRegion(m, nullptr));
+  FakeMap empty;
+  EXPECT_EQ(nullptr, autoReplyFindRegion(empty, "se-jkp"));
+}
+
+TEST(FindRegion, TheVerdictFindsATableNameInCapitals) {
+  // `region put SE-JKP` then `set autoreply.region se-jkp` must be accepted.
+  FakeMap m{{{"SE-JKP"}}};
+  char name[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_EQ(AUTOREPLY_REGION_SET, autoReplyRegionVerdict("se-jkp", name, sizeof(name),
+      [&m](const char* n) { return autoReplyFindRegion(m, n) != nullptr; }));
+}

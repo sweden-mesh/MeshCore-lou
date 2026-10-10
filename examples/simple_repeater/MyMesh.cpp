@@ -483,7 +483,9 @@ bool MyMesh::resolveAutoReplyScope(TransportKey* scope) {
   const char* name = auto_reply.replyRegion();
   if (name == NULL || name[0] == 0) return false;
 
-  const RegionEntry* entry = region_map.findByNamePrefix(name);
+  // Without regard to case first: the name is stored folded, the table may not be.
+  const RegionEntry* entry = autoReplyFindRegion(region_map, name);
+  if (entry == NULL) entry = region_map.findByNamePrefix(name);
   if (entry == NULL) return false;
   return region_map.getTransportKeysFor(*entry, scope, 1) > 0;
 }
