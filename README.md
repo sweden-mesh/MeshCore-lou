@@ -131,15 +131,26 @@ That is it. Check it took:
 
 ```
 get autoreply
-> on #test-sto 'test' max 8 hops, direct flood
+> on, region -, scope request, legacy on: legacy #test-sto, max 8 hops, direct flood, mode flood, private on
 ```
 
 Now add the channel it named — `#test-sto` above — in your MeshCore client, send `test` to
 it, and every repeater in range answers.
 
-> **If `get autoreply` says `no region - set mqtt.iata`**, the node has no region code yet.
-> Set the airport code nearest you and the channel appears: `set mqtt.iata STO`. Observer
-> nodes that already publish to MQTT have this set, because it is what they publish under.
+That is the legacy channel, `#test-<iata>` from the node's `mqtt.iata`. To answer on your
+region's own channel as well, name the region (it must be in the node's region table):
+
+```
+region put se-sto
+region save
+set autoreply.region se-sto
+> OK - #test-se-sto + legacy #test-sto
+```
+
+> **If `get autoreply` says `no channel`**, the node has neither a region nor an IATA code.
+> Set one of them: `set autoreply.region <name>` as above, or `set mqtt.iata STO`. Observer
+> nodes that already publish to MQTT have the IATA code set, because it is what they publish
+> under.
 
 To turn it off again: `set autoreply off`.
 
@@ -153,11 +164,12 @@ To turn it off again: `set autoreply off`.
 | `set autoreply.slot <0-64>` | `0` | This repeater's place in the reply order. Every repeater that hears a request answers it, and two replies in the same moment collide; two in different slots cannot. **`0` means unassigned**, and the repeater derives a slot from its own public key instead — so a mesh where nobody hands out slots still spreads its replies, at the cost of the occasional coincidence. Assign slots and there are none. |
 | `set autoreply.window <start> <end>` | `10 120` | The seconds after a request inside which every reply lands. It starts late enough for the request's own flood to be over, and for repeaters on older firmware to have answered. Nobody is waiting on a test reply, so a long window costs only patience while a collision costs the measurement. Up to 600 s, with at least 4 s per slot. |
 | `set autoreply.slots <1-64>` | `16` | How many slots the window is cut into. More is not better: past about one slot per 4 s they become narrower than the replies they separate. |
-| `set autoreply.region <code>` | *(request scope)* | Which region replies are scoped to. Empty mirrors whatever scope the request arrived under. |
+| `set autoreply.region <name>` | *(none)* | The test channel `#test-<name>` and the region every reply is scoped to; it must be in the region table. `a-z0-9` groups joined by single hyphens, 3-25 characters. Empty: no region channel, and replies mirror the request's scope. |
+| `set autoreply.legacy on\|off` | `on` | Also answer on `#test-<iata>`, from `mqtt.iata` -- the channel releases before ar-12 used -- so an upgrade never silences a node. |
 | `set autoreply.mode flood\|private\|direct` | `flood` | How a request that names no mode is answered. `private` and `direct` answer with a text message to the requester alone, and only when the request carries their key. |
 | `set autoreply.private on\|off` | `on` | Whether a test request sent to this repeater alone, off the channel, is answered. On since 2026-09-20: a private request is answered privately, and one that is never answered reads like a dead repeater. |
 | `get autoreply` | — | Current state, in one line. |
-| `get autoreply.channel` | — | The channel name. **Read-only** — it follows `set mqtt.iata`. |
+| `get autoreply.channel` | — | The channels the node answers on. **Read-only** — they follow `autoreply.region` and, with legacy on, `mqtt.iata`. |
 | `get autoreply.hops` | — | Read the hop limit back. |
 | `get autoreply.direct.flood` | — | Read the direct-reply mode back. |
 | `get autoreply.slot` | — | Read the slot back; `0` says it is derived from the key. |
