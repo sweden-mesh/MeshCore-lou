@@ -19,17 +19,25 @@ the requester's name in brackets so several arriving together can be told apart.
 
 ## Setup
 
-The channel is not something you choose. It is always `#test-<iata>`, built from the region
-code the node already publishes under, so **the node must have one set**:
+The channel is `#test-<region>`, named by `autoreply.region` — the same name that bounds how
+far a reply floods. The region must be in the node's region table first:
 
 ```
-set mqtt.iata STO
+region put se-jkp
+region save
+set autoreply.region se-jkp
 set autoreply on
 ```
 
-`get autoreply.channel` then reports `#test-sto`. Add that channel in your client and send
-`test` to it. Every repeater in direct range answers. Nothing else is needed for a range
-check.
+`get autoreply.channel` then reports `#test-se-jkp + legacy #test-jkg` on a node whose
+`mqtt.iata` is `JKG`. Add the channel in your client and send `test` to it. Every repeater in
+direct range answers. Nothing else is needed for a range check.
+
+**The legacy channel.** Releases before ar-12 answered on `#test-<iata>`, derived from
+`set mqtt.iata`. While `autoreply.legacy` is on — the default, and the setting every upgraded
+node comes up with — the node answers there too, with or without a region set, so an upgrade
+never silences a node. A region moves its measurement to the new channel once, by switching
+legacy off everywhere in one planned change.
 
 To also get answers from repeaters **more than one hop away**, the request has to carry a
 region scope — see [How far the reply travels](#how-far-the-reply-travels) below.
@@ -40,8 +48,9 @@ To turn it back off:
 set autoreply off
 ```
 
-A node with no region code set — no `mqtt.iata`, or the `XXX` placeholder — has no channel
-to listen on and stays silent even with `set autoreply on`. `get autoreply` says so.
+A node with neither channel — no `autoreply.region`, and legacy off or no `mqtt.iata` (or the
+`XXX` placeholder) — has nothing to listen on and stays silent even with `set autoreply on`.
+`get autoreply` says so.
 
 **Rolling firmware back.** The settings live in the node's own `/autoreply` file, and every
 release reads the files all earlier releases wrote, so upgrading keeps them. Downgrading does
@@ -50,7 +59,9 @@ from a newer file, so after a rollback to such a version the feature comes up **
 to be switched on again with `set autoreply on`, and `hops`, `delay` and `region` re-entered.
 From version 5 on the format is append-only: a newer file is read by the fields the older
 firmware knows and the rest is ignored, so a rollback to any version from 5 onwards keeps
-every setting that version understands.
+every setting that version understands. Format 8 (ar-12) appends `autoreply.legacy`; a
+release before ar-12 keeps `autoreply.region` as the reply's scope alone and answers on
+`#test-<iata>` as it always did.
 
 ## Commands
 
@@ -61,14 +72,28 @@ every setting that version understands.
 
 **Default:** `off`
 
-#### Read the channel the repeater listens on
+#### Read the channels the repeater listens on
 
 - `get autoreply.channel`
 
-**Read-only.** The channel is always `#test-` plus the node's `mqtt.iata` code, folded to
-lower case; change it with `set mqtt.iata`. Deriving it rather than accepting a name is what
-keeps every repeater off the mesh-wide `#test`, where a reply from each of them would be
-spam — a three-character region code can never produce one of the shared channel names.
+**Read-only.** The channel is `#test-` plus `autoreply.region`, and while legacy is on also
+`#test-` plus the node's `mqtt.iata` code folded to lower case. Change them with
+`set autoreply.region` and `set autoreply.legacy`. Building the name rather than accepting
+one is what keeps every repeater off the mesh-wide `#test`, where a reply from each of them
+would be spam — a name that starts `#test-` can never be one of the shared channel names.
+
+#### Keep answering on the legacy channel
+
+- `get autoreply.legacy`
+- `set autoreply.legacy on|off`
+
+**Default:** `on`
+
+While on and `mqtt.iata` is set, the node also answers on `#test-<iata>`, the channel every
+release before ar-12 answered on. Each channel keeps its own rate limits, so a `test` sent on
+both draws two answers from the node. A probe the node originates (`trigger test`) goes to the
+legacy channel while it is answered and to the region's after, so the measurement moves
+channel once, when legacy is switched off.
 
 **Note:** the channel key is derived from the name — the first 16 bytes of `sha256("#name")`
 — so there is no PSK to configure or share. Any client that adds a channel of the same name
@@ -76,11 +101,9 @@ gets the same key.
 
 **Note:** the name is **lower case**. The key is the hash of the name exactly as stored, and
 clients only accept lower-case channel names, so an upper-case name would produce a channel
-nobody could join. `set mqtt.iata STO` therefore gives `#test-sto` — type that into your
+nobody could join. `set autoreply.region SE-JKP` therefore stores `se-jkp` and gives
+`#test-se-jkp`, and `set mqtt.iata STO` gives the legacy `#test-sto` — type those into your
 client.
-
-Region names are **not** folded, so if you pair the channel with a region for the multi-hop
-path, spell the region exactly the same on every node.
 
 The trigger keyword is case-insensitive: `test`, `Test` and `TEST` all work. Many phone
 keyboards capitalise the first letter, so this matters in practice.
@@ -165,11 +188,16 @@ is settable at runtime rather than compiled in.
 
 **Parameters:**
 
-- `name`: a region from the node's own region table, or empty to clear.
+- `name`: a region from the node's own region table, or empty to clear. Groups of `a-z` and
+  `0-9` joined by single hyphens, 3–25 characters (`se-jkp`, `se-jkp-mul`); upper case is
+  folded to lower. 25 is what a companion can add: `#test-` plus 25 fills its 32-byte
+  channel name. A name not in the table is refused with the `region put` that fixes it.
 
-**Default:** empty — the reply mirrors whatever scope the request arrived under.
+**Default:** empty — no region channel, and the reply mirrors whatever scope the request
+arrived under.
 
-With a region set, every reply is scoped to it regardless of how the request arrived. This
+The same name is the test channel (`#test-<name>`, see above). With a region set, every reply
+is scoped to it regardless of how the request arrived. This
 bounds the airtime a survey costs the wider mesh while still letting a reply cross the whole
 region being measured.
 
@@ -270,8 +298,11 @@ request is, how the answer travels and what it costs is under
 - `get autoreply`
 
 ```
-> on #test-sto 'test' max 8 hops, direct flood, mode flood, private off
+> on, region se-jkp, scope se-jkp, legacy on: #test-se-jkp + legacy #test-jkg, max 8 hops, direct flood, mode flood, private on
 ```
+
+The region, the scope the replies flood in, legacy, and every channel the node answers on,
+so a site check sees all of them on one line.
 
 ## How far the reply travels
 
@@ -321,14 +352,10 @@ Note a stock client has no per-channel scope setting — it applies a device-wid
 scope and sends unscoped when none is set (see the `// TODO: have per-channel send_scope`
 in the companion firmware), so unscoped is what most meshes actually carry.
 
-To use the cheaper scoped path, pair the channel with a region of the same name:
+To use the cheaper scoped path, set `autoreply.region`: the channel and the reply's scope then
+carry one name, and a client that scopes its request to that region keeps both ways inside it.
 
-```
-region def #test-sto
-region allowf #test-sto
-```
-
-Region keys are derived from the name in the same way, so `#test-sto` needs no key
+Region keys are derived from the name in the same way, so a region needs no key
 distribution either. See [CLI commands](cli_commands.md) for the full `region` syntax.
 
 ## Private replies
@@ -393,8 +420,8 @@ A request may reach the repeater either way, and the answer travels accordingly:
 private"*). It was off, so a private request got nothing back — which reads from the outside
 exactly like a dead repeater. A node that has already stored a config keeps whatever it stored,
 so the new default reaches a node on a fresh flash or after an erase; a node upgrading from a
-config older than v6, which has no field for it, takes the default. It still needs `autoreply on` and a region
-set — the gate every reply shares, since a node with no region has no auto-reply at all.
+config older than v6, which has no field for it, takes the default. It still needs `autoreply on` and a channel
+— the gate every reply shares, since a node with no channel has no auto-reply at all.
 `autoreply.hops` does not apply: it bounds which of the requests every repeater hears this one
 answers, and a private request was addressed to this node and nobody else, so distance is not
 a reason to leave it unanswered — the hop count is reported, not judged.

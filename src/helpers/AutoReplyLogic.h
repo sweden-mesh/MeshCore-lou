@@ -7,6 +7,7 @@
 #include <strings.h>
 
 #include "MQTTObserverValidation.h"
+#include "SlidingBudget.h"
 
 // Pure, dependency-free decisions behind the repeater's auto-reply. Factored out
 // of examples/simple_repeater/AutoReply.cpp so the channel derivation, the
@@ -39,6 +40,89 @@ static inline bool autoReplyDeriveChannel(const char* iata, char* out, size_t ou
   for (; iata[i]; i++) out[prefix_len + i] = tolower(iata[i]);
   out[prefix_len + i] = 0;
   return true;
+}
+
+// The bounds of an `autoreply.region` name. 25 is what a companion can add as a
+// channel: '#test-' plus 25 plus the terminator fills its 32-byte channel name, so a
+// longer region would name a channel no app could join.
+#define AUTOREPLY_REGION_NAME_MIN  3
+#define AUTOREPLY_REGION_NAME_MAX  25
+
+// Fold an `autoreply.region` name to lower case into `out` and check its shape:
+// groups of a-z0-9 joined by single hyphens ('se-jkp-mul'; not '-x', 'x-' or 'a--b'),
+// 3-25 characters. A hashtag key is the hash of the exact name, so 'SE-JKP' would be
+// another channel; folding here makes the stored name the one every client types,
+// and the strict shape turns a typo into an error rather than a silent new channel.
+static inline bool autoReplyRegionName(const char* in, char* out, size_t out_size) {
+  if (out == NULL || out_size == 0) return false;
+  out[0] = 0;
+  if (in == NULL) return false;
+  size_t len = strlen(in);
+  if (len < AUTOREPLY_REGION_NAME_MIN || len > AUTOREPLY_REGION_NAME_MAX || len >= out_size) {
+    return false;
+  }
+  for (size_t i = 0; i < len; i++) {
+    char c = (char)tolower((unsigned char)in[i]);
+    bool ok = c == '-' ? i > 0 && i < len - 1 && in[i - 1] != '-'
+                       : (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+    if (!ok) {
+      out[0] = 0;
+      return false;
+    }
+    out[i] = c;
+  }
+  out[len] = 0;
+  return true;
+}
+
+// The channel an `autoreply.region` names: '#test-' plus the region. False, leaving
+// `out` empty, for no region or one that is not a valid name -- a node whose region
+// was stored by an older release, before the shape was enforced, answers on no
+// region channel rather than on a channel nobody could add.
+static inline bool autoReplyRegionChannel(const char* region, char* out, size_t out_size) {
+  if (out == NULL || out_size == 0) return false;
+  out[0] = 0;
+  char name[AUTOREPLY_REGION_NAME_MAX + 1];
+  if (!autoReplyRegionName(region, name, sizeof(name))) return false;
+  size_t prefix_len = strlen(AUTOREPLY_CHANNEL_PREFIX);
+  if (prefix_len + strlen(name) >= out_size) return false;
+  memcpy(out, AUTOREPLY_CHANNEL_PREFIX, prefix_len);
+  strcpy(&out[prefix_len], name);
+  return true;
+}
+
+// What `set autoreply.region <arg>` does. `known` answers whether a folded name is in
+// the node's region table: the name is also the scope every reply floods in, and a
+// scope the node does not have would quietly fall back to the request's.
+enum {
+  AUTOREPLY_REGION_SET,          // `name` holds the folded name to store
+  AUTOREPLY_REGION_CLEARED,      // an empty argument: no region channel, request scope
+  AUTOREPLY_REGION_BAD_NAME,
+  AUTOREPLY_REGION_NOT_IN_TABLE  // `name` holds the folded name, for the error
+};
+
+template <typename Known>
+static inline int autoReplyRegionVerdict(const char* arg, char* name, size_t name_size,
+                                         Known known) {
+  if (arg == NULL || arg[0] == 0) {
+    if (name != NULL && name_size > 0) name[0] = 0;
+    return AUTOREPLY_REGION_CLEARED;
+  }
+  if (!autoReplyRegionName(arg, name, name_size)) return AUTOREPLY_REGION_BAD_NAME;
+  return known(name) ? AUTOREPLY_REGION_SET : AUTOREPLY_REGION_NOT_IN_TABLE;
+}
+
+// The two channels a node answers on, each empty when it answers nothing there:
+// '#test-<region>', and while `legacy` is on '#test-<iata>' beside it -- with or
+// without a region, so an upgrade never silences a node. A region spelled like the
+// IATA code names the legacy channel itself; it is then answered once, as the region's.
+static inline void autoReplyChannelNames(const char* region, const char* iata, bool legacy,
+                                         char* region_out, char* legacy_out, size_t out_size) {
+  autoReplyRegionChannel(region, region_out, out_size);
+  if (!legacy || !autoReplyDeriveChannel(iata, legacy_out, out_size)
+      || strcmp(legacy_out, region_out) == 0) {
+    legacy_out[0] = 0;
+  }
 }
 
 // A sender that was recently answered. The firmware holds a fixed ring of these,
@@ -126,6 +210,19 @@ static inline bool autoReplySenderAllowed(AutoReplySender* senders, uint8_t coun
   next_slot = (next_slot + 1) % count;
   return true;
 }
+
+// The budgets one channel's requests spend: the per-sender cooldown ring and the
+// channel's share of replies. Each channel has its own, so a test sent on both the
+// region's channel and the legacy one is two requests, and neither spends the other's.
+struct AutoReplyBudgets {
+  SlidingBudget limiter;
+  AutoReplySender senders[AUTOREPLY_MAX_SENDERS];
+  uint8_t next_sender;
+
+  AutoReplyBudgets() : limiter(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS), next_sender(0) {
+    memset(senders, 0, sizeof(senders));
+  }
+};
 
 // A correlation id is exactly this many hex characters. Fixed rather than ranged
 // so the reply budget can be reasoned about, and so a half-typed id is a
@@ -319,6 +416,7 @@ static inline uint32_t autoReplySlotDelayMs(uint8_t rotated, uint8_t slots,
 //   v5  ... mode
 //   v6  ... private
 //   v7  ... slot window_start(LE16) window_end(LE16) slots
+//   v8  ... legacy                          from ar-12 region[] also names the channel
 //
 // Append-only from v4: a later version adds fields after the ones before it, never
 // between them, so a file written by *newer* firmware is read by the fields this one
@@ -327,7 +425,7 @@ static inline uint32_t autoReplySlotDelayMs(uint8_t rotated, uint8_t slots,
 #ifndef AUTOREPLY_MAX_REGION
   #define AUTOREPLY_MAX_REGION 31
 #endif
-#define AUTOREPLY_CONFIG_VERSION   7
+#define AUTOREPLY_CONFIG_VERSION   8
 #define AUTOREPLY_CONFIG_MAX_BYTES 64
 // Whether a `test` addressed privately to this node is answered at all. **On** since
 // 2026-09-20 (operator): "when someone messages the repeater in private the answer should
@@ -347,6 +445,12 @@ static inline uint32_t autoReplySlotDelayMs(uint8_t rotated, uint8_t slots,
 
 #define AUTOREPLY_HOPS_DEF         8
 
+// Whether the node also answers on '#test-<iata>', the channel every release before
+// ar-12 answered on. On by default and for every older config, so an upgrade never
+// silences a node: the region's own channel is added beside the old one, and the
+// old one goes only when a region switches it off in one planned change.
+#define AUTOREPLY_LEGACY_DEF       true
+
 struct AutoReplyStoredConfig {
   bool enabled;
   uint8_t hops;
@@ -358,6 +462,7 @@ struct AutoReplyStoredConfig {
   uint16_t window_start;
   uint16_t window_end;
   uint8_t slots;
+  bool legacy;
 };
 
 static inline void autoReplyConfigDefaults(AutoReplyStoredConfig* c) {
@@ -370,6 +475,7 @@ static inline void autoReplyConfigDefaults(AutoReplyStoredConfig* c) {
   c->window_start = AUTOREPLY_WINDOW_START_DEF;
   c->window_end = AUTOREPLY_WINDOW_END_DEF;
   c->slots = AUTOREPLY_SLOTS_DEF;
+  c->legacy = AUTOREPLY_LEGACY_DEF;
 }
 
 // Reads a stored config of any version into `out`, which should hold the defaults on
@@ -405,6 +511,7 @@ static inline bool autoReplyConfigDecode(const uint8_t* buf, size_t len,
       out->window_end = (uint16_t)(buf[at] | (buf[at + 1] << 8)); at += 2;
       out->slots = buf[at++];
     }
+    if (ver >= 8 && AR_HAS(1)) out->legacy = buf[at++] != 0;
     // Only a standing mode is stored; anything else is a damaged file and takes the
     // reply every node sends today.
     if (out->mode != AUTOREPLY_MODE_PRIVATE && out->mode != AUTOREPLY_MODE_DIRECT) {
@@ -440,7 +547,7 @@ static inline bool autoReplyConfigDecode(const uint8_t* buf, size_t len,
 // Writes the current version. Returns the bytes written, or 0 if `size` is too small.
 static inline size_t autoReplyConfigEncode(const AutoReplyStoredConfig* c, uint8_t* buf,
                                            size_t size) {
-  const size_t need = 1 + 4 + sizeof(c->region) + 1 + 1 + 6;
+  const size_t need = 1 + 4 + sizeof(c->region) + 1 + 1 + 6 + 1;
   if (c == NULL || buf == NULL || size < need) return 0;
   size_t at = 0;
   buf[at++] = AUTOREPLY_CONFIG_VERSION;
@@ -455,6 +562,7 @@ static inline size_t autoReplyConfigEncode(const AutoReplyStoredConfig* c, uint8
   buf[at++] = (uint8_t)(c->window_start & 0xFF); buf[at++] = (uint8_t)(c->window_start >> 8);
   buf[at++] = (uint8_t)(c->window_end & 0xFF);   buf[at++] = (uint8_t)(c->window_end >> 8);
   buf[at++] = c->slots;
+  buf[at++] = c->legacy ? 1 : 0;
   return at;
 }
 

@@ -1060,8 +1060,8 @@ void MyMesh::onControlDataRecv(mesh::Packet* packet) {
   }
 }
 
-// The auto-reply channel is '#test-<iata>', so it follows the observer region code.
-// Builds without the MQTT bridge have no region, and no auto-reply channel.
+// The legacy auto-reply channel is '#test-<iata>', so it follows the observer region
+// code. Builds without the MQTT bridge have no IATA code, and no legacy channel.
 const char* MyMesh::autoReplyRegion() const {
 #ifdef WITH_MQTT_BRIDGE
   return _cli.getObserverPrefs()->mqtt_iata;
@@ -1086,7 +1086,7 @@ void MyMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Gro
 
   uint8_t temp[AUTOREPLY_MAX_PAYLOAD];
   AutoReplyTarget target;
-  int payload_len = auto_reply.buildReply(packet, data, len, _prefs.node_name,
+  int payload_len = auto_reply.buildReply(packet, channel, data, len, _prefs.node_name,
                                           radio_driver.getLastRSSI(),
                                           getRTCClock()->getCurrentTimeUnique(), temp, &target);
   if (payload_len == 0) return;
@@ -1144,7 +1144,7 @@ void MyMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Gro
   }
 }
 
-// Originate a probe on '#test-<iata>' -- the second vantage point this whole
+// Originate a probe on the test channel -- the second vantage point this whole
 // sprint exists for. Every run so far has started at one node, so degree in the
 // derived graph is as much a fact about where we sit as about the mesh.
 //
@@ -1155,7 +1155,7 @@ void MyMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Gro
 bool MyMesh::triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply) {
   mesh::GroupChannel channel;
   if (!auto_reply.probeChannel(autoReplyRegion(), &channel)) {
-    strcpy(reply, "Err - no region set, no channel to probe on");
+    strcpy(reply, "Err - no channel to probe on: set autoreply.region");
     return false;
   }
 
@@ -1983,7 +1983,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
   } else if (mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply)) {
     // reply already filled in
 #endif
-  } else if (auto_reply.handleCommand(autoReplyRegion(), command, reply)) {
+  } else if (auto_reply.handleCommand(autoReplyRegion(), region_map, command, reply)) {
     // reply already filled in
   } else if (autoReplyParseTrigger(command, AUTOREPLY_KEYWORD, &trigger_id, &trigger_id_len,
                                    &trigger_mode)) {

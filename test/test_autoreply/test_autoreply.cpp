@@ -1704,3 +1704,198 @@ TEST(AutoReplyConfig, AV5FilesTrailingByteIsNotThePrivateSwitch) {
   EXPECT_EQ(decodeFrom(b).priv, AUTOREPLY_PRIVATE_DEF);
   EXPECT_TRUE(AUTOREPLY_PRIVATE_DEF);   // or the line above proves nothing
 }
+
+// ---- the channel named by autoreply.region, and the legacy one (ar-12) ------
+//
+// Interview 2026-10-10: one setting names the channel and the reply's scope;
+// `autoreply.legacy`, on by default, keeps '#test-<iata>' answered beside it.
+
+// '#test-' + 25 + NUL: a companion's 32-byte channel name, AUTOREPLY_MAX_CHANNEL.
+static const size_t REGION_CHANNEL_BUF = 32;
+
+TEST(RegionName, AcceptsGroupsJoinedBySingleHyphens) {
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_TRUE(autoReplyRegionName("se-jkp", out, sizeof(out)));
+  EXPECT_STREQ("se-jkp", out);
+  EXPECT_TRUE(autoReplyRegionName("se-jkp-mul", out, sizeof(out)));
+  EXPECT_TRUE(autoReplyRegionName("jkg", out, sizeof(out)));
+  EXPECT_TRUE(autoReplyRegionName("a1-2b", out, sizeof(out)));
+}
+
+TEST(RegionName, RefusesALeadingTrailingOrDoubledHyphen) {
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_FALSE(autoReplyRegionName("-xyz", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("xyz-", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("ab--cd", out, sizeof(out)));
+  EXPECT_STREQ("", out);
+}
+
+TEST(RegionName, RefusesAnythingButLettersDigitsAndHyphens) {
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_FALSE(autoReplyRegionName("se_jkp", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("se jkp", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("#se-jkp", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("$se-jkp", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("j\xc3\xb6k", out, sizeof(out)));   // no accents
+  EXPECT_FALSE(autoReplyRegionName(nullptr, out, sizeof(out)));
+}
+
+TEST(RegionName, LengthIsThreeToTwentyFive) {
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_FALSE(autoReplyRegionName("ab", out, sizeof(out)));
+  EXPECT_TRUE(autoReplyRegionName("abc", out, sizeof(out)));
+  std::string max(AUTOREPLY_REGION_NAME_MAX, 'a');
+  EXPECT_TRUE(autoReplyRegionName(max.c_str(), out, sizeof(out)));
+  std::string over(AUTOREPLY_REGION_NAME_MAX + 1, 'a');
+  EXPECT_FALSE(autoReplyRegionName(over.c_str(), out, sizeof(out)));
+  // The longest region's channel fills a companion's channel name exactly.
+  char ch[REGION_CHANNEL_BUF];
+  EXPECT_TRUE(autoReplyRegionChannel(max.c_str(), ch, sizeof(ch)));
+  EXPECT_EQ(strlen(ch) + 1, REGION_CHANNEL_BUF);
+}
+
+TEST(RegionName, FoldsToLowerCase) {
+  // A hashtag key is the hash of the exact name: '#test-SE-JKP' would be a channel of
+  // its own, which nobody probes.
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_TRUE(autoReplyRegionName("SE-Jkp-MUL", out, sizeof(out)));
+  EXPECT_STREQ("se-jkp-mul", out);
+  char ch[REGION_CHANNEL_BUF];
+  EXPECT_TRUE(autoReplyRegionChannel("SE-JKP", ch, sizeof(ch)));
+  EXPECT_STREQ("#test-se-jkp", ch);
+}
+
+TEST(RegionVerdict, TheNameMustBeInTheRegionTable) {
+  char name[AUTOREPLY_REGION_NAME_MAX + 1];
+  std::vector<std::string> asked;
+  auto table = [&asked](const char* n) { asked.push_back(n); return strcmp(n, "se-jkp") == 0; };
+  EXPECT_EQ(autoReplyRegionVerdict("SE-JKP", name, sizeof(name), table), AUTOREPLY_REGION_SET);
+  EXPECT_STREQ("se-jkp", name);
+  EXPECT_EQ(autoReplyRegionVerdict("se-jkp-mul", name, sizeof(name), table),
+            AUTOREPLY_REGION_NOT_IN_TABLE);
+  EXPECT_STREQ("se-jkp-mul", name);           // folded, for the 'region put' in the error
+  ASSERT_EQ(asked.size(), 2u);
+  EXPECT_EQ(asked[0], "se-jkp");              // the table is asked with the folded name
+}
+
+TEST(RegionVerdict, ABadNameNeverReachesTheTableAndEmptyClears) {
+  char name[AUTOREPLY_REGION_NAME_MAX + 1] = "old";
+  int asked = 0;
+  auto table = [&asked](const char*) { asked++; return true; };
+  EXPECT_EQ(autoReplyRegionVerdict("a--b", name, sizeof(name), table), AUTOREPLY_REGION_BAD_NAME);
+  EXPECT_EQ(autoReplyRegionVerdict("", name, sizeof(name), table), AUTOREPLY_REGION_CLEARED);
+  EXPECT_STREQ("", name);
+  EXPECT_EQ(asked, 0);
+}
+
+struct Channels { char region[REGION_CHANNEL_BUF]; char legacy[REGION_CHANNEL_BUF]; };
+
+static Channels channelsFor(const char* region, const char* iata, bool legacy) {
+  Channels c;
+  autoReplyChannelNames(region, iata, legacy, c.region, c.legacy, REGION_CHANNEL_BUF);
+  return c;
+}
+
+TEST(ChannelNames, LegacyOnAnswersBothWithARegion) {
+  Channels c = channelsFor("se-jkp", "JKG", true);
+  EXPECT_STREQ("#test-se-jkp", c.region);
+  EXPECT_STREQ("#test-jkg", c.legacy);
+}
+
+TEST(ChannelNames, LegacyOnWithoutARegionStillAnswersTheOldChannel) {
+  // Ruling 4: an upgrade never silences a node.
+  Channels c = channelsFor("", "JKG", true);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("#test-jkg", c.legacy);
+}
+
+TEST(ChannelNames, LegacyOffLeavesOnlyTheRegion) {
+  Channels c = channelsFor("se-jkp", "JKG", false);
+  EXPECT_STREQ("#test-se-jkp", c.region);
+  EXPECT_STREQ("", c.legacy);
+  // and with no region either, the node is silent (ruling 2)
+  c = channelsFor("", "JKG", false);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("", c.legacy);
+}
+
+TEST(ChannelNames, NoIataMeansNoLegacyChannel) {
+  Channels c = channelsFor("se-jkp", "", true);
+  EXPECT_STREQ("#test-se-jkp", c.region);
+  EXPECT_STREQ("", c.legacy);
+  c = channelsFor("se-jkp", "XXX", true);
+  EXPECT_STREQ("", c.legacy);
+  c = channelsFor("se-jkp", nullptr, true);
+  EXPECT_STREQ("", c.legacy);
+  c = channelsFor("", nullptr, true);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("", c.legacy);
+}
+
+TEST(ChannelNames, ARegionSpelledLikeTheIataIsAnsweredOnce) {
+  Channels c = channelsFor("jkg", "JKG", true);
+  EXPECT_STREQ("#test-jkg", c.region);
+  EXPECT_STREQ("", c.legacy);
+}
+
+TEST(ChannelNames, AStoredRegionOfTheOldShapeNamesNoChannel) {
+  // An older release stored any string as the scope; one that is not a valid name now
+  // gets no region channel rather than one nobody could add -- and legacy still answers.
+  Channels c = channelsFor("$private scope", "JKG", true);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("#test-jkg", c.legacy);
+}
+
+TEST(ChannelBudgets, TwoChannelsSpendTheirOwnReplies) {
+  // A test sent on both channels is two requests, each on its own limits.
+  AutoReplyBudgets region_lane, legacy_lane;
+  const uint32_t now = 100000;
+  for (uint32_t i = 0; i < AUTOREPLY_MAX_REPLIES; i++) {
+    ASSERT_TRUE(autoReplySenderAllowed(region_lane.senders, AUTOREPLY_MAX_SENDERS,
+                                       region_lane.next_sender, 1000 + i, now,
+                                       AUTOREPLY_WINDOW_SECS));
+    ASSERT_TRUE(region_lane.limiter.allow(now));
+  }
+  EXPECT_FALSE(region_lane.limiter.allow(now));
+  EXPECT_FALSE(autoReplySenderAllowed(region_lane.senders, AUTOREPLY_MAX_SENDERS,
+                                      region_lane.next_sender, 1000, now, AUTOREPLY_WINDOW_SECS));
+  // the same sender, at the same moment, on the other channel
+  EXPECT_TRUE(autoReplySenderAllowed(legacy_lane.senders, AUTOREPLY_MAX_SENDERS,
+                                     legacy_lane.next_sender, 1000, now, AUTOREPLY_WINDOW_SECS));
+  EXPECT_TRUE(legacy_lane.limiter.allow(now));
+}
+
+TEST(AutoReplyConfig, V8AddsLegacyOnByDefault) {
+  // Every older file predates the flag, so it reads as on: an upgrade keeps answering.
+  std::vector<uint8_t> b = v4Prefix(7, "se-jkp");
+  b.insert(b.end(), {AUTOREPLY_MODE_FLOOD, 1, 0, 10, 0, 120, 0, 16});
+  EXPECT_TRUE(decodeFrom(b).legacy);
+  b[0] = 8; b.push_back(0);
+  EXPECT_FALSE(decodeFrom(b).legacy);
+  b.back() = 1;
+  EXPECT_TRUE(decodeFrom(b).legacy);
+  AutoReplyStoredConfig fresh;
+  autoReplyConfigDefaults(&fresh);
+  EXPECT_TRUE(fresh.legacy);
+}
+
+TEST(AutoReplyConfig, LegacyOffRoundTrips) {
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  in.legacy = false;
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  EXPECT_EQ(buf[0], 8);
+  EXPECT_FALSE(decodeFrom(std::vector<uint8_t>(buf, buf + n)).legacy);
+}
+
+TEST(AutoReplyConfig, APreAr12RegionLoadsIntoItsNewMeaning) {
+  // ar-11 stored `autoreply.region` as the reply's scope alone; read by ar-12 it also
+  // names the channel, and legacy keeps the IATA channel answered beside it.
+  std::vector<uint8_t> b = v4Prefix(7, "se-jkp");
+  b.insert(b.end(), {AUTOREPLY_MODE_FLOOD, 1, 0, 10, 0, 120, 0, 16});
+  AutoReplyStoredConfig c = decodeFrom(b);
+  EXPECT_STREQ("se-jkp", c.region);
+  Channels ch = channelsFor(c.region, "JKG", c.legacy);
+  EXPECT_STREQ("#test-se-jkp", ch.region);
+  EXPECT_STREQ("#test-jkg", ch.legacy);
+}

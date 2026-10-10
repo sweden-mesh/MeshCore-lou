@@ -29,15 +29,10 @@ AutoReply::AutoReply()
   : _fs(NULL), _enabled(false), _hops(8), _direct_flood(true),
     _window_start(AUTOREPLY_WINDOW_START_DEF), _window_end(AUTOREPLY_WINDOW_END_DEF),
     _slots(AUTOREPLY_SLOTS_DEF), _mode(AUTOREPLY_MODE_FLOOD), _private(AUTOREPLY_PRIVATE_DEF),
-    _slot(AUTOREPLY_SLOT_UNASSIGNED),
-    _ready(false),
-    _limiter(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS),
+    _slot(AUTOREPLY_SLOT_UNASSIGNED), _legacy(AUTOREPLY_LEGACY_DEF),
     _private_limiter(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS)
 {
-  _iata[0] = 0;
   _region[0] = 0;
-  memset(_senders, 0, sizeof(_senders));
-  _next_sender = 0;
   memset(_private_senders, 0, sizeof(_private_senders));
   _next_private = 0;
 }
@@ -64,30 +59,40 @@ void AutoReply::begin(FILESYSTEM* fs) {
   load();
 }
 
-// The region is owned by the observer config and can change at any time, so the
-// channel is re-derived whenever it has. The hashtag channel key is the first 16
-// bytes of sha256 of the name. Only the key and its hash are kept: the name is a
-// pure function of the region, so the few messages that print it rebuild it.
-void AutoReply::refreshChannel(const char* iata) {
-  if (iata == NULL) iata = "";
-  if (strcmp(iata, _iata) == 0) return;
+// A hashtag channel's key is the first 16 bytes of sha256 of its name, so a lane is
+// re-keyed only when the name it should answer on has changed.
+void AutoReply::deriveLane(AutoReplyLane& lane, const char* name) {
+  if (strcmp(name, lane.name) == 0) return;
+  StrHelper::strncpy(lane.name, name, sizeof(lane.name));
+  if (!lane.ready()) return;
 
-  StrHelper::strncpy(_iata, iata, sizeof(_iata));
+  memset(lane.channel.secret, 0, sizeof(lane.channel.secret));
+  mesh::Utils::sha256(lane.channel.secret, 16, (const uint8_t *) name, strlen(name));
+  mesh::Utils::sha256(lane.channel.hash, sizeof(lane.channel.hash), lane.channel.secret, 16);
+  MESH_DEBUG_PRINTLN("AutoReply: channel '%s' (hash %02X)", name, (uint32_t)lane.channel.hash[0]);
+}
 
-  char name[AUTOREPLY_MAX_CHANNEL];
-  _ready = autoReplyDeriveChannel(_iata, name, sizeof(name));
-  if (!_ready) {
-    MESH_DEBUG_PRINTLN("AutoReply: no region set, staying silent - use 'set mqtt.iata'");
-    return;
+// The region is ours, but the IATA code behind the legacy channel is owned by the
+// observer config and can change at any time, so both are re-derived on every use.
+void AutoReply::refreshChannels(const char* iata) {
+  char region_name[AUTOREPLY_MAX_CHANNEL];
+  char legacy_name[AUTOREPLY_MAX_CHANNEL];
+  autoReplyChannelNames(_region, iata, _legacy, region_name, legacy_name, sizeof(region_name));
+  deriveLane(_lanes[0], region_name);
+  deriveLane(_lanes[1], legacy_name);
+}
+
+// "#test-se-jkp + legacy #test-jkg", for the replies that say where the node answers.
+void AutoReply::describeChannels(char* out, size_t size) const {
+  if (_lanes[0].ready() && _lanes[1].ready()) {
+    snprintf(out, size, "%s + legacy %s", _lanes[0].name, _lanes[1].name);
+  } else if (_lanes[0].ready()) {
+    snprintf(out, size, "%s", _lanes[0].name);
+  } else if (_lanes[1].ready()) {
+    snprintf(out, size, "legacy %s", _lanes[1].name);
+  } else {
+    snprintf(out, size, "no channel - set autoreply.region");
   }
-
-  memset(_channel.secret, 0, sizeof(_channel.secret));
-  mesh::Utils::sha256(_channel.secret, 16, (const uint8_t *) name, strlen(name));
-  mesh::Utils::sha256(_channel.hash, sizeof(_channel.hash), _channel.secret, 16);
-
-  MESH_DEBUG_PRINTLN("AutoReply: channel '%s' (hash %02X), keyword '%s', max %d hops, %s",
-                     name, (uint32_t)_channel.hash[0], AUTOREPLY_KEYWORD,
-                     (uint32_t)_hops, _enabled ? "on" : "off");
 }
 
 void AutoReply::load() {
@@ -133,6 +138,7 @@ void AutoReply::toStored(AutoReplyStoredConfig* c) const {
   c->window_start = _window_start;
   c->window_end = _window_end;
   c->slots = _slots;
+  c->legacy = _legacy;
 }
 
 void AutoReply::fromStored(const AutoReplyStoredConfig& c) {
@@ -147,28 +153,29 @@ void AutoReply::fromStored(const AutoReplyStoredConfig& c) {
   _window_start = c.window_start;
   _window_end = c.window_end;
   _slots = c.slots;
+  _legacy = c.legacy;
 }
 
 int AutoReply::searchChannelsByHash(const char* iata, const uint8_t* hash,
                                     mesh::GroupChannel channels[], int max_matches) {
-  refreshChannel(iata);
-  if (!_enabled || !_ready) return 0;
-  if (memcmp(hash, _channel.hash, sizeof(_channel.hash)) != 0) {
-    MESH_DEBUG_PRINTLN("AutoReply: not our channel - heard hash %02X, ours is %02X",
-                       (uint32_t)hash[0], (uint32_t)_channel.hash[0]);
-    return 0;
+  refreshChannels(iata);
+  if (!_enabled) return 0;
+  for (const AutoReplyLane& lane : _lanes) {
+    if (lane.ready() && memcmp(hash, lane.channel.hash, sizeof(lane.channel.hash)) == 0) {
+      MESH_DEBUG_PRINTLN("AutoReply: channel '%s' matched", lane.name);
+      channels[0] = lane.channel;
+      return 1;
+    }
   }
-
-  MESH_DEBUG_PRINTLN("AutoReply: channel matched (hash %02X)", (uint32_t)_channel.hash[0]);
-  channels[0] = _channel;
-  return 1;
+  return 0;
 }
 
-bool AutoReply::handleCommand(const char* iata, const char* command, char* reply) {
-  refreshChannel(iata);
+bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* command,
+                              char* reply) {
+  refreshChannels(iata);
 
-  char name[AUTOREPLY_MAX_CHANNEL];
-  autoReplyDeriveChannel(_iata, name, sizeof(name));
+  char where[2 * AUTOREPLY_MAX_CHANNEL + 12];
+  describeChannels(where, sizeof(where));
 
   if (memcmp(command, "set autoreply ", 14) == 0) {
     if (!autoReplyParseOnOff(&command[14], &_enabled)) {
@@ -176,16 +183,33 @@ bool AutoReply::handleCommand(const char* iata, const char* command, char* reply
       return true;
     }
     save();
-    if (_enabled && !_ready) {
-      strcpy(reply, "OK - on, but no region yet: set mqtt.iata");
+    if (_enabled && !anyChannel()) {
+      strcpy(reply, "OK - on, but no channel yet: set autoreply.region <name>");
     } else {
-      sprintf(reply, "OK - %s", _enabled ? name : "off");
+      sprintf(reply, "OK - %s", _enabled ? where : "off");
     }
     return true;
   }
 
   if (autoReplyCommandIs(command, "set autoreply.channel")) {
-    strcpy(reply, "Err - channel is automatic, set mqtt.iata");
+    strcpy(reply, "Err - the channel is #test-<region>: set autoreply.region <name>");
+    return true;
+  }
+
+  if (memcmp(command, "set autoreply.legacy ", 21) == 0) {
+    if (!autoReplyParseOnOff(&command[21], &_legacy)) {
+      strcpy(reply, "Err - use: set autoreply.legacy on|off");
+      return true;
+    }
+    save();
+    refreshChannels(iata);
+    describeChannels(where, sizeof(where));
+    sprintf(reply, "OK - %s", where);
+    return true;
+  }
+
+  if (strcmp(command, "get autoreply.legacy") == 0) {
+    sprintf(reply, "> %s", _legacy ? "on" : "off");
     return true;
   }
 
@@ -283,16 +307,31 @@ bool AutoReply::handleCommand(const char* iata, const char* command, char* reply
   }
 
   if (memcmp(command, "set autoreply.region ", 21) == 0) {
-    // Empty clears it, which restores the old behaviour of mirroring whatever
-    // scope the request arrived under.
-    StrHelper::strncpy(_region, &command[21], sizeof(_region));
+    // Empty clears it: no region channel, and a reply mirrors whatever scope the
+    // request arrived under. A name must already be a region of this node's, since
+    // it is also the scope every reply floods in.
+    char name[AUTOREPLY_REGION_NAME_MAX + 1];
+    int verdict = autoReplyRegionVerdict(&command[21], name, sizeof(name),
+        [&regions](const char* n) { return regions.findByName(n) != NULL; });
+    if (verdict == AUTOREPLY_REGION_BAD_NAME) {
+      sprintf(reply, "Err - a region is %d-%d of a-z 0-9, groups joined by single '-' (se-jkp-mul)",
+              AUTOREPLY_REGION_NAME_MIN, AUTOREPLY_REGION_NAME_MAX);
+      return true;
+    }
+    if (verdict == AUTOREPLY_REGION_NOT_IN_TABLE) {
+      sprintf(reply, "Err - %s is not in the region table: region put %s first", name, name);
+      return true;
+    }
+    StrHelper::strncpy(_region, name, sizeof(_region));
     save();
-    strcpy(reply, "OK");
+    refreshChannels(iata);
+    describeChannels(where, sizeof(where));
+    sprintf(reply, "OK - %s", where);
     return true;
   }
 
   if (strcmp(command, "get autoreply.region") == 0) {
-    sprintf(reply, "> %s", _region[0] ? _region : "(request scope)");
+    sprintf(reply, "> %s", _region[0] ? _region : "(none: request scope, no region channel)");
     return true;
   }
 
@@ -332,7 +371,7 @@ bool AutoReply::handleCommand(const char* iata, const char* command, char* reply
   }
 
   if (strcmp(command, "get autoreply.channel") == 0) {
-    sprintf(reply, "> %s", _ready ? name : "(no region - set mqtt.iata)");
+    sprintf(reply, "> %s", where);
     return true;
   }
 
@@ -342,24 +381,28 @@ bool AutoReply::handleCommand(const char* iata, const char* command, char* reply
   }
 
   if (strcmp(command, "get autoreply") == 0) {
-    if (!_ready) {
-      sprintf(reply, "> %s, no region - set mqtt.iata", _enabled ? "on" : "off");
-    } else {
-      sprintf(reply, "> %s %s '%s' max %d hops, direct %s, mode %s, private %s",
-              _enabled ? "on" : "off", name, AUTOREPLY_KEYWORD, _hops,
-              _direct_flood ? "flood" : "zero-hop", autoReplyModeName(_mode),
-              _private ? "on" : "off");
-    }
+    // The channel, the scope and legacy on one line, so a site check sees all three.
+    snprintf(reply, 160, "> %s, region %s, scope %s, legacy %s: %s, max %d hops, direct %s, "
+                         "mode %s, private %s",
+             _enabled ? "on" : "off", _region[0] ? _region : "-",
+             _region[0] ? _region : "request", _legacy ? "on" : "off", where, _hops,
+             _direct_flood ? "flood" : "zero-hop", autoReplyModeName(_mode),
+             _private ? "on" : "off");
     return true;
   }
 
   return false;   // not one of ours
 }
 
-int AutoReply::buildReply(const mesh::Packet* req, const uint8_t* data, size_t len,
+int AutoReply::buildReply(const mesh::Packet* req, const mesh::GroupChannel& channel,
+                          const uint8_t* data, size_t len,
                           const char* node_name, float rssi, uint32_t timestamp, uint8_t* dest,
                           AutoReplyTarget* target) {
-  if (!_enabled || !_ready) return 0;
+  AutoReplyLane* lane = NULL;
+  for (AutoReplyLane& l : _lanes) {
+    if (l.ready() && memcmp(l.channel.secret, channel.secret, sizeof(channel.secret)) == 0) lane = &l;
+  }
+  if (!_enabled || lane == NULL) return 0;
   if (len < 6) {                                      // timestamp + flags + at least one char
     MESH_DEBUG_PRINTLN("AutoReply: ignored, message too short (len=%d)", (uint32_t)len);
     return 0;
@@ -402,15 +445,16 @@ int AutoReply::buildReply(const mesh::Packet* req, const uint8_t* data, size_t l
   // the global budget. Only real triggers are charged against either limit.
   uint32_t sender_id = autoReplyRequestId(
       autoReplySenderId(request.sender, request.sender_len), request.id, request.id_len);
-  if (!autoReplySenderAllowed(_senders, AUTOREPLY_MAX_SENDERS, _next_sender, sender_id,
-                              timestamp, AUTOREPLY_WINDOW_SECS)) {
+  if (!autoReplySenderAllowed(lane->budgets.senders, AUTOREPLY_MAX_SENDERS,
+                              lane->budgets.next_sender, sender_id, timestamp,
+                              AUTOREPLY_WINDOW_SECS)) {
     MESH_DEBUG_PRINTLN("AutoReply: '%.*s' was already answered in the last %d s",
                        (int)request.sender_len, request.sender, (uint32_t)AUTOREPLY_WINDOW_SECS);
     return 0;
   }
-  if (!_limiter.allow(timestamp)) {
-    MESH_DEBUG_PRINTLN("AutoReply: rate limited, %d replies already sent in the last %d s",
-                       (uint32_t)AUTOREPLY_MAX_REPLIES, (uint32_t)AUTOREPLY_WINDOW_SECS);
+  if (!lane->budgets.limiter.allow(timestamp)) {
+    MESH_DEBUG_PRINTLN("AutoReply: rate limited on %s, %d replies already sent in the last %d s",
+                       lane->name, (uint32_t)AUTOREPLY_MAX_REPLIES, (uint32_t)AUTOREPLY_WINDOW_SECS);
     return 0;
   }
 
@@ -496,7 +540,7 @@ int AutoReply::buildReport(const mesh::Packet* req, const char* node_name, float
 int AutoReply::buildPrivateReply(const mesh::Packet* req, const mesh::Identity& sender,
                                  const uint8_t* body, size_t len, const char* node_name,
                                  float rssi, uint32_t timestamp, uint8_t* dest) {
-  if (!_enabled || !_ready || !_private) return 0;
+  if (!_enabled || !anyChannel() || !_private) return 0;
 
   char text[AUTOREPLY_MAX_TEXT];
   size_t text_len = min(len, sizeof(text) - 1);
