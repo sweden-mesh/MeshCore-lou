@@ -72,6 +72,11 @@ opening TLS and presenting a token where a password login was meant, while `get 
 and `get mqttN.server` read exactly as intended. `get mqtt.stats` ends each slot with the mode it
 is really in — `s2=11/0 pw` or `s2=0/4 jwt` — and `set mqttN.audience` with no value clears it.
 
+**Each slot connects with its own client id**, the node's 8-hex id and the slot number
+(`A0586238-3`), so one node may keep an Observer slot and the command slot on the same broker.
+Before ar-12 every slot of a board was esp-mqtt's `ESP32_<MAC>`, and a broker refused the
+second login for as long as the first held the id.
+
 The slot is read at boot, when the subscriptions are made. It cannot be set remotely: a signed
 `set mqtt.cmd.slot 0` would leave a node that only a serial cable could bring back.
 

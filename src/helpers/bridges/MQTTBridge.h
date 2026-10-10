@@ -10,6 +10,7 @@
 #include "helpers/JWTHelper.h"
 #include "helpers/MQTTPacketFilter.h"
 #include "helpers/MQTTPresets.h"
+#include "helpers/MQTTSlotAuth.h"
 #include "helpers/MQTTLifecycle.h"
 #include <atomic>
 
@@ -106,6 +107,7 @@ private:
     char password[64];
     char audience[64];              // JWT audience for custom JWT slots (empty = username/password)
     char broker_uri[128];           // Persistent URI for custom slots (avoids dangling pointer)
+    char client_id[MQTT_SLOT_CLIENT_ID_SIZE];   // setClientId() keeps this pointer
 
     // Reconnect backoff
     uint8_t reconnect_backoff;      // 0..4 index into backoff table

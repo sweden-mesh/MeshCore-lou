@@ -1876,6 +1876,10 @@ bool MQTTBridge::setupSlot(int index) {
   #endif
   #endif
 
+  if (mqttSlotClientId(_device_id, index, slot.client_id, sizeof(slot.client_id))) {
+    slot.client->setClientId(slot.client_id);
+  }
+
   if (slot.preset) {
     // Preset-based slot
     slot.client->setServer(slot.preset->server_url);
