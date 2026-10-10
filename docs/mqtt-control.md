@@ -36,10 +36,15 @@ Which slot (operator 2026-10-10, from ar-12):
   `analyzer-eu` turns that uplink off, and the reply says so:
   `OK - slot 2 (was analyzer-eu, now off), mccontrol (...), packets off; reboot to apply`.
   Any other preset in slot 2 is a collector the owner chose and is left alone; the pick moves
-  on to 3-6. Afterwards `set mqtt.analyzer.eu on` is refused while the plane holds slot 2 --
-  move the plane with `set mqtt.cmd.slot <n>` first.
+  on to 3-6.
 - **With PSRAM** the pick is the first of slots 3-6 whose preset is `none`; slot 2 is never
   taken there, whatever it holds.
+
+**The plane's slot is not changed by anything else.** While `mqtt.cmd.slot` names a slot,
+every command that would change it is refused with the reason, by serial or over the plane:
+`set mqttN.<anything>` for that slot, and `set mqtt.analyzer.us|eu on|off`, which write slots
+1 and 2. Over the plane such a command would cut the line it arrived on. To change the slot,
+move the plane first with `set mqtt.cmd.slot`, which is serial only.
 
 When no slot can run another connection the reply says so and names the cure -- turn one off
 (`set mqtt2.preset none`) -- rather than doing it for you. A slot for a different command

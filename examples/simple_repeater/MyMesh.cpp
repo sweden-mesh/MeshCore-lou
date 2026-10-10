@@ -1993,8 +1993,9 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     pingMqttControl(reply);
   } else if (strcmp(command, "get mqtt.cmd") == 0) {
     describeMqttControl(reply);
-  } else if (mqttCtrlSlotClaimRefused(command, mqtt_control.slot())) {
-    strcpy(reply, "Err - slot 2 is the command plane's: set mqtt.cmd.slot <n> to move it first");
+  } else if (mqttCtrlTouchesSlot(command, mqtt_control.slot())) {
+    sprintf(reply, "Err - slot %d is the command plane's: set mqtt.cmd.slot over serial first",
+            mqtt_control.slot());
   } else if (mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply)) {
     // reply already filled in
 #endif

@@ -316,11 +316,29 @@ static inline int mqttCtrlPickSlot(const char* const* presets, int slot_count,
   return -1;
 }
 
-// `set mqtt.analyzer.eu on` writes slot 2 whatever it holds. Once the command plane
-// has that slot, that would turn the plane off in silence, so it is refused with the
-// reason: moving the plane is the owner's choice, made with `mqtt.cmd.slot`.
-static inline bool mqttCtrlSlotClaimRefused(const char* command, int cmd_slot) {
-  return cmd_slot == 2 && command != NULL && strcmp(command, "set mqtt.analyzer.eu on") == 0;
+// Does this command change the MQTT slot the command plane rides? Any form does it:
+// `set mqttN.<anything>` for that slot, and `set mqtt.analyzer.us|eu ...`, which write
+// slots 1 and 2 whatever they hold. Each would take the plane off its slot in silence --
+// over the plane itself, a command that cuts the line it arrived on -- so the caller
+// refuses it with the reason. Moving the plane is `set mqtt.cmd.slot`, serial only.
+// Matched on the command with leading spaces dropped and runs of spaces collapsed,
+// since the CLI's own parser reads `set mqtt.analyzer.eu  off` as an off.
+static inline bool mqttCtrlTouchesSlot(const char* command, int cmd_slot) {
+  if (command == NULL || cmd_slot <= 0) return false;
+  char norm[32];
+  size_t n = 0;
+  for (const char* p = command; *p && n < sizeof(norm) - 1; p++) {
+    if (*p == ' ' && (n == 0 || norm[n - 1] == ' ')) continue;
+    norm[n++] = *p;
+  }
+  norm[n] = 0;
+  if (strncmp(norm, "set mqtt", 8) == 0 && norm[8] >= '1' && norm[8] <= '9' && norm[9] == '.') {
+    return norm[8] - '0' == cmd_slot;
+  }
+  const char* analyzer = cmd_slot == 1 ? "set mqtt.analyzer.us" : cmd_slot == 2 ? "set mqtt.analyzer.eu" : NULL;
+  if (analyzer == NULL) return false;
+  size_t len = strlen(analyzer);
+  return strncmp(norm, analyzer, len) == 0 && (norm[len] == ' ' || norm[len] == 0);
 }
 
 // ---- `mqtt.cmd ping` (operator 2026-10-10) -------------------------------------------

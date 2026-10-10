@@ -1454,12 +1454,39 @@ TEST(AutoSlot, NoFreeSlotIsSaidNotGuessed) {
   EXPECT_EQ(-1, mqttCtrlPickSlot(NULL, 6, NO_PSRAM));
 }
 
-TEST(AutoSlot, AnalyzerEuOnCannotTakeSlotTwoBackFromThePlane) {
-  EXPECT_TRUE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.eu on", 2));
-  EXPECT_FALSE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.eu off", 2));
-  EXPECT_FALSE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.eu on", 3));   // the plane is elsewhere
-  EXPECT_FALSE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.eu on", 0));
-  EXPECT_FALSE(mqttCtrlSlotClaimRefused("set mqtt.analyzer.us on", 2));
+TEST(PlaneSlot, NoCommandFormChangesTheSlotThePlaneRides) {
+  // Slot 2, as on a board without PSRAM: analyzer.eu on or off, the slot's preset, its
+  // server, anything under mqtt2.
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt.analyzer.eu on", 2));
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt.analyzer.eu off", 2));
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt.analyzer.eu", 2));
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt2.preset none", 2));
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt2.server mqtt.example", 2));
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt2.audience x", 2));
+  // Slot 1 is analyzer.us's.
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt.analyzer.us off", 1));
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt1.preset none", 1));
+  // Slot 3-6: only its own mqttN.
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt3.preset none", 3));
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt6.packets on", 6));
+}
+
+TEST(PlaneSlot, SpacingDoesNotGetPastIt) {
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set mqtt.analyzer.eu  off", 2));
+  EXPECT_TRUE(mqttCtrlTouchesSlot("  set  mqtt.analyzer.eu off", 2));
+  EXPECT_TRUE(mqttCtrlTouchesSlot("set   mqtt2.preset none", 2));
+}
+
+TEST(PlaneSlot, EverythingElseIsLeftAlone) {
+  EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt.analyzer.eu off", 3));     // the plane is elsewhere
+  EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt.analyzer.eu off", 0));     // no plane
+  EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt.analyzer.us off", 2));
+  EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt1.preset meshat.se", 2));
+  EXPECT_FALSE(mqttCtrlTouchesSlot("get mqtt2.preset", 2));             // a read
+  EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt.analyzer.euro on", 2));
+  EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt.iata JKG", 2));
+  EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt.cmd.slot 0", 2));          // the way out
+  EXPECT_FALSE(mqttCtrlTouchesSlot(nullptr, 2));
 }
 
 // ---- `mqtt.cmd ping` (TODO 15, ar-12) -------------------------------------------------
