@@ -1496,20 +1496,20 @@ static const uint8_t* bytes(const char* s) { return (const uint8_t *) s; }
 TEST(Ping, ArmsWithAnEightHexNonce) {
   MqttCtrlPing p = {};
   char out[32];
-  ASSERT_TRUE(mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out)));
+  ASSERT_TRUE(mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out), 0));
   EXPECT_STREQ("ping|a1b2c3d4", out);
   EXPECT_TRUE(p.in_flight);
   MqttCtrlPing q = {};
-  EXPECT_FALSE(mqttCtrlArmPing(&q, "a1b2c3", out, sizeof(out)));
-  EXPECT_FALSE(mqttCtrlArmPing(&q, "a1b2c3zz", out, sizeof(out)));
-  EXPECT_FALSE(mqttCtrlArmPing(&q, "a1b2c3d4", out, 8));
+  EXPECT_FALSE(mqttCtrlArmPing(&q, "a1b2c3", out, sizeof(out), 0));
+  EXPECT_FALSE(mqttCtrlArmPing(&q, "a1b2c3zz", out, sizeof(out), 0));
+  EXPECT_FALSE(mqttCtrlArmPing(&q, "a1b2c3d4", out, 8, 0));
   EXPECT_FALSE(q.in_flight);
 }
 
 TEST(Ping, OnlyThePongWithTheNonceInFlightIsTaken) {
   MqttCtrlPing p = {};
   char out[32];
-  mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out));
+  mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out), 0);
   EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|deadbeef"), 13, 50));    // foreign
   EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3d4x"), 14, 50));   // trailing byte
   EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3"), 11, 50));      // short
@@ -1524,7 +1524,7 @@ TEST(Ping, ASecondPongIsIgnoredTheNonceIsConsumed) {
   // Abuse rule 1: a bridged broker's echo, or a replay, finds nothing in flight.
   MqttCtrlPing p = {};
   char out[32];
-  mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out));
+  mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out), 0);
   ASSERT_TRUE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3d4"), 13, 100));
   EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3d4"), 13, 900));
   EXPECT_EQ(100u, p.answered_ms);
@@ -1534,7 +1534,7 @@ TEST(Ping, AStalePongWithNoPingInFlightChangesNothing) {
   MqttCtrlPing p = {};
   EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|00000000"), 13, 5));
   char out[32];
-  mqttCtrlArmPing(&p, "11111111", out, sizeof(out));
+  mqttCtrlArmPing(&p, "11111111", out, sizeof(out), 0);
   p.in_flight = false;                          // the ping timed out
   EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|11111111"), 13, 20000));
   EXPECT_EQ(0u, p.answered_ms);
@@ -1549,6 +1549,55 @@ TEST(Ping, APongIsRecognisedBeforeAndNeverParsedAsACommand) {
   EXPECT_FALSE(mqttCtrlIsPong(nullptr, 0));
   MqttCtrlEnvelope env;
   EXPECT_NE(MQTTCTRL_OK, mqttCtrlParseEnvelope("pong|a1b2c3d4", 13, &env));
+}
+
+TEST(Ping, SettlesOnThePongWithTheRoundTrip) {
+  MqttCtrlPing p = {};
+  char out[32];
+  ASSERT_TRUE(mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out), 1000));
+  EXPECT_FALSE(mqttCtrlPingPoll(&p, 1100));             // still waiting; nothing blocks
+  EXPECT_TRUE(p.waiting);
+  ASSERT_TRUE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3d4"), 13, 1230));
+  EXPECT_TRUE(mqttCtrlPingPoll(&p, 1240));              // settles once
+  EXPECT_EQ(MQTTCTRL_PING_OK, p.last);
+  EXPECT_EQ(230u, p.last_ms);
+  EXPECT_FALSE(p.waiting);
+  EXPECT_FALSE(mqttCtrlPingPoll(&p, 1300));             // and only once
+}
+
+TEST(Ping, SettlesAsNoPongAfterTenSecondsAndALatePongChangesNothing) {
+  MqttCtrlPing p = {};
+  char out[32];
+  ASSERT_TRUE(mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out), 5000));
+  EXPECT_FALSE(mqttCtrlPingPoll(&p, 5000 + MQTTCTRL_PING_TIMEOUT_MS - 1));
+  EXPECT_TRUE(mqttCtrlPingPoll(&p, 5000 + MQTTCTRL_PING_TIMEOUT_MS));
+  EXPECT_EQ(MQTTCTRL_PING_NO_PONG, p.last);
+  EXPECT_FALSE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3d4"), 13, 16000));
+  EXPECT_FALSE(mqttCtrlPingPoll(&p, 16001));
+  EXPECT_EQ(MQTTCTRL_PING_NO_PONG, p.last);
+}
+
+TEST(Ping, OneAtATimeAndARefusedPublishSettlesAtOnce) {
+  MqttCtrlPing p = {};
+  char out[32];
+  ASSERT_TRUE(mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out), 0));
+  EXPECT_FALSE(mqttCtrlArmPing(&p, "11111111", out, sizeof(out), 10));   // one waiting
+  EXPECT_STREQ("a1b2c3d4", p.nonce);
+  mqttCtrlPingRefused(&p);
+  EXPECT_EQ(MQTTCTRL_PING_PUBLISH_REFUSED, p.last);
+  EXPECT_FALSE(mqttCtrlPingPoll(&p, 20));
+  EXPECT_TRUE(mqttCtrlArmPing(&p, "11111111", out, sizeof(out), 30));    // free again
+}
+
+TEST(Ping, AcrossTheMillisWrap) {
+  MqttCtrlPing p = {};
+  char out[32];
+  ASSERT_TRUE(mqttCtrlArmPing(&p, "a1b2c3d4", out, sizeof(out), 0xFFFFFF00u));
+  EXPECT_FALSE(mqttCtrlPingPoll(&p, 0xFFFFFFF0u));      // 240 ms in, before the wrap
+  EXPECT_FALSE(mqttCtrlPingPoll(&p, 0x00000010u));
+  ASSERT_TRUE(mqttCtrlTakePong(&p, bytes("pong|a1b2c3d4"), 13, 0x00000020u));
+  ASSERT_TRUE(mqttCtrlPingPoll(&p, 0x00000030u));
+  EXPECT_EQ(0x120u, p.last_ms);
 }
 
 TEST(Ping, TheAnswerNamesTheStepThatFailed) {

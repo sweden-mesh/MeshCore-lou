@@ -134,11 +134,14 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   uint32_t _ota_auto_start_at = 0;     // local unix secs the scheduled update may start, 0 = none
   char _ota_last_result[64] = {0};
   MqttCtrlPing _ping = {};
-  volatile uint32_t _pongs = 0;               // every pong seen, taken or not; nothing else is kept
+  bool _ping_started = false;                 // the command just run armed a ping
+  bool _ping_remote = false;                  // a ping that came over the plane is waiting
+  MqttCtrlOutcome _ping_outcome;              // what its r2 answers, once it settles
   unsigned long _ctrl_last_verified_ms = 0;   // millis() of the last command the key vouched for
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
   void pingMqttControl(char* reply);
   void describeMqttControl(char* reply);
+  void loopMqttPing();
   void loopMqttControl();
   void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                 const char* reply);
@@ -147,7 +150,6 @@ public:
     // A pong is the broker's answer to `mqtt.cmd ping`, never a command: it is taken
     // here, before any parsing, and goes no further whether it matches or not.
     if (mqttCtrlIsPong(payload, len)) {
-      _pongs++;
       mqttCtrlTakePong(&_ping, payload, len, millis());
       return;
     }

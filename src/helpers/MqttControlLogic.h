@@ -355,10 +355,26 @@ static inline bool mqttCtrlTouchesSlot(const char* command, int cmd_slot) {
 #define MQTTCTRL_PONG_PREFIX      "pong|"
 #define MQTTCTRL_PING_PREFIX      "ping|"
 
+// The step that failed, so the console says what is wrong. NONE: no ping yet.
+enum MqttCtrlPingStep {
+  MQTTCTRL_PING_OK,
+  MQTTCTRL_PING_OFF,               // no plane: not on, or no slot
+  MQTTCTRL_PING_NOT_CONNECTED,
+  MQTTCTRL_PING_PUBLISH_REFUSED,
+  MQTTCTRL_PING_NO_PONG,
+  MQTTCTRL_PING_NONE,
+};
+
+// The ping never blocks the loop: it is armed, published, and settled later by
+// mqttCtrlPingPoll on the loop task, so the node goes on repeating while it waits.
 struct MqttCtrlPing {
   char nonce[MQTTCTRL_PING_NONCE_LEN + 1];
   volatile bool in_flight;             // set on the loop task, cleared by the pong's task
   volatile uint32_t answered_ms;       // millis() the pong was taken
+  bool waiting;                        // loop task only: armed and not yet settled
+  uint32_t sent_ms;
+  uint8_t last;                        // MqttCtrlPingStep of the last ping settled
+  uint32_t last_ms;                    // its round trip, for MQTTCTRL_PING_OK
 };
 
 static inline bool mqttCtrlIsPong(const uint8_t* payload, size_t len) {
@@ -366,11 +382,12 @@ static inline bool mqttCtrlIsPong(const uint8_t* payload, size_t len) {
   return payload != NULL && len >= n && memcmp(payload, MQTTCTRL_PONG_PREFIX, n) == 0;
 }
 
-// Arms `ping` with `nonce` (8 hex) and writes the payload to publish. The nonce is
-// stored before the ping is marked in flight, so a pong racing the publish finds it.
+// Arms `ping` with `nonce` (8 hex) at `now_ms` and writes the payload to publish. The
+// nonce is stored before the ping is marked in flight, so a pong racing the publish
+// finds it. False, arming nothing, while another ping is still waiting.
 static inline bool mqttCtrlArmPing(MqttCtrlPing* ping, const char* nonce, char* out,
-                                   size_t out_size) {
-  if (ping == NULL || nonce == NULL || out == NULL) return false;
+                                   size_t out_size, uint32_t now_ms) {
+  if (ping == NULL || nonce == NULL || out == NULL || ping->waiting) return false;
   if (strlen(nonce) != MQTTCTRL_PING_NONCE_LEN) return false;
   for (size_t i = 0; i < MQTTCTRL_PING_NONCE_LEN; i++) {
     if (!isxdigit((unsigned char)nonce[i])) return false;
@@ -378,7 +395,34 @@ static inline bool mqttCtrlArmPing(MqttCtrlPing* ping, const char* nonce, char* 
   int n = snprintf(out, out_size, MQTTCTRL_PING_PREFIX "%s", nonce);
   if (n <= 0 || (size_t)n >= out_size) return false;
   memcpy(ping->nonce, nonce, MQTTCTRL_PING_NONCE_LEN + 1);
+  ping->sent_ms = now_ms;
+  ping->waiting = true;
   ping->in_flight = true;
+  return true;
+}
+
+// A ping whose publish was refused: settled on the spot.
+static inline void mqttCtrlPingRefused(MqttCtrlPing* ping) {
+  ping->in_flight = false;
+  ping->waiting = false;
+  ping->last = MQTTCTRL_PING_PUBLISH_REFUSED;
+}
+
+// Called on the loop task. True exactly once per ping, when it settles: the pong came
+// (last = OK, last_ms the round trip) or the timeout passed (last = NO_PONG; a pong
+// after that finds nothing in flight and is ignored).
+static inline bool mqttCtrlPingPoll(MqttCtrlPing* ping, uint32_t now_ms) {
+  if (ping == NULL || !ping->waiting) return false;
+  if (!ping->in_flight) {
+    ping->last = MQTTCTRL_PING_OK;
+    ping->last_ms = ping->answered_ms - ping->sent_ms;
+  } else if (now_ms - ping->sent_ms >= MQTTCTRL_PING_TIMEOUT_MS) {
+    ping->in_flight = false;
+    ping->last = MQTTCTRL_PING_NO_PONG;
+  } else {
+    return false;
+  }
+  ping->waiting = false;
   return true;
 }
 
@@ -394,15 +438,6 @@ static inline bool mqttCtrlTakePong(MqttCtrlPing* ping, const uint8_t* payload, 
   ping->in_flight = false;
   return true;
 }
-
-// The step that failed, so the console says what is wrong.
-enum MqttCtrlPingStep {
-  MQTTCTRL_PING_OK,
-  MQTTCTRL_PING_OFF,               // no plane: not on, or no slot
-  MQTTCTRL_PING_NOT_CONNECTED,
-  MQTTCTRL_PING_PUBLISH_REFUSED,
-  MQTTCTRL_PING_NO_PONG,
-};
 
 static inline void mqttCtrlPingAnswer(MqttCtrlPingStep step, int slot, uint32_t elapsed_ms,
                                       const char* link, char* out, size_t out_size) {

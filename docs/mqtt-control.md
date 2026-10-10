@@ -133,36 +133,38 @@ observer tooling watches. That separation was never needed: the tooling matches 
 `get mqtt.cmd` answers on one line (from ar-12):
 
 ```
-> on, counter 41, slot 2 connected, /cmd subscribed, last command 312 s ago, pongs 1
+> on, counter 41, slot 2 connected, /cmd subscribed, last command 312 s ago, ping pong in 230 ms
 ```
 
 whether the slot is connected, whether the broker acknowledged the subscription since it
-connected, and how long ago the command key last vouched for a command.
+connected, how long ago the command key last vouched for a command, and how the last ping
+ended: `pong in N ms`, `no pong in 10 s`, `publish refused`, `waiting` or `none yet`.
 
 `mqtt.cmd ping` proves the rest, at the console and without the owner's laptop. The node
-publishes `ping|<8-hex nonce>` on its own `/ping` and waits up to 10 s for the command broker to
-answer `pong|<same nonce>` on its own `/cmd`. The node's identity key is never a registered
-command key, so a message it put on `/cmd` itself would be dropped by the broker by design; the
-echo has to be the broker's. The answer names the step that failed:
+publishes `ping|<8-hex nonce>` on its own `/ping`, answers at once, and goes on repeating:
 
 ```
-OK - pong in 230 ms on slot 2 (mqtts, jwt)
+OK - ping sent, read 'get mqtt.cmd' for the pong
 Err - slot 2 not connected
 Err - publish refused
-Err - no pong in 10 s: /cmd is not subscribed or the broker is not answering
+Err - a ping is already waiting: read 'get mqtt.cmd'
 ```
+
+The command broker answers `pong|<same nonce>` on the node's own `/cmd`; `get mqtt.cmd` shows
+the round trip, or `no pong in 10 s` -- the `/cmd` subscription, or a broker that does not
+answer pings. The node's identity key is never a registered command key, so a message it put
+on `/cmd` itself would be dropped by the broker by design; the echo has to be the broker's.
 
 A pong is not a command. It is recognised before any signature parsing, so it costs a string
 compare, never an Ed25519 verify; it is never executed, answered, logged or counted towards
 the signed command that marks a new OTA image valid; and it is taken only with the nonce of
-the one ping in flight, which it consumes, so a second or a stale pong changes nothing. Only
-`pongs` in `get mqtt.cmd` counts them. The wait holds the console for as long as it takes --
-a few hundred ms on a working plane, 10 s on a broken one.
+the one ping in flight, which it consumes, so a second or a stale pong changes nothing.
 
-`mqtt.cmd ping` is admitted over the plane as a read, inside the ten-commands-an-hour budget,
-with its answer published once as an `r2` result. It puts nothing on the air. The broker's half
-(`mcbroker`) answers a ping only on the session's own key, at most once per key per 10 s, never
-on `all`, and never fans the ping out.
+`mqtt.cmd ping` is admitted over the plane as a read, inside the ten-commands-an-hour budget.
+Sent that way, its `r2` result is held until the ping settles and then carries the outcome --
+`OK - pong in 230 ms on slot 2 (mqtts, jwt)` or `Err - no pong in 10 s: ...` -- once. It puts
+nothing on the air. The broker's half (`mcbroker`) answers a ping only on the session's own
+key, at most once per key per 10 s, never on `all`, and never fans the ping out.
 
 ## The envelope
 

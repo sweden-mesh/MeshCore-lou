@@ -2074,11 +2074,10 @@ void MyMesh::setupMqttControl(MQTTBridge* bridge) {
 // `mqtt.cmd ping`: the broker echoes a ping on our own /ping as a pong on our own /cmd,
 // so a pong proves the slot is up, the publish went through, the /cmd subscription
 // holds and the broker is judging this node's topics -- the whole plane, on the spot.
-// The wait blocks the loop, as `ota update` does: up to 10 s, and only when the plane
-// is broken, since a working one answers in a few hundred ms.
+// Nothing waits here: the ping is armed and sent, and loopMqttPing settles it when the
+// pong comes or 10 s pass, so the node never stops repeating for it.
 void MyMesh::pingMqttControl(char* reply) {
   const int slot = mqtt_control.slot();
-  char link[24];
   if (!mqtt_control.isEnabled() || slot == 0 || bridge == NULL || _ctrl_ping_topic[0] == 0) {
     mqttCtrlPingAnswer(MQTTCTRL_PING_OFF, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
     return;
@@ -2093,23 +2092,30 @@ void MyMesh::pingMqttControl(char* reply) {
   char nonce[MQTTCTRL_PING_NONCE_LEN + 1];
   mesh::Utils::toHex(nonce, raw, sizeof(raw));
   char payload[sizeof(MQTTCTRL_PING_PREFIX) + MQTTCTRL_PING_NONCE_LEN];
-  mqttCtrlArmPing(&_ping, nonce, payload, sizeof(payload));
-
-  unsigned long start = millis();
+  if (!mqttCtrlArmPing(&_ping, nonce, payload, sizeof(payload), millis())) {
+    strcpy(reply, "Err - a ping is already waiting: read 'get mqtt.cmd'");
+    return;
+  }
   if (!bridge->publishControlResult(_ctrl_ping_topic, payload, strlen(payload), MQTTCTRL_RESULT_QOS)) {
-    _ping.in_flight = false;
+    mqttCtrlPingRefused(&_ping);
     mqttCtrlPingAnswer(MQTTCTRL_PING_PUBLISH_REFUSED, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
     return;
   }
-  while (_ping.in_flight && millis() - start < MQTTCTRL_PING_TIMEOUT_MS) delay(10);
-  if (_ping.in_flight) {
-    _ping.in_flight = false;
-    mqttCtrlPingAnswer(MQTTCTRL_PING_NO_PONG, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
-    return;
-  }
+  _ping_started = true;
+  strcpy(reply, "OK - ping sent, read 'get mqtt.cmd' for the pong");
+}
+
+// Settles a ping in flight. A ping that came over the plane has its result held back
+// until now, and is published as the one r2 that answers it.
+void MyMesh::loopMqttPing() {
+  if (!mqttCtrlPingPoll(&_ping, millis())) return;
+  if (!_ping_remote) return;
+  _ping_remote = false;
+  char link[24], reply[MQTTCTRL_MAX_REPLY];
   bridge->controlSlotLink(link, sizeof(link));
-  mqttCtrlPingAnswer(MQTTCTRL_PING_OK, slot, _ping.answered_ms - start, link, reply,
-                     MQTTCTRL_MAX_REPLY);
+  mqttCtrlPingAnswer((MqttCtrlPingStep)_ping.last, mqtt_control.slot(), _ping.last_ms, link,
+                     reply, sizeof(reply));
+  publishMqttControlResult(MQTTCTRL_OK, _ping_outcome, reply);   // the command ran; the reply says how
 }
 
 // `get mqtt.cmd` on one line: on/off and the counter as before, then the slot's
@@ -2128,10 +2134,22 @@ void MyMesh::describeMqttControl(char* reply) {
             (unsigned)mqtt_control.counter());
     return;
   }
-  sprintf(reply, "> %s, counter %u, slot %d %s, /cmd %s, last command %s, pongs %u",
+  char ping[64];
+  if (_ping.waiting) {
+    strcpy(ping, "waiting");
+  } else if (_ping.last == MQTTCTRL_PING_OK) {
+    sprintf(ping, "pong in %u ms", (unsigned)_ping.last_ms);
+  } else if (_ping.last == MQTTCTRL_PING_NO_PONG) {
+    sprintf(ping, "no pong in %d s", MQTTCTRL_PING_TIMEOUT_MS / 1000);
+  } else if (_ping.last == MQTTCTRL_PING_PUBLISH_REFUSED) {
+    strcpy(ping, "publish refused");
+  } else {
+    strcpy(ping, "none yet");
+  }
+  sprintf(reply, "> %s, counter %u, slot %d %s, /cmd %s, last command %s, ping %s",
           mqtt_control.isEnabled() ? "on" : "off", (unsigned)mqtt_control.counter(), slot,
           bridge->controlSlotConnected() ? "connected" : "not connected",
-          bridge->controlSubscribed() ? "subscribed" : "not subscribed", age, (unsigned)_pongs);
+          bridge->controlSubscribed() ? "subscribed" : "not subscribed", age, ping);
 }
 
 // Drained on the loop task, never on the MQTT event task: verification wants more
@@ -2161,6 +2179,7 @@ void MyMesh::loopMqttControl() {
 
   char reply[MQTTCTRL_MAX_REPLY];
   MqttCtrlOutcome outcome;
+  _ping_started = false;
   MqttCtrlResult result = mqtt_control.drain(owner, getRTCClock()->getCurrentTime(),
                                              this, reply, sizeof(reply), &outcome);
   MESH_DEBUG_PRINTLN("MqttControl: result %d, reply '%s'", (uint32_t)result, reply);
@@ -2172,7 +2191,13 @@ void MyMesh::loopMqttControl() {
   // exactly what makes it unreadable.
   if (outcome.authentic) {
     _ctrl_last_verified_ms = millis();
-    publishMqttControlResult(result, outcome, reply);
+    if (_ping_started) {
+      // A ping sent from here is answered once it settles (loopMqttPing), not now.
+      _ping_remote = true;
+      _ping_outcome = outcome;
+    } else {
+      publishMqttControlResult(result, outcome, reply);
+    }
   }
 
   // Rollback (ar-11): a freshly flashed image is pending until it proves itself, and
@@ -2272,6 +2297,7 @@ void MyMesh::loop() {
 
 #ifdef WITH_MQTT_BRIDGE
   loopMqttControl();
+  loopMqttPing();
 #endif
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
