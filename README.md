@@ -317,6 +317,9 @@ If several of your repeaters cover the same area, consider enabling this on only
 📖 Full reference, the multi-hop region-scope details and the test procedure:
 **[docs/autoreply.md](./docs/autoreply.md)**
 
+🛠️ Setting up a repeater on site, step by step — flashing, configuration, the command plane and
+the checks: **[docs/quick-check-guide.md](./docs/quick-check-guide.md)**
+
 ---
 
 ## About MeshCore
