@@ -79,6 +79,21 @@ TEST(SlotClientId, LeavesTheDefaultUntilTheIdAndTagAreKnown) {
   EXPECT_FALSE(mqttSlotClientId(KEY, TAG, 0, id, 12));
 }
 
+// ---- a refused SUBACK (ar-13) ------------------------------------------------
+
+TEST(Suback, GrantedOnlyWhenNoCodeRefuses) {
+  const uint8_t qos1[] = { 0x01 }, qos0[] = { 0x00 }, two[] = { 0x01, 0x00 };
+  EXPECT_TRUE(mqttSubackGranted(qos1, 1));
+  EXPECT_TRUE(mqttSubackGranted(qos0, 1));
+  EXPECT_TRUE(mqttSubackGranted(two, 2));
+  const uint8_t refused[] = { 0x80 }, mixed[] = { 0x01, 0x80 };
+  EXPECT_FALSE(mqttSubackGranted(refused, 1));
+  EXPECT_FALSE(mqttSubackGranted(mixed, 2));
+  // no codes delivered: the event's own word, "subscribed", stands
+  EXPECT_TRUE(mqttSubackGranted(qos1, 0));
+  EXPECT_TRUE(mqttSubackGranted(nullptr, 0));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

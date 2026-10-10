@@ -28,6 +28,18 @@ static inline bool mqttSlotUsesJwt(bool has_preset, bool preset_is_jwt, bool has
 // gets cut first.
 static inline const char* mqttSlotAuthLabel(bool uses_jwt) { return uses_jwt ? "jwt" : "pw"; }
 
+// Whether a SUBACK granted every topic it answers: a return code of 0x80 is a refusal
+// (MQTT 3.1.1, 3.9.3), and esp-mqtt delivers it as a "subscribed" event all the same,
+// with the return codes as the event's data. An event without them says nothing either
+// way, and is read as the subscription it reports -- as before the codes were looked at.
+static inline bool mqttSubackGranted(const uint8_t* codes, int len) {
+  if (codes == NULL || len <= 0) return true;
+  for (int i = 0; i < len; i++) {
+    if (codes[i] & 0x80) return false;
+  }
+  return true;
+}
+
 // The client id a slot connects with: the node's 8-hex id, the slot number and a tag
 // only the node can compute, `A0586238-3-9F04C21B`. Left to esp-mqtt every client on a
 // board is `ESP32_<3 MAC bytes>`, so two slots of one node on one broker -- an Observer
@@ -37,7 +49,7 @@ static inline const char* mqttSlotAuthLabel(bool uses_jwt) { return uses_jwt ? "
 // credentials are public (meshat.se) an id anyone could compute from the node's key would
 // let anyone knock the node's Observer slot off. The caller derives the tag from the
 // node's private key, so it is stable across reboots and reflashes and needs no storage.
-// 21 characters, inside the 23 every MQTT 3.1.1 broker must accept.
+// 19 characters, inside the 23 every MQTT 3.1.1 broker must accept.
 // False, leaving esp-mqtt's default, while the device id or the tag is not yet known.
 #define MQTT_SLOT_CLIENT_ID_SIZE 24
 #define MQTT_SLOT_CLIENT_TAG_LEN 8

@@ -50,6 +50,9 @@
 typedef std::function<void(bool sessionPresent)> OnConnectUserCallback;
 typedef std::function<void(bool sessionPresent)> OnDisconnectUserCallback;
 typedef std::function<void(int msgId)> OnSubscribeUserCallback;
+// The SUBACK's return codes as well: esp-mqtt raises MQTT_EVENT_SUBSCRIBED for a refused
+// subscription too (0x80), so the msg id alone cannot say whether it was granted.
+typedef std::function<void(int msgId, const uint8_t* codes, int len)> OnSubackUserCallback;
 typedef std::function<void(int msgId)> OnUnsubscribeUserCallback;
 typedef std::function<void(char *topic, char *payload, int retain, int qos, bool dup)> OnMessageUserCallback;
 typedef std::function<void(int msgId)> OnPublishUserCallback;
@@ -289,6 +292,7 @@ public:
      * @return A reference to the PsychicMqttClient instance.
      */
     PsychicMqttClient &onSubscribe(OnSubscribeUserCallback callback);
+    PsychicMqttClient &onSuback(OnSubackUserCallback callback) { _onSubackUserCallback = std::move(callback); return *this; }
 
     /**
      * @brief Registers a callback function to be called when a topic is unsubscribed.
@@ -509,6 +513,7 @@ private:
 
     OnSubscribeUserCallback _onSubscribeUserCallbacks[PSYCHIC_MAX_SUBSCRIBE_CB];
     uint8_t _onSubscribeUserCallbackCount = 0;
+    OnSubackUserCallback _onSubackUserCallback;
 
     OnUnsubscribeUserCallback _onUnsubscribeUserCallbacks[PSYCHIC_MAX_UNSUBSCRIBE_CB];
     uint8_t _onUnsubscribeUserCallbackCount = 0;

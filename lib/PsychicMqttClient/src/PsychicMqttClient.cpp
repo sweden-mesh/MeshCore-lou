@@ -707,6 +707,10 @@ void PsychicMqttClient::_onSubscribe(esp_mqtt_event_handle_t &event)
     {
         _onSubscribeUserCallbacks[i](event->msg_id);
     }
+    if (_onSubackUserCallback)
+    {
+        _onSubackUserCallback(event->msg_id, (const uint8_t *)event->data, event->data_len);
+    }
 }
 
 void PsychicMqttClient::_onUnsubscribe(esp_mqtt_event_handle_t &event)

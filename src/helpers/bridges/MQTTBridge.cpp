@@ -1656,9 +1656,11 @@ bool MQTTBridge::ensureSlotClient(int index) {
         }
       });
     }
-    // This slot subscribes to the control topics and nothing else, so any SUBACK
-    // since it connected is theirs.
-    slot.client->onSubscribe([this](int /*msg_id*/) { _control_subscribed = true; });
+    // This slot subscribes to the control topics and nothing else, so every SUBACK
+    // since it connected is theirs; one that refuses a topic (0x80) clears the flag.
+    slot.client->onSuback([this](int /*msg_id*/, const uint8_t* codes, int len) {
+      _control_subscribed = mqttSubackGranted(codes, len);
+    });
   }
 
   slot.client->onConnect([this, index](bool sessionPresent) {
