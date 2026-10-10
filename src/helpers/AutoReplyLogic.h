@@ -125,6 +125,19 @@ static inline void autoReplyChannelNames(const char* region, const char* iata, b
   }
 }
 
+// The channels whose one-byte hash is `hash`, as indices into `hashes`, up to `max`; a
+// channel whose name is empty answers nothing and is skipped. A one-byte hash collides
+// one time in 256 -- `#test-vst` and `#test-se-u` are both 0x0B -- and the mesh tries every
+// candidate's key until one decrypts, so every match must be offered, not the first.
+static inline int autoReplyMatchingChannels(const uint8_t* hashes, const bool* ready, int n,
+                                            uint8_t hash, int* out, int max) {
+  int found = 0;
+  for (int i = 0; i < n && found < max; i++) {
+    if (ready[i] && hashes[i] == hash) out[found++] = i;
+  }
+  return found;
+}
+
 // A sender that was recently answered. The firmware holds a fixed ring of these,
 // so one person retrying cannot spend everyone else's share of the global limit.
 struct AutoReplySender {

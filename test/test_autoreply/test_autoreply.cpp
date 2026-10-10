@@ -1899,3 +1899,31 @@ TEST(AutoReplyConfig, APreAr12RegionLoadsIntoItsNewMeaning) {
   EXPECT_STREQ("#test-se-jkp", ch.region);
   EXPECT_STREQ("#test-jkg", ch.legacy);
 }
+
+// The channel hash the mesh matches on is the first byte of sha256 of the 16-byte key, whose
+// key is sha256 of the name (AutoReply::deriveLane). The native env's SHA256 is a mock, so
+// the two colliding values are written down: sha256(sha256("#test-vst")[0:16])[0] and the
+// same for "#test-se-u" are both 0x0B (QA, 2026-10-10, checked with Python's hashlib).
+static const uint8_t HASH_TEST_VST = 0x0B, HASH_TEST_SE_U = 0x0B;
+
+TEST(ChannelMatch, ACollidingRegionChannelDoesNotHideTheLegacyOne) {
+  // A node on region se-u with IATA VST: the mesh tries every candidate's key, so both
+  // lanes must be offered, the region's and the legacy one.
+  const uint8_t hashes[2] = { HASH_TEST_SE_U, HASH_TEST_VST };
+  const bool ready[2] = { true, true };
+  int idx[4];
+  ASSERT_EQ(2, autoReplyMatchingChannels(hashes, ready, 2, 0x0B, idx, 4));
+  EXPECT_EQ(0, idx[0]);
+  EXPECT_EQ(1, idx[1]);
+}
+
+TEST(ChannelMatch, OnlyReadyChannelsWithTheHashAndNoMoreThanAsked) {
+  const uint8_t hashes[2] = { 0x0B, 0x0B };
+  const bool one[2] = { false, true };
+  int idx[4];
+  ASSERT_EQ(1, autoReplyMatchingChannels(hashes, one, 2, 0x0B, idx, 4));
+  EXPECT_EQ(1, idx[0]);
+  const bool both[2] = { true, true };
+  EXPECT_EQ(1, autoReplyMatchingChannels(hashes, both, 2, 0x0B, idx, 1));
+  EXPECT_EQ(0, autoReplyMatchingChannels(hashes, both, 2, 0x0C, idx, 4));
+}

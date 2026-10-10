@@ -160,14 +160,15 @@ int AutoReply::searchChannelsByHash(const char* iata, const uint8_t* hash,
                                     mesh::GroupChannel channels[], int max_matches) {
   refreshChannels(iata);
   if (!_enabled) return 0;
-  for (const AutoReplyLane& lane : _lanes) {
-    if (lane.ready() && memcmp(hash, lane.channel.hash, sizeof(lane.channel.hash)) == 0) {
-      MESH_DEBUG_PRINTLN("AutoReply: channel '%s' matched", lane.name);
-      channels[0] = lane.channel;
-      return 1;
-    }
+  const uint8_t hashes[2] = { _lanes[0].channel.hash[0], _lanes[1].channel.hash[0] };
+  const bool ready[2] = { _lanes[0].ready(), _lanes[1].ready() };
+  int idx[2];
+  int n = autoReplyMatchingChannels(hashes, ready, 2, hash[0], idx, min(max_matches, 2));
+  for (int i = 0; i < n; i++) {
+    MESH_DEBUG_PRINTLN("AutoReply: channel '%s' matched", _lanes[idx[i]].name);
+    channels[i] = _lanes[idx[i]].channel;
   }
-  return 0;
+  return n;
 }
 
 bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* command,
