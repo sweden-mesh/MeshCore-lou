@@ -382,13 +382,18 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
   }
 
   if (strcmp(command, "get autoreply") == 0) {
-    // The channel, the scope and legacy on one line, so a site check sees all three.
-    snprintf(reply, 160, "> %s, region %s, scope %s, legacy %s: %s, max %d hops, direct %s, "
-                         "mode %s, private %s",
-             _enabled ? "on" : "off", _region[0] ? _region : "-",
-             _region[0] ? _region : "request", _legacy ? "on" : "off", where, _hops,
-             _direct_flood ? "flood" : "zero-hop", autoReplyModeName(_mode),
-             _private ? "on" : "off");
+    // The channel, the scope and legacy on one line, so a site check sees all three. The
+    // scope is the region only when the table has it; otherwise replies take the
+    // request's, and the line says so. Channels last: they are what can be long, and
+    // 160 characters hold the longest region and IATA code.
+    const char* scope = !_region[0] ? "request scope"
+                      : regions.findByNamePrefix(_region) ? "scope"
+                      : "not in table: request scope";
+    snprintf(reply, 160, "> %s, mode %s, private %s, direct %s, %d hops, region %s (%s), "
+                         "legacy %s: %s",
+             _enabled ? "on" : "off", autoReplyModeName(_mode), _private ? "on" : "off",
+             _direct_flood ? "flood" : "0-hop", _hops, _region[0] ? _region : "-", scope,
+             _legacy ? "on" : "off", where);
     return true;
   }
 

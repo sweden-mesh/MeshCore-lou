@@ -131,7 +131,7 @@ That is it. Check it took:
 
 ```
 get autoreply
-> on, region -, scope request, legacy on: legacy #test-sto, max 8 hops, direct flood, mode flood, private on
+> on, mode flood, private on, direct flood, 8 hops, region - (request scope), legacy on: legacy #test-sto
 ```
 
 Now add the channel it named — `#test-sto` above — in your MeshCore client, send `test` to

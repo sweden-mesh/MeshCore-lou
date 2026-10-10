@@ -298,11 +298,13 @@ request is, how the answer travels and what it costs is under
 - `get autoreply`
 
 ```
-> on, region se-jkp, scope se-jkp, legacy on: #test-se-jkp + legacy #test-jkg, max 8 hops, direct flood, mode flood, private on
+> on, mode flood, private on, direct flood, 8 hops, region se-jkp (scope), legacy on: #test-se-jkp + legacy #test-jkg
 ```
 
 The region, the scope the replies flood in, legacy, and every channel the node answers on,
-so a site check sees all of them on one line.
+so a site check sees all of them on one line. `(scope)` means the region is in the table and
+replies flood in it; `(not in table: request scope)` means it is not, and replies take the
+request's scope until `region put` adds it.
 
 ## How far the reply travels
 
