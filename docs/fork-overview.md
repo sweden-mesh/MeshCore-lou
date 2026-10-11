@@ -115,7 +115,7 @@ Full detail, including the wire format and every refusal code, is in
 ## Auto-reply: turning it on — three steps
 
 **1. Flash a repeater with this firmware.** Grab the file for your board from this repo's
-[Releases](https://github.com/the-louie/MeshCore-observer/releases) page.
+[Releases](https://github.com/sweden-mesh/MeshCore-lou/releases) page.
 
 * **Upgrading a node you already run?** Use the plain `….bin` at offset `0x10000` — it keeps
   your settings, node identity, MQTT slots and WiFi credentials.
