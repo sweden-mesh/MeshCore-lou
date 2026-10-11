@@ -113,14 +113,24 @@ GitHub redirects `latest/download` to the asset, and the node follows it over TL
 
 ## Cutting a release that nodes will take
 
-```
-scripts/sign_manifest.py --keygen ~/.config/mccontrol/release.key     # once; mode 600; never in a repo
-OTA_RELEASE_KEY_FILE=~/.config/mccontrol/release.key VARIANT_TAG=ar-11 bash build-all.sh
-scripts/release.sh                                                    # tags, pushes, uploads images + manifests
-```
+From lou-14 (TODO 22a rulings 15, 16, 25):
 
-`build-all.sh` bakes the key's public half into every image and writes a signed
-`<variant>.json` beside each; `publish-release.sh` uploads both. Without the key file the
-images build but say so, and refuse every update. A node on a build whose baked-in key
-differs from the one that signed the manifest refuses too -- rotating the release key means
-flashing once by cable.
+1. **Build, in GitHub Actions.** Run `.github/workflows/fork-matrix.yml` by hand with the two
+   refs, the revision (`lou-14`) and the release key's *public* half
+   (`scripts/manifest.py --pubkey ~/.config/mccontrol/release.key`). It builds every combination
+   for every board and leaves one artifact, `candidate-lou-14`: the images, each Observer image's
+   unsigned manifest and `SHA256SUMS`.
+2. **Sign, on the release host.** Download and unpack the artifact, then
+   `scripts/release-candidate.sh -c <candidate> -t v1.17.1-lou-14`. It refuses a set that does not
+   hold together -- a hash that does not match, an image without its manifest or a manifest
+   without its image, two of one variant, another revision, an image without this key's public
+   half -- then signs every manifest (`sig` and `sig2`), verifies each back, and checks the asset count against GitHub's limit of 1 000 per release
+   (lou-14: about 180).
+3. **Publish.** Add `RELEASE_NOTES.md` to the assembled directory and rerun with `-p`, or run the
+   `gh release create` it prints. The release must be the repository's *latest*: the nodes'
+   channel is `releases/latest/download/`.
+
+The release key is made once (`scripts/manifest.py --keygen ~/.config/mccontrol/release.key`,
+mode 600) and is read by `release-candidate.sh` alone; it is never in a repository, a CI secret
+or an artifact. A node whose baked-in key differs from the one that signed the manifest refuses
+the update -- rotating the release key means flashing once by cable.

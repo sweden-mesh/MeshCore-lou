@@ -15,7 +15,6 @@ examples/simple_repeater/MqttCommandHooks.cpp
 examples/simple_repeater/MqttControl.cpp
 examples/simple_repeater/MqttControl.h
 include/ForkFeatures.h
-scripts/sign_manifest.py
 src/helpers/AutoReplyLogic.h
 src/helpers/ForkText.h
 src/helpers/MQTTSlotAuth.h
@@ -48,3 +47,4 @@ scripts/manifest.py
 test/data/manifest-lou-14-example.json
 .github/workflows/fork-matrix.yml
 scripts/ci-plan.sh
+scripts/release-candidate.sh
