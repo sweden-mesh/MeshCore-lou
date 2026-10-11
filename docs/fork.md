@@ -9,6 +9,13 @@ built, and any combination of them builds from the same tree:
 | `ar` | `WITH_AUTO_REPLY` | auto-reply: the regional test channel, private tests, `trigger test` | [autoreply.md](autoreply.md) |
 | `rc` | `WITH_MQTT_COMMAND` | remote command: signed commands and results over MQTT | [mqtt-control.md](mqtt-control.md) |
 
+An image says which combination it is in its version, which `ver` reports and every status
+publish carries: `<mcu>-v1.17.1-lou-<nn>-<features>-<hash>`, for example
+`esp32s3-v1.17.1-lou-14-arrc-1a2b3c4d` -- the image file's name; inside an Observer image
+`build.sh` adds the base's own `-observer` before the hash (`forkFeaturesOfVersion` reads
+either). The revision
+`lou-<nn>` continues the `ar-<nn>` counter of the releases before the split.
+
 A combination is named by its codes run together in that fixed order: `ar`, `rc`, `arrc`,
 and later `as`, `asar`, `asrc`, `asarrc`. `rc` needs the Observer's MQTT bridge; asking for
 it without `WITH_MQTT_BRIDGE` stops the build (`include/ForkFeatures.h`).

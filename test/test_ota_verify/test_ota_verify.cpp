@@ -107,6 +107,29 @@ TEST(OtaNewer, WithinARevisionTheBuildNumberThenTheHash) {
   EXPECT_EQ(OTA_NEWER, otaUpdateVerdict("v1.16.0.37-observer-9670035", "x-v1.17.1-ar-11-bbbb", 37, -1, false));
 }
 
+TEST(OtaNewer, LouIsReadBeforeAr) {
+  // An ar-only image carries `-ar-` after the revision; the revision is lou's number.
+  EXPECT_EQ(14, otaRevisionOf("esp32s3-v1.17.1-lou-14-ar-1a2b3c4d"));
+  EXPECT_EQ(14, otaRevisionOf("esp32s3-v1.17.1-lou-14-ar-9f04c21b"));
+  EXPECT_EQ(14, otaRevisionOf("esp32s3-v1.17.1-lou-14-arrc-1a2b3c4d"));
+  EXPECT_EQ(15, otaRevisionOf("nrf52-v1.17.1-lou-15-asarrc-1a2b3c4d"));
+  EXPECT_EQ(13, otaRevisionOf("esp32s3-v1.17.1-ar-13-16a05810"));
+  EXPECT_EQ(13, otaRevisionOf("esp32s3-v1.17.1-ar-13-observer-16a05810"));   // as ar-13 embedded it
+  EXPECT_EQ(14, otaRevisionOf("esp32s3-v1.17.1-lou-14-ar-observer-1a2b3c4d"));
+  EXPECT_EQ(-1, otaRevisionOf("esp32s3-v1.17.1-lou-x-ar-13-aaaa"));
+}
+
+TEST(OtaNewer, LouContinuesTheArCounter) {
+  EXPECT_EQ(OTA_NEWER, otaUpdateVerdict("esp32s3-v1.17.1-ar-13-16a05810",
+                                        "esp32s3-v1.17.1-lou-14-arrc-1a2b3c4d", -1, -1, false));
+  EXPECT_EQ(OTA_OLDER, otaUpdateVerdict("esp32s3-v1.17.1-lou-14-ar-1a2b3c4d",
+                                        "esp32s3-v1.17.1-ar-13-16a05810", -1, -1, false));
+  // The hazard: read `-ar-` first and an ar image on lou-14 is "revision 1" (from the
+  // hash), so ar-13 would look newer and the node would roll itself back.
+  EXPECT_EQ(OTA_UP_TO_DATE, otaUpdateVerdict("esp32s3-v1.17.1-lou-14-ar-1a2b3c4d",
+                                             "esp32s3-v1.17.1-lou-14-ar-1a2b3c4d", -1, -1, true));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -73,20 +73,29 @@ static inline bool otaImageHashOk(const uint8_t digest[32], const char* sha256_h
 }
 
 // Is the build on offer newer than the one running? (2026-10-08, operator ruling: the
-// auto-reply revision `ar-N` decides.) Compared in this order:
-//   1. the `-ar-N-` revision in each version string: a higher N is an update, a lower N
-//      never is -- a channel cannot roll a node back by accident;
+// fork's revision decides.) Compared in this order:
+//   1. the revision in each version string, `-lou-N-` from lou-14 and `-ar-N-` before it
+//      (one counter: lou-14 follows ar-13): a higher N is an update, a lower N never is --
+//      a channel cannot roll a node back by accident;
 //   2. with the same revision, the build number (4th version component) when both have one;
 //   3. else the commit hash: different is an update, which is upstream's rule for images
 //      that carry no build number.
 // `hash_equal` is the caller's shared-prefix compare of the two hashes.
 enum OtaVerdict { OTA_UP_TO_DATE = 0, OTA_NEWER = 1, OTA_OLDER = 2 };
 
+// `-lou-` is looked for first and wins: from lou-14 the features follow the revision,
+// and an image with auto-reply alone reads `...-lou-14-ar-<hash>`, whose `-ar-` would
+// otherwise be taken for the revision and the hash's leading digits for its number.
 static inline int otaRevisionOf(const char* version) {
   if (version == NULL) return -1;
-  const char* p = strstr(version, "-ar-");
-  if (p == NULL) return -1;
-  p += 4;
+  const char* p = strstr(version, "-lou-");
+  if (p != NULL) {
+    p += 5;
+  } else if ((p = strstr(version, "-ar-")) != NULL) {
+    p += 4;
+  } else {
+    return -1;
+  }
   if (*p < '0' || *p > '9') return -1;
   int n = 0;
   while (*p >= '0' && *p <= '9') { n = n * 10 + (*p - '0'); p++; }
