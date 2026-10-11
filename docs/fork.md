@@ -9,6 +9,14 @@ built, and any combination of them builds from the same tree:
 | `ar` | `WITH_AUTO_REPLY` | auto-reply: the regional test channel, private tests, `trigger test` | [autoreply.md](autoreply.md) |
 | `rc` | `WITH_MQTT_COMMAND` | remote command: signed commands and results over MQTT | [mqtt-control.md](mqtt-control.md) |
 
+| base | `ar` | `rc` | `arrc` | with `as` (reserved) |
+|---|---|---|---|---|
+| Observer (`fork/observer`), 17 repeater boards | built | built | built | `as`, `asar`, `asrc`, `asarrc`: not yet |
+| core MeshCore (`fork/core`), 12 curated boards (`scripts/boards-core.txt`) | built | -- (needs the Observer bridge) | -- | `as`, `asar`: not yet |
+
+Every Observer image also carries signed pull OTA; a core image has none. Room-server and
+companion images are not built (TODO 22a rulings 14, 23).
+
 An image says which combination it is in its version, which `ver` reports and every status
 publish carries: `<mcu>-v1.17.1-lou-<nn>-<features>-<hash>`, for example
 `esp32s3-v1.17.1-lou-14-arrc-1a2b3c4d` -- the image file's name; inside an Observer image

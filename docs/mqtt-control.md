@@ -1,5 +1,9 @@
 # Remote control over MQTT
 
+> Feature `rc` (`WITH_MQTT_COMMAND`): in the `rc` and `arrc` Observer images ([fork.md](fork.md)).
+> In an `rc` image without auto-reply, `trigger test`, `trigger private` and the `autoreply`
+> settings are refused as `not-allowed`.
+
 An observer node can accept commands published to it over MQTT: parameter changes, and a
 request to send a test now, on the channel or to one repeater alone. It is **off by default** and inert without a configured command key.
 

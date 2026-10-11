@@ -15,6 +15,23 @@ value you want (also when it already has that value), and read it again.
 Background: [`autoreply.md`](autoreply.md), [`mqtt-control.md`](mqtt-control.md),
 [`ota.md`](ota.md).
 
+**Which sections apply.** From lou-14 an image carries auto-reply (`ar`), the command plane
+(`rc`) or both (`arrc`), and says which in its version: section 3 shows it
+(`...-lou-14-arrc-...`; a version with `-ar-13-` or older is `arrc`). Do only the sections of the
+features the node has ([`fork.md`](fork.md)):
+
+| section | `arrc` | `ar` (Observer) | `rc` | `ar` (core MeshCore) |
+|---|---|---|---|---|
+| 0-4, 10 | yes | yes | yes | yes |
+| 5 WiFi, region, time zone; 6 the observer slot | yes | yes | yes | -- (no MQTT) |
+| 7 Auto-reply | yes | yes | -- (`get autoreply` is an unknown command) | yes, but `autoreply.region` is required: no IATA, no legacy channel |
+| 8 The command plane | yes | -- | yes | -- |
+| 9 Automatic updates | yes | yes | yes | -- (no pull OTA) |
+| 11 On-site checks | all | auto-reply, MQTT counters, phone test | command plane, MQTT counters | auto-reply, phone test |
+
+On core MeshCore the image is flashed as upstream's are (a `.uf2` or `.zip` for nRF52), not by
+the Observer flasher.
+
 ---
 
 ## 0. What to bring

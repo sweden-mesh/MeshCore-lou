@@ -1,5 +1,9 @@
 # Repeater auto-reply
 
+> Feature `ar` (`WITH_AUTO_REPLY`): in the `ar` and `arrc` images on the Observer and in the
+> `ar` images on core MeshCore ([fork.md](fork.md)). On core there is no MQTT, so no legacy
+> `#test-<iata>` channel; everything else here applies.
+
 A repeater can answer a keyword on one channel with a signal report, so anyone can check
 coverage by sending a single message — no login, no contact setup, no administration.
 
