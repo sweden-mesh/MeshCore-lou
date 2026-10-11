@@ -269,7 +269,7 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   }
 
   // Copy fields out before the document is reused/cleared.
-  char file_url[200] = {0}, avail_version[40] = {0}, avail_base[40] = {0}, avail_hash[24] = {0};
+  char file_url[200] = {0}, avail_version[48] = {0}, avail_base[40] = {0}, avail_hash[24] = {0};
   strncpy(file_url, doc["file"] | "", sizeof(file_url) - 1);
   strncpy(avail_version, doc["version"] | "", sizeof(avail_version) - 1);
   strncpy(avail_base, doc["baseVersion"] | "", sizeof(avail_base) - 1);
@@ -313,12 +313,9 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   }
 
   // --- Determine current-vs-available --------------------------------------
-  // Our running version token (e.g. "v1.16.0.5"), i.e. current_ver up to the
-  // first '-' (which precedes "-observer-<hash>").
-  char own_version[40] = {0};
-  for (size_t i = 0; current_ver && current_ver[i] && current_ver[i] != '-' && i < sizeof(own_version) - 1; i++) {
-    own_version[i] = current_ver[i];
-  }
+  // Our running version token (e.g. "v1.16.0.5"), past the MCU prefix when there is one.
+  char own_version[40];
+  otaVersionToken(current_ver, own_version, sizeof(own_version));
   char own_base[40];
   int own_build;
   ota_parseVersion(own_version, own_base, sizeof(own_base), &own_build);
@@ -328,6 +325,8 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   // git abbreviation difference.
   char cur_hash[24];
   ota_extractHash(current_ver, cur_hash, sizeof(cur_hash));
+  // Our manifests carry no "hash" field: the image's own name ends in it.
+  if (!avail_hash[0]) ota_extractHash(file_url, avail_hash, sizeof(avail_hash));
   size_t lh = strlen(avail_hash), lc = strlen(cur_hash);
   size_t m = (lh < lc) ? lh : lc;
   bool hash_equal = (m >= 7 && strncmp(avail_hash, cur_hash, m) == 0);
@@ -335,7 +334,8 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   // Newer or not (OtaVerifyLogic.h, operator ruling 2026-10-08): the ar-N revision
   // decides first and never rolls back, then the build number, then the hash.
   (void)own_base; (void)avail_base;
-  OtaVerdict verdict = otaUpdateVerdict(own_version, avail_version, own_build, avail_build, hash_equal);
+  // The full strings: the revision sits after the version token.
+  OtaVerdict verdict = otaUpdateVerdict(current_ver, avail_version, own_build, avail_build, hash_equal);
   int behind = (own_build >= 0 && avail_build >= 0) ? avail_build - own_build : 0;
   bool up_to_date = (verdict != OTA_NEWER);
   bool older = (verdict == OTA_OLDER);
@@ -354,7 +354,7 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   // a partition-change build). `ota check` ignores the return and just shows the
   // reply; `ota update` uses it to decide whether to actually schedule the flash.
   if (dry_run) {
-    int own_ar = otaRevisionOf(own_version), avail_ar = otaRevisionOf(avail_version);
+    int own_ar = otaRevisionOf(current_ver), avail_ar = otaRevisionOf(avail_version);
     if (older) {
       snprintf(reply, 160, "up to date: the channel offers an older build (%s)", avail_disp);
     } else if (up_to_date) {

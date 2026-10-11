@@ -102,6 +102,25 @@ static inline int otaRevisionOf(const char* version) {
   return n;
 }
 
+// The version token of a full version string, `v1.17.1` or `v1.17.1.3`: the first `-`
+// separated token that starts with `v`, so an MCU prefix (`esp32s3-v1.17.1-...`, from
+// ar-11) is skipped. otaUpdateVerdict wants the full strings; this is for the build number
+// and for display.
+static inline void otaVersionToken(const char* full, char* out, size_t out_size) {
+  if (out == NULL || out_size == 0) return;
+  out[0] = 0;
+  if (full == NULL) return;
+  const char* p = full;
+  if (*p != 'v') {
+    const char* dash = strchr(p, '-');
+    if (dash != NULL && dash[1] == 'v') p = dash + 1;
+  }
+  size_t n = 0;
+  while (p[n] && p[n] != '-' && n < out_size - 1) n++;
+  memcpy(out, p, n);
+  out[n] = 0;
+}
+
 static inline OtaVerdict otaUpdateVerdict(const char* own_version, const char* avail_version,
                                           int own_build, int avail_build, bool hash_equal) {
   int own_ar = otaRevisionOf(own_version), avail_ar = otaRevisionOf(avail_version);

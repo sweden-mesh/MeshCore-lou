@@ -130,6 +130,27 @@ TEST(OtaNewer, LouContinuesTheArCounter) {
                                              "esp32s3-v1.17.1-lou-14-ar-1a2b3c4d", -1, -1, true));
 }
 
+TEST(OtaNewer, TheRunningVersionIsComparedWhole) {
+  // Up to lou-14 the firmware compared only the token before the first '-' -- "esp32s3"
+  // since ar-11's MCU prefix, "v1.17.1" before it -- which carries no revision, so every
+  // other build on offer read as newer, an older one included. The verdict takes the
+  // whole string; the token is for the build number and for display.
+  const char* running = "esp32s3-v1.17.1-lou-14-arrc-observer-1a2b3c4d";
+  EXPECT_EQ(OTA_OLDER, otaUpdateVerdict(running, "esp32s3-v1.17.1-ar-13-16a05810", -1, 0, false));
+  EXPECT_EQ(OTA_NEWER, otaUpdateVerdict(running, "esp32s3-v1.17.1-lou-15-arrc-9f04c21b", -1, 0, false));
+  char tok[16];
+  otaVersionToken(running, tok, sizeof(tok));
+  EXPECT_STREQ("v1.17.1", tok);
+  otaVersionToken("v1.16.0.37-observer-9670035", tok, sizeof(tok));
+  EXPECT_STREQ("v1.16.0.37", tok);
+  otaVersionToken("nrf52840-v1.17.1.3-lou-14-ar-1a2b3c4d", tok, sizeof(tok));
+  EXPECT_STREQ("v1.17.1.3", tok);
+  otaVersionToken("dev-build", tok, sizeof(tok));
+  EXPECT_STREQ("dev", tok);
+  otaVersionToken(NULL, tok, sizeof(tok));
+  EXPECT_STREQ("", tok);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
