@@ -31,8 +31,9 @@ Without any switch the image is the Observer repeater plus the fork's OTA channe
 
 ## Tests per combination
 
-`pio test -e native` runs every suite as an image with no feature switched on; `native_ar` and
-`native_rc` run the feature's own suites and `test_fork_seams` with that one switch on, so the
+`pio test -e native` runs every suite as an image with no feature switched on; `native_ar`,
+`native_rc` and `native_arrc` run the features' suites and `test_fork_seams` with that
+combination's switches on, so the
 seams -- the feature token, which commands the plane admits -- are checked in the shape each
 image has. `native_v2` and `native_kiss_modem` are as before. The glue in
 `examples/simple_repeater/` is not host-tested; a target compile of each combination is its
