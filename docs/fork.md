@@ -40,6 +40,11 @@ scripts/build-matrix.sh -n                                             # the pla
 Each image is `<env>-<mcu>-v1.17.1-lou-<nn>-<features>-<hash>.bin` and asks its channel for the
 manifest `<env>-<features>.json` (`OTA_VARIANT`), so it can only be offered its own combination.
 `scripts/check-build-matrix.sh` compares the plan with `test/data/build-matrix-<base>.txt`.
+The whole matrix runs in GitHub Actions, `.github/workflows/fork-matrix.yml`, started by hand
+with the two refs and the revision: the host suites per combination, then one job per image
+(63 at lou-14), then one artifact, `candidate-<revision>`, with every image, every Observer
+image's unsigned manifest and `SHA256SUMS`. It signs nothing and publishes nothing; the
+release step on the release host does both.
 Without any switch the image is the Observer repeater plus the fork's OTA channel.
 
 ## Tests per combination
