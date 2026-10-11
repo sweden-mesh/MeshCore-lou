@@ -1194,34 +1194,57 @@ TEST(BuildProbe, RefusesRatherThanTruncatingAName) {
   EXPECT_EQ(0u, autoReplyBuildProbe(out, sizeof(out), "SE-JKG-LOUTEST", "test", "A1B2C3D4", 8));
 }
 
-TEST(AnonStagger, OnlyTheTestSubTypeWaits) {
-  // The one thing this predicate exists to prevent: an admin command answered on a
-  // mesh stagger. Everything the anon block serves except the test must go out at
-  // once.
-  EXPECT_TRUE(autoReplyAnonReplyIsStaggered(AUTOREPLY_ANON_TEST_SUBTYPE));
-  EXPECT_TRUE(autoReplyAnonReplyIsStaggered(0x04));
-
-  EXPECT_FALSE(autoReplyAnonReplyIsStaggered(0x00));  // login, empty password
-  EXPECT_FALSE(autoReplyAnonReplyIsStaggered(0x01));  // regions
-  EXPECT_FALSE(autoReplyAnonReplyIsStaggered(0x02));  // owner
-  EXPECT_FALSE(autoReplyAnonReplyIsStaggered(0x03));  // clock
+// An anonymous request as it arrives: timestamp, sub-type, body.
+static size_t anonRequest(uint8_t* out, uint8_t sub_type, const char* body) {
+  memset(out, 0x5A, 4);
+  out[4] = sub_type;
+  memcpy(&out[5], body, strlen(body));
+  return 5 + strlen(body);
 }
 
-TEST(AnonStagger, APasswordIsNeverATestSubType) {
-  // A login carries a password in the same byte, so every printable character has
-  // to fall through to the immediate path. 0x04 is not printable and cannot collide.
-  for (int c = 0x20; c <= 0x7E; c++) {
-    EXPECT_FALSE(autoReplyAnonReplyIsStaggered((uint8_t)c)) << "printable " << c;
-  }
+TEST(PrivateTest, TheTestSubTypeWithTheKeywordIsOurs) {
+  uint8_t req[64];
+  EXPECT_EQ(0xF0, AUTOREPLY_ANON_TEST_SUBTYPE);
+  EXPECT_TRUE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "test"), "test"));
+  EXPECT_TRUE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "TEST A1B2C3D4"), "test"));
+  EXPECT_TRUE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "test a1b2c3d4\r\n"), "test"));
 }
 
-TEST(AnonStagger, NoOtherByteWaits) {
-  // An unknown sub-type gets no reply at all, but if that ever changes it must not
-  // inherit the stagger by accident.
+TEST(PrivateTest, TheOldSubTypeIsNoLongerAnswered) {
+  // ar-11..13 asked with 0x04. The cut-off is hard: such a request is not a test, and
+  // goes on to whatever upstream makes of it (an unknown sub-type, so nothing).
+  uint8_t req[64];
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0x04, "test"), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0x04, "test A1B2C3D4"), "test"));
+}
+
+TEST(PrivateTest, NoOtherSubTypeIsATest) {
+  // Upstream's own requests (0x01-0x03) and every login byte -- 0 for an empty
+  // password, ' ' and up for a typed one -- must reach upstream's handler untouched.
+  uint8_t req[64];
   for (int b = 0; b <= 0xFF; b++) {
     if (b == AUTOREPLY_ANON_TEST_SUBTYPE) continue;
-    EXPECT_FALSE(autoReplyAnonReplyIsStaggered((uint8_t)b)) << "byte " << b;
+    EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, (uint8_t)b, "test"), "test")) << b;
   }
+}
+
+TEST(PrivateTest, APasswordThatStartsWithAnEmojiIsALogin) {
+  // A UTF-8 password beginning with a four-byte character puts 0xF0 where the
+  // sub-type sits. Taking it as a test would lock its owner out of every repeater
+  // with auto-reply.
+  uint8_t req[64];
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "\x9F\x94\x91secret"), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "\x9F\x98\x80test"), "test"));
+}
+
+TEST(PrivateTest, ChatAndShortRequestsAreNot) {
+  uint8_t req[64];
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "test me"), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "testing"), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, ""), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, 4, "test"));       // no sub-type byte at all
+  EXPECT_FALSE(autoReplyIsPrivateTest(NULL, 9, "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "test"), NULL));
 }
 
 TEST(CommandIs, APrefixIsNotTheWholeCommand) {

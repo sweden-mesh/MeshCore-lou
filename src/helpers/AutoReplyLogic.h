@@ -1000,23 +1000,28 @@ static inline bool autoReplyReplyIsZeroHop(uint8_t hop_count, bool direct_flood)
   return hop_count == 0 && !direct_flood;
 }
 
-// Mode M's answer rides the same block that answers a login, a regions query, an
-// owner query and a clock query, and that block sends everything on one fixed
-// delay. Only the test is an auto-reply. Only the test is staggered.
+// Mode M's request is an anonymous request, the packet a login and the regions,
+// owner and clock queries arrive in: a 4-byte timestamp, a sub-type byte (data[4]),
+// then the body. Upstream uses 0x01-0x03 and reads 0 or anything from ' ' up as the
+// first byte of a password. 0xF0 is the private test's, and only 0xF0: releases up to
+// ar-13 used 0x04, and that is no longer answered at all (operator, 2026-10-10 -- a
+// hard cut-off, so the two never have to be told apart in the field).
 //
-// The distinction matters in one direction: a login, regions, owner or clock
-// request has a person waiting at a keyboard for it, and making them sit through a
-// mesh-wide stagger measured in tens of seconds would read as a dead node, not as
-// politeness. A test has nobody waiting, and every repeater in range answers the
-// same request, which is exactly the case the stagger exists for.
-//
-// The sub-type is data[4] of the request. A login is identified by that byte being
-// 0 (an empty password) or any printable character, so the safe rule is the narrow
-// one: stagger the test sub-type and nothing else.
-#define AUTOREPLY_ANON_TEST_SUBTYPE 0x04
+// 0xF0 is also the first byte a UTF-8 password takes when it starts with an emoji, so
+// the sub-type alone does not make a request ours: the body must be the test itself,
+// the keyword or the keyword and an id. Anything else goes on to the login it may be.
+#define AUTOREPLY_ANON_TEST_SUBTYPE 0xF0
 
-static inline bool autoReplyAnonReplyIsStaggered(uint8_t sub_type) {
-  return sub_type == AUTOREPLY_ANON_TEST_SUBTYPE;
+static inline bool autoReplyIsPrivateTest(const uint8_t* data, size_t len, const char* keyword) {
+  if (data == NULL || keyword == NULL || len <= 5) return false;
+  if (data[4] != AUTOREPLY_ANON_TEST_SUBTYPE) return false;
+  char text[128];
+  size_t n = len - 5 < sizeof(text) - 1 ? len - 5 : sizeof(text) - 1;
+  memcpy(text, &data[5], n);
+  text[n] = 0;
+  const char* id;
+  size_t id_len;
+  return autoReplyParsePrivateTest(text, keyword, &id, &id_len);
 }
 
 // A command matched with memcmp alone accepts anything that starts with it, so a

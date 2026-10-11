@@ -114,6 +114,50 @@ void Fork::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Group
   }
 }
 
+// A private test request (Mode M): an anonymous request to this node alone, carrying
+// the keyword and an optional id after sub-type 0xF0. Answered with the channel report,
+// built by the same code, as a response to whoever's key asked.
+//
+// Upstream's anonymous requests are answered at once, because somebody is watching a
+// screen for a login. Nobody waits on a test, and every repeater a fleet-wide
+// 'trigger private' reaches answers at the same moment, so the answer takes this node's
+// slot like every other auto-reply. The way home is upstream's own choice
+// (chooseReplyRoute): a flooded request gets the path it collected back with the
+// answer, as a login does, so a requester with no path here gains one; a direct one
+// carries no path of its own and goes back along the stored one, or floods.
+bool Fork::onAnonRequest(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                         const uint8_t* data, size_t len) {
+  if (!autoReplyIsPrivateTest(data, len, AUTOREPLY_KEYWORD)) return false;
+
+  uint8_t report[AUTOREPLY_MAX_PAYLOAD];
+  int report_len = _auto_reply.buildPrivateReply(packet, sender, &data[5], len - 5,
+                                                 _mesh._prefs.node_name, radio_driver.getLastRSSI(),
+                                                 _mesh.getRTCClock()->getCurrentTimeUnique(), report);
+  if (report_len == 0) return true;   // switched off or over budget: still never a login
+
+  uint32_t delay_millis = slottedReplyDelay();
+  MESH_DEBUG_PRINTLN("AutoReply: answering private test in %d ms", (uint32_t)delay_millis);
+
+  ClientInfo* client = _mesh.acl.getClient(sender.pub_key, PUB_KEY_SIZE);
+  bool have_out_path = client != NULL && client->out_path_len != OUT_PATH_UNKNOWN;
+  auto route = mesh::chooseReplyRoute(packet->isRouteFlood(), false, have_out_path);
+
+  if (route == mesh::REPLY_ROUTE_PATH_RETURN) {
+    mesh::Packet* path = _mesh.createPathReturn(sender, secret, packet->path, packet->path_len,
+                                                PAYLOAD_TYPE_RESPONSE, report, report_len);
+    if (path) _mesh.sendFloodReply(path, delay_millis, packet->getPathHashSize());
+    return true;
+  }
+  mesh::Packet* reply = _mesh.createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, report, report_len);
+  if (reply == NULL) return true;
+  if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
+    _mesh.sendDirect(reply, client->out_path, client->out_path_len, delay_millis);
+  } else {
+    _mesh.sendFloodReply(reply, delay_millis, packet->getPathHashSize());
+  }
+  return true;
+}
+
 // Originate a probe on the test channel -- the second vantage point this whole
 // sprint exists for. Every run so far has started at one node, so degree in the
 // derived graph is as much a fact about where we sit as about the mesh.

@@ -61,7 +61,6 @@
 #define ANON_REQ_TYPE_REGIONS      0x01
 #define ANON_REQ_TYPE_OWNER        0x02
 #define ANON_REQ_TYPE_BASIC        0x03   // just remote clock
-#define ANON_REQ_TYPE_TEST         AUTOREPLY_ANON_TEST_SUBTYPE   // a private test request: the auto-reply report, to the sender alone
 
 #define CLI_REPLY_DELAY_MILLIS      600
 
@@ -252,16 +251,6 @@ uint8_t MyMesh::handleAnonClockReq(const mesh::Identity& sender, uint32_t sender
     return 9;   // reply length
   }
   return 0;
-}
-
-// The request body is the text alone; it carries no reply path, so a direct request
-// is answered with a flooded datagram and a flooded one by path-return. The report
-// is the channel one, built by the same code, for whoever's key asked.
-uint8_t MyMesh::handleAnonTestReq(mesh::Packet* packet, const mesh::Identity& sender,
-                                  const uint8_t* body, size_t len) {
-  return fork._auto_reply.buildPrivateReply(packet, sender, body, len, _prefs.node_name,
-                                      radio_driver.getLastRSSI(),
-                                      getRTCClock()->getCurrentTimeUnique(), reply_data);
 }
 
 int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t *payload, size_t payload_len) {
@@ -681,21 +670,11 @@ mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
   return Mesh::onRecvPacket(pkt);
 }
 
-// How long an anon reply waits. An admin request answers on the fixed
-// SERVER_RESPONSE_DELAY it always has -- somebody is at a keyboard waiting for it. A
-// test request takes its slot like every other reply, because every repeater that
-// heard the request is about to answer it.
-uint32_t MyMesh::anonReplyDelay(const mesh::Packet* reply, bool stagger) {
-  if (!stagger) return SERVER_RESPONSE_DELAY;
-  uint32_t delay_millis = fork.slottedReplyDelay();
-  MESH_DEBUG_PRINTLN("AutoReply: answering private test in %d ms", (uint32_t)delay_millis);
-  return delay_millis;
-}
-
 void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const mesh::Identity &sender,
                             uint8_t *data, size_t len) {
   if (packet->getPayloadType() == PAYLOAD_TYPE_ANON_REQ) { // received an initial request by a possible admin
                                                            // client (unknown at this stage)
+    if (fork.onAnonRequest(packet, secret, sender, data, len)) return;
     uint32_t timestamp;
     memcpy(&timestamp, data, 4);
 
@@ -711,28 +690,11 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
       reply_len = handleAnonOwnerReq(sender, timestamp, &data[5]);
     } else if (data[4] == ANON_REQ_TYPE_BASIC && packet->isRouteDirect()) {
       reply_len = handleAnonClockReq(sender, timestamp, &data[5]);
-    } else if (data[4] == ANON_REQ_TYPE_TEST && len >= 5) {
-      // Flood or direct: a requester that has no path to this node floods, and the
-      // reply block below returns a path with the answer, as it does for a login.
-      //
-      // 'len >= 5' because the body length is 'len - 5', and a request too short to
-      // hold the sub-type byte would wrap that subtraction to a huge size_t. The
-      // read stayed inside the packet buffer even then -- the reply builder clamps
-      // it -- but what it parsed was stale stack, and a length that is only correct
-      // because something downstream truncates it is not a length.
-      reply_len = handleAnonTestReq(packet, sender, &data[5], len - 5);
     } else {
       reply_len = 0;  // unknown/invalid request type
     }
 
     if (reply_len == 0) return;   // invalid request
-
-    // A test request is an auto-reply and waits its turn; everything else here has
-    // somebody watching a screen for the answer and goes out at once. The stagger is
-    // the same one the channel and private-DM replies use, so one slot governs every
-    // reply this node sends, and a fleet-wide 'trigger private' spreads out instead
-    // of landing on one instant.
-    const bool stagger = autoReplyAnonReplyIsStaggered(data[4]);
 
     // a DIRECT login can reply via the stored out_path, as onPeerDataRecv() does for REQ
     ClientInfo* client = acl.getClient(sender.pub_key, PUB_KEY_SIZE);
@@ -744,7 +706,7 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
       // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the response
       mesh::Packet* path = createPathReturn(sender, secret, packet->path, packet->path_len,
                                             PAYLOAD_TYPE_RESPONSE, reply_data, reply_len);
-      if (path) sendFloodReply(path, anonReplyDelay(path, stagger), packet->getPathHashSize());
+      if (path) sendFloodReply(path, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
       return;
     }
 
@@ -752,11 +714,11 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
     if (reply == NULL) return;
 
     if (route == mesh::REPLY_ROUTE_DIRECT_SUPPLIED) {
-      sendDirect(reply, reply_path, reply_path_len, anonReplyDelay(reply, stagger));
+      sendDirect(reply, reply_path, reply_path_len, SERVER_RESPONSE_DELAY);
     } else if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
-      sendDirect(reply, client->out_path, client->out_path_len, anonReplyDelay(reply, stagger));
+      sendDirect(reply, client->out_path, client->out_path_len, SERVER_RESPONSE_DELAY);
     } else {
-      sendFloodReply(reply, anonReplyDelay(reply, stagger), packet->getPathHashSize());
+      sendFloodReply(reply, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
     }
   }
 }

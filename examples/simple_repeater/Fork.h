@@ -24,13 +24,11 @@ class MQTTBridge;
  * field on a file upstream keeps editing.
  */
 class Fork {
-  friend class MyMesh;
   MyMesh& _mesh;
 #ifdef WITH_AUTO_REPLY
   AutoReply _auto_reply;
 
   bool handleAutoReplyCommand(char* command, char* reply);
-  bool autoReplyScope(TransportKey* scope);
   uint32_t slottedReplyDelay();
   bool triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply);
   bool triggerPrivateProbe(const char* pubkey_hex, const char* id, size_t id_len, char* reply);
@@ -60,5 +58,21 @@ public:
 #else
   int searchChannelsByHash(const uint8_t*, mesh::GroupChannel[], int) { return 0; }
   void onGroupDataRecv(mesh::Packet*, uint8_t, const mesh::GroupChannel&, uint8_t*, size_t) { }
+#endif
+
+#ifdef WITH_AUTO_REPLY
+  // The region a reply is scoped to when 'autoreply.region' names one.
+  bool autoReplyScope(TransportKey* scope);
+#endif
+
+  // An anonymous request, before upstream reads it as a login or a query. Returns true
+  // when it was a feature's, answered or refused, and upstream must not see it.
+#ifdef WITH_AUTO_REPLY
+  bool onAnonRequest(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                     const uint8_t* data, size_t len);
+#else
+  bool onAnonRequest(mesh::Packet*, const uint8_t*, const mesh::Identity&, const uint8_t*, size_t) {
+    return false;
+  }
 #endif
 };

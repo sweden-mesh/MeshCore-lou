@@ -408,6 +408,13 @@ named in the brackets by the first four bytes of that key in hex, `[a1b2c3d4]`: 
 the packet carries, and nobody can type somebody else's. No group text is sent, nobody on the
 channel sees anything, and no other repeater answers.
 
+**The sub-type is `0xF0`.** Releases up to ar-13 used `0x04`; from lou-14 a node answers `0xF0`
+and nothing else, a hard cut-off rather than a transition, so a node still on ar-11..13 is
+re-flashed by hand and every requester sends `0xF0` from lou-14. `0xF0` is also the first byte
+of a login password that starts with an emoji, so the sub-type alone does not make a request a
+test: its body must be `test` or `test <8 hex>`, and anything else goes on to the login it may
+be. A node built without auto-reply reads a test request as a login that fails, and stays silent.
+
 A request may reach the repeater either way, and the answer travels accordingly:
 
 | Request arrived | Reply |
