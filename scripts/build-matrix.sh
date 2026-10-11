@@ -46,7 +46,7 @@ if [ -z "$COMBOS" ]; then
 fi
 if [ -z "$BOARDS" ]; then
   if [ "$BASE" = observer ]; then
-    BOARDS=$(bash build.sh list | awk '{print $1}' | grep '_repeater_observer_mqtt$')
+    BOARDS=$(bash build.sh list | awk '{print $1}' | grep '_repeater_observer_mqtt$' | LC_ALL=C sort)
   else
     BOARDS=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' scripts/boards-core.txt | grep -v '^$')
   fi
