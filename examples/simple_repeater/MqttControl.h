@@ -1,0 +1,141 @@
+#pragma once
+
+#include <Arduino.h>
+#include <ForkFeatures.h>
+#include <Mesh.h>
+#include <helpers/ForkText.h>
+#include <helpers/IdentityStore.h>
+#include <helpers/MqttControlLogic.h>
+#include <helpers/MqttControlV2.h>
+#include <helpers/TxtDataHelpers.h>
+
+
+// One staged command, copied out of the MQTT event task so nothing expensive
+// happens there. Sized to the logic's own bounds; both are static, because the
+// DRAM fragmentation note in docs/mbedtls-tls-footprint.md makes a per-message
+// allocation on the reconnect path a measured hazard rather than a style point.
+struct MqttControlStaged {
+  char topic[MQTTCTRL_MAX_TOPIC + 1];
+  char payload[MQTTCTRL_MAX_PAYLOAD + 1];
+  size_t payload_len;
+  bool pending;
+};
+
+// Runs an allowlisted command through the node's CLI. An interface rather than a
+// direct call on MyMesh, so this class stays free of the application it serves and
+// its tests need no mesh at all.
+struct MqttCommandRunner {
+  virtual ~MqttCommandRunner() { }
+  virtual void runCommand(uint32_t sender_timestamp, char* command, char* reply) = 0;
+};
+
+/**
+ * \brief  Accepts signed commands over MQTT and runs them through the node's CLI.
+ *
+ * A login to the broker this rides on costs nothing to make, and any login may
+ * publish a command to any node. Nothing here trusts the transport: a command is
+ * executed only if it carries an Ed25519 signature by the key set with 'set mqtt.cmd.pubkey' over the
+ * topic and body together, its counter has never been seen before, it has not
+ * expired, it is on the allowlist, and the rate limiter still has budget.
+ *
+ * The decisions are all in src/helpers/MqttControlLogic.h, where they are attacked
+ * on the host (test/test_mqtt_control). This class is the state, the key and the I/O.
+ *
+ * Off unless 'set mqtt.cmd on', deaf until 'set mqtt.cmd.slot <n>' names the MQTT slot
+ * to listen on (read at boot), and inert regardless without a key.
+ */
+// What drain() reports back so the caller can publish a result that names the
+// request it answers. The counter is the correlation id: strictly increasing,
+// persisted per node, and chosen by the requester.
+struct MqttCtrlOutcome {
+  bool authentic;                            // signature verified; safe to publish
+  bool v2;                                   // came sealed (v2), so is answered sealed (r3)
+  uint32_t counter;                          // the request's counter
+  char command[MQTTCTRL_MAX_COMMAND + 1];    // echoed back, NUL-terminated
+
+  MqttCtrlOutcome() : authentic(false), v2(false), counter(0) { command[0] = 0; }
+};
+
+class MqttControl {
+  FILESYSTEM* _fs;
+  bool _enabled;
+  uint32_t _counter;          // highest command counter accepted, persisted
+  uint8_t _slot;              // 1-based MQTT slot to listen and answer on, 0 = none
+  char _pubkey[PUB_KEY_SIZE * 2 + 1];   // hex public key commands must be signed by
+  // Version 3 ends in the two automatic-OTA bytes releases up to ar-13 kept here. OTA
+  // keeps its settings in /ota now; the bytes are carried as read, so an image that
+  // rolls back to one of those releases still finds what it wrote.
+  uint8_t _ota_legacy[2];
+  MqttControlStaged _staged;
+  // The v2 key for this node's own command topic (TODO 17a): derived once per command
+  // key, at boot and when the key changes, and kept in RAM only.
+  uint8_t _v2_key[MQTTV2_KEY_LEN];
+  bool _v2_ready;
+  char _v2_key_for[PUB_KEY_SIZE * 2 + 1];      // the command key it was derived from
+  char _v2_topic[MQTTCTRL_MAX_TOPIC + 1];      // the only topic a v2 command may arrive on
+  MqttCtrlBudget _commands;
+  MqttCtrlBudget _transmits;
+
+  void load();
+  void save();
+
+public:
+  MqttControl();
+
+  void begin(FILESYSTEM* fs);
+  bool isEnabled() const { return _enabled; }
+  uint32_t counter() const { return _counter; }
+  uint8_t slot() const { return _slot; }
+  // `set mqtt.cmd on` with no slot configured chooses one (MyMesh::autoSetupMqttControl).
+  void setSlotAndEnable(uint8_t slot) { _slot = slot; _enabled = true; save(); }
+  const char* pubkey() const { return _pubkey; }
+  // The command key the v2 key was derived from, "" when none.
+  const char* v2KeyFor() const { return _v2_key_for; }
+  void setV2Key(const uint8_t key[MQTTV2_KEY_LEN], const char* key_for, const char* topic) {
+    memcpy(_v2_key, key, MQTTV2_KEY_LEN);
+    StrHelper::strncpy(_v2_key_for, key_for, sizeof(_v2_key_for));
+    StrHelper::strncpy(_v2_topic, topic, sizeof(_v2_topic));
+    _v2_ready = key_for[0] != 0;
+  }
+  const uint8_t* v2Key() const { return _v2_key; }
+
+  // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
+  static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);
+  static bool buildBroadcastTopic(const char* iata, char* out, size_t out_size);
+  static bool buildResultTopic(const char* iata, const char* node_hex,
+                               char* out, size_t out_size);
+
+  // Called on the MQTT event task. Copies and flags, nothing more: verification and
+  // execution both need more stack than that task has, and executing a command
+  // there would run a flash write on the network stack's own thread.
+  void stage(const char* topic, const uint8_t* payload, size_t len);
+  bool hasPending() const { return _staged.pending; }
+
+  // Resolve a staged command without executing it. The slot holds one command and
+  // clears only when it is disposed of, so every path that declines to run one
+  // must call this or the slot latches and drops everything after it.
+  void discard() { _staged.pending = false; }
+
+  // Called on the loop task. Verifies the staged command against 'owner' and runs
+  // it through 'mesh' if it passes, writing a human-readable outcome into 'reply'
+  // (at least 160 bytes, the CLI's own budget). Returns the verdict either way, so
+  // the caller can publish a refusal without having to guess why.
+  // 'out', when given, carries what the caller needs to publish an attributable
+  // result: whether the signature verified, and the counter and command it
+  // vouched for. 'authentic' decides whether a result may be published:
+  // verification happens before the rate limiter (deliberately -- the limiters
+  // spend budget when asked, so every stateless check runs first), which means a
+  // bad-signature refusal is not rate limited. Publishing those would let anyone
+  // who can log in to the broker drive unlimited publishes out of
+  // this node by sending garbage. A flag set at the point of truth, rather than
+  // a classification of result codes, so a code added later cannot drift into
+  // the wrong half.
+  MqttCtrlResult drain(const mesh::Identity& owner, uint32_t now,
+                       MqttCommandRunner* runner, char* reply, size_t reply_size,
+                       MqttCtrlOutcome* out = NULL);
+
+  // 'slot_count' bounds 'set mqtt.cmd.slot'; see mqttCtrlParseSlot. A non-zero
+  // 'sender_timestamp' is a remote caller, which may not read or write the key.
+  bool handleCommand(uint32_t sender_timestamp, int slot_count, const char* command,
+                     char* reply);
+};

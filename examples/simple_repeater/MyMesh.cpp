@@ -572,6 +572,7 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
                             uint8_t *data, size_t len) {
   if (packet->getPayloadType() == PAYLOAD_TYPE_ANON_REQ) { // received an initial request by a possible admin
                                                            // client (unknown at this stage)
+    if (fork.onAnonRequest(packet, secret, sender, data, len)) return;
     uint32_t timestamp;
     memcpy(&timestamp, data, 4);
 
@@ -946,6 +947,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   // load persisted prefs
   _cli.loadPrefs(_fs);
   acl.load(_fs, self_id);
+  fork.begin(_fs);
   // TODO: key_store.begin();
   region_map.load(_fs);
 
@@ -1279,7 +1281,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
-  } else{
+  } else if (!fork.handleCommand(sender_timestamp, command, reply)) {
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
@@ -1290,6 +1292,7 @@ void MyMesh::loop() {
 #endif
 
   mesh::Mesh::loop();
+  fork.loop();
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();

@@ -1,0 +1,121 @@
+allowed|ver
+allowed|get name
+allowed|get autoreply
+allowed|region
+allowed|neighbors
+allowed|get radio
+allowed|get repeat
+allowed|get flood.max
+allowed|get flood.max.unscoped
+allowed|get txdelay
+allowed|get direct.txdelay
+allowed|get rxdelay
+allowed|get af
+allowed|get cad
+allowed|get int.thresh
+allowed|get mqtt.status
+allowed|get mqtt.cmd
+allowed|get mqtt.iata
+allowed|get mqtt.interval
+allowed|board
+allowed|memory
+allowed|clock
+allowed|ota check
+allowed|get stats
+allowed|get ota
+allowed|set autoreply on
+allowed|set autoreply.mode flood
+allowed|set autoreply.hops 3
+allowed|set autoreply.delay 60
+allowed|set autoreply.direct.flood on
+allowed|set autoreply.private on
+allowed|set autoreply.region se-jkp
+allowed|set autoreply.slot 1
+allowed|set autoreply.slots 16
+allowed|set autoreply.window 10 120
+allowed|trigger test
+allowed|trigger test F
+allowed|region put se-jkp *
+allowed|region allowf se-jkp
+allowed|region denyf se-jkp
+allowed|region remove se06
+allowed|region default se-jkp
+allowed|region home se-jkp
+allowed|region save
+allowed|set txdelay 0.5
+allowed|set direct.txdelay 0.3
+allowed|set rxdelay 0
+allowed|set af 9.0
+allowed|set cad on
+allowed|set int.thresh 1
+allowed|set flood.max 8
+allowed|set flood.max.unscoped 2
+allowed|set path.hash.mode 0
+allowed|set loop.detect 0
+allowed|set multi.acks on
+allowed|set mqtt.iata JKG
+allowed|set mqtt.interval 5
+allowed|set mqtt.status on
+allowed|set mqtt.packets on
+allowed|set mqtt.raw on
+allowed|set mqtt.neighbors on
+allowed|set mqtt.presets 2
+allowed|set mqtt1.preset meshat.se
+allowed|set mqtt1.server mqtt.louie.se
+allowed|set mqtt2.username mcoar
+allowed|set mqtt2.password x
+allowed|set mqtt3.preset custom
+allowed|set name Foo
+allowed|reboot
+allowed|clkreboot
+allowed|clear stats
+allowed|neighbor.remove 4AC61A7F
+allowed|powersaving on
+allowed|gps on
+allowed|set ota.auto on
+allowed|set ota.check.hours 12
+allowed|mqtt.cmd ping
+allowed|set autoreply.legacy off
+denied|set prv.key 00
+denied|set public.key 00
+denied|set mqtt.cmd off
+denied|set mqtt.cmd.slot 2
+denied|get mqtt.cmd.pubkey
+denied|set wifi.pwd x
+denied|get wifi.ssid
+denied|password x
+denied|get guest.password
+denied|set alert.psk 00
+denied|get bridge.secret
+denied|get snmp.community
+denied|get mqtt.owner
+denied|set owner.info x
+denied|get tls.x
+denied|get prv.key
+denied|get mqtt1.password
+denied|get mqtt6.token
+denied|erase
+denied|start webconfig
+denied|ota update
+denied|poweroff
+denied|shutdown
+denied|set bootloader.ver 2
+denied|set lat 57.78
+denied|get lon
+denied|set role repeater
+denied|set repeat off
+denied|set freq 869.6
+denied|set radio.rxgain 1
+denied|set tx 20
+denied|set extra.sf 1
+denied|set dutycycle 10
+denied|tempradio 869 62.5 8 8
+denied|advert
+denied|alert test
+denied|set advert.interval 1
+denied|time 1900000000
+denied|log
+denied|stats-core
+denied|floodscan
+denied|set
+denied|get

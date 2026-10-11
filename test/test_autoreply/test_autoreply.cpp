@@ -1,0 +1,1963 @@
+// Host tests for the repeater auto-reply logic (src/helpers/AutoReplyLogic.h): the
+// '#test-<iata>' channel derived from the observer region code, the trigger parsing
+// of an incoming group text, and the per-sender cooldown ring. These are the exact
+// functions examples/simple_repeater/AutoReply.cpp calls.
+#include <gtest/gtest.h>
+#include <string>
+#include <vector>
+#include "helpers/AutoReplyLogic.h"
+#include "helpers/SlidingBudget.h"
+
+// The firmware's buffer for a channel name (AUTOREPLY_MAX_CHANNEL).
+static const size_t CHANNEL_BUF = 16;
+
+// autoReplyParseRequest() trims in place, so tests need a mutable copy.
+static void copyText(char* dest, size_t size, const char* src) {
+  snprintf(dest, size, "%s", src);
+}
+
+// ---- the channel derived from the region code -----------------------------
+
+TEST(DeriveChannel, BuildsTestDashRegion) {
+  char out[CHANNEL_BUF];
+  EXPECT_TRUE(autoReplyDeriveChannel("sto", out, sizeof(out)));
+  EXPECT_STREQ("#test-sto", out);
+}
+
+TEST(DeriveChannel, FoldsToLowerCase) {
+  // The CLI stores the region upper-cased, but clients only accept lower-case
+  // channel names and the key is the hash of the name exactly as stored, so an
+  // upper-case name would hash to a channel nobody could join.
+  char out[CHANNEL_BUF];
+  EXPECT_TRUE(autoReplyDeriveChannel("STO", out, sizeof(out)));
+  EXPECT_STREQ("#test-sto", out);
+  EXPECT_TRUE(autoReplyDeriveChannel("Lax", out, sizeof(out)));
+  EXPECT_STREQ("#test-lax", out);
+}
+
+TEST(DeriveChannel, AcceptsAlphanumericRegions) {
+  char out[CHANNEL_BUF];
+  EXPECT_TRUE(autoReplyDeriveChannel("D3N", out, sizeof(out)));
+  EXPECT_STREQ("#test-d3n", out);
+}
+
+TEST(DeriveChannel, RejectsAnUnsetRegion) {
+  // Without a region there is no per-region channel, so the node stays silent.
+  char out[CHANNEL_BUF];
+  EXPECT_FALSE(autoReplyDeriveChannel("", out, sizeof(out)));
+  EXPECT_STREQ("", out);
+  EXPECT_FALSE(autoReplyDeriveChannel(nullptr, out, sizeof(out)));
+  EXPECT_STREQ("", out);
+}
+
+TEST(DeriveChannel, RejectsThePlaceholderRegion) {
+  // 'XXX' is what MQTTTopicRouter also treats as unconfigured.
+  char out[CHANNEL_BUF];
+  EXPECT_FALSE(autoReplyDeriveChannel("XXX", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyDeriveChannel("xxx", out, sizeof(out)));
+  EXPECT_STREQ("", out);
+}
+
+TEST(DeriveChannel, RejectsMalformedRegions) {
+  // Same rule as the 'set mqtt.iata' setter: exactly three alphanumerics.
+  char out[CHANNEL_BUF];
+  EXPECT_FALSE(autoReplyDeriveChannel("ST", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyDeriveChannel("STOC", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyDeriveChannel("S O", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyDeriveChannel("S/O", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyDeriveChannel("S#O", out, sizeof(out)));
+}
+
+TEST(DeriveChannel, CanNeverProduceASharedChannel) {
+  // The mesh-wide channels a reply must never go to. The prefix plus a three-char
+  // region cannot collide with any of them, which is why the name is derived.
+  const char* shared[] = { "#public", "#test", "#bot" };
+  char out[CHANNEL_BUF];
+  for (int a = 0; a < 36; a++) {
+    for (int b = 0; b < 36; b++) {
+      for (int c = 0; c < 36; c++) {
+        const char* digits = "abcdefghijklmnopqrstuvwxyz0123456789";
+        char iata[4] = { digits[a], digits[b], digits[c], 0 };
+        if (!autoReplyDeriveChannel(iata, out, sizeof(out))) continue;
+        for (const char* s : shared) EXPECT_STRNE(s, out);
+      }
+    }
+  }
+}
+
+TEST(DeriveChannel, RejectsABufferItCannotFill) {
+  char small[sizeof(AUTOREPLY_CHANNEL_PREFIX) + 2];   // prefix + NUL + 2 of the 3 chars
+  EXPECT_FALSE(autoReplyDeriveChannel("sto", small, sizeof(small)));
+  EXPECT_STREQ("", small);
+
+  char exact[sizeof(AUTOREPLY_CHANNEL_PREFIX) + 3];   // prefix + NUL + all 3
+  EXPECT_TRUE(autoReplyDeriveChannel("sto", exact, sizeof(exact)));
+  EXPECT_STREQ("#test-sto", exact);
+}
+
+TEST(DeriveChannel, RejectsNullOrZeroBuffer) {
+  char out[CHANNEL_BUF];
+  EXPECT_FALSE(autoReplyDeriveChannel("sto", nullptr, sizeof(out)));
+  EXPECT_FALSE(autoReplyDeriveChannel("sto", out, 0));
+}
+
+// ---- request parsing: "<sender>: <message>" and the trigger ---------------
+
+TEST(ParseRequest, SplitsSenderFromMessage) {
+  char text[128];
+  copyText(text, sizeof(text), "Louie: test");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  EXPECT_TRUE(r.is_trigger);
+  EXPECT_EQ(5u, r.sender_len);
+  EXPECT_EQ(0, strncmp(r.sender, "Louie", 5));
+  EXPECT_STREQ("test", r.message);
+}
+
+TEST(ParseRequest, KeywordIsCaseInsensitive) {
+  const char* spellings[] = { "test", "Test", "TEST", "tEsT" };
+  for (const char* s : spellings) {
+    char text[128];
+    copyText(text, sizeof(text), (std::string("Louie: ") + s).c_str());
+    EXPECT_TRUE(autoReplyParseRequest(text, "test").is_trigger) << s;
+  }
+}
+
+TEST(ParseRequest, TrimsSpacesAndLineEndings) {
+  char text[128];
+  copyText(text, sizeof(text), "Louie:   test  \r\n");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  EXPECT_TRUE(r.is_trigger);
+  EXPECT_STREQ("test", r.message);
+  EXPECT_EQ(5u, r.sender_len);
+}
+
+TEST(ParseRequest, WorksWithoutANamePrefix) {
+  char text[128];
+  copyText(text, sizeof(text), "test");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  EXPECT_TRUE(r.is_trigger);
+  EXPECT_EQ(0u, r.sender_len);   // nothing to echo back in the reply
+}
+
+TEST(ParseRequest, RejectsOtherMessages) {
+  const char* others[] = { "Louie: hello", "Louie: testing", "Louie: test me",
+                           "Louie: a test", "Louie: ", "" };
+  for (const char* s : others) {
+    char text[128];
+    copyText(text, sizeof(text), s);
+    EXPECT_FALSE(autoReplyParseRequest(text, "test").is_trigger) << s;
+  }
+}
+
+TEST(ParseRequest, KeywordStandsAloneOrCarriesAnId) {
+  // The reply costs airtime, so the tail is matched strictly: the bare keyword, or
+  // the keyword plus exactly AUTOREPLY_ID_LEN hex characters. 'test 123' is still
+  // ordinary chat and still costs nobody anything.
+  char text[128];
+  copyText(text, sizeof(text), "Louie: test 123");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  EXPECT_FALSE(r.is_trigger);
+  EXPECT_STREQ("test 123", r.message);
+}
+
+TEST(ParseRequest, BareKeywordStillTriggersAndCarriesNoId) {
+  // Load-bearing for months: flashing this fleet is slow, so probes stay bare
+  // until adoption is high. A firmware that only answered the id form would drop
+  // every un-flashed node out of the measurement.
+  char text[128];
+  copyText(text, sizeof(text), "Louie: test");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  EXPECT_TRUE(r.is_trigger);
+  EXPECT_EQ(nullptr, r.id);
+  EXPECT_EQ((size_t)0, r.id_len);
+}
+
+TEST(ParseRequest, KeywordWithACorrelationIdTriggers) {
+  char text[128];
+  copyText(text, sizeof(text), "Louie: test a1b2c3d4");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  ASSERT_TRUE(r.is_trigger);
+  ASSERT_NE(nullptr, r.id);
+  EXPECT_EQ((size_t)AUTOREPLY_ID_LEN, r.id_len);
+  EXPECT_EQ(std::string("a1b2c3d4"), std::string(r.id, r.id_len));
+}
+
+TEST(ParseRequest, CorrelationIdIsHexOfExactlyTheRightLength) {
+  const char* bad[] = {
+    "Louie: test a1b2c3d",     // seven
+    "Louie: test a1b2c3d4e",   // nine
+    "Louie: test a1b2c3dg",    // not hex
+    "Louie: test  a1b2c3d4",   // two spaces
+    "Louie: test a1b2c3d4 ",   // trailing space is trimmed, so this is the id form
+    "Louie: test a1b2c3d4x",   // trailing junk
+    "Louie: testa1b2c3d4",     // no separator
+    // A *wrong* separator followed by eight valid hex characters. Without the
+    // explicit space check these ride in on the length rule alone.
+    "Louie: test-a1b2c3d4",
+    "Louie: test:a1b2c3d4",
+    "Louie: test_a1b2c3d4",
+    "Louie: test.a1b2c3d4",
+  };
+  for (const char* s : bad) {
+    char text[128];
+    copyText(text, sizeof(text), s);
+    bool trigger = autoReplyParseRequest(text, "test").is_trigger;
+    // The trailing-space case is trimmed before matching, so it *is* a trigger.
+    if (std::string(s) == "Louie: test a1b2c3d4 ") EXPECT_TRUE(trigger) << s;
+    else EXPECT_FALSE(trigger) << s;
+  }
+}
+
+TEST(ParseRequest, CorrelationIdIsCaseInsensitiveHex) {
+  char text[128];
+  copyText(text, sizeof(text), "Louie: TEST A1B2C3D4");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  ASSERT_TRUE(r.is_trigger);
+  EXPECT_EQ(std::string("A1B2C3D4"), std::string(r.id, r.id_len));
+}
+
+// ---- the mode letter: how the requester asks to be answered ----------------
+
+TEST(ParseRequest, NoModeMeansTheNodeDefault) {
+  // Both older forms keep working unchanged, and neither names a mode: the node
+  // answers the way it is configured to. This is the transition guarantee -- a
+  // requester that knows nothing about modes is answered exactly as before.
+  const char* older[] = { "Louie: test", "Louie: test a1b2c3d4" };
+  for (const char* s : older) {
+    char text[128];
+    copyText(text, sizeof(text), s);
+    AutoReplyRequest r = autoReplyParseRequest(text, "test");
+    EXPECT_TRUE(r.is_trigger) << s;
+    EXPECT_EQ(AUTOREPLY_MODE_DEFAULT, r.mode) << s;
+  }
+}
+
+TEST(ParseRequest, ModeLetterAfterTheId) {
+  struct { const char* letter; uint8_t mode; } cases[] = {
+    { "F", AUTOREPLY_MODE_FLOOD }, { "P", AUTOREPLY_MODE_PRIVATE },
+    { "D", AUTOREPLY_MODE_DIRECT }, { "S", AUTOREPLY_MODE_SILENT },
+  };
+  for (const auto& c : cases) {
+    char text[128];
+    copyText(text, sizeof(text), (std::string("Louie: test a1b2c3d4 ") + c.letter).c_str());
+    AutoReplyRequest r = autoReplyParseRequest(text, "test");
+    ASSERT_TRUE(r.is_trigger) << c.letter;
+    EXPECT_EQ(c.mode, r.mode) << c.letter;
+    EXPECT_EQ(std::string("a1b2c3d4"), std::string(r.id, r.id_len)) << c.letter;
+  }
+}
+
+TEST(ParseRequest, ModeLetterWithoutAnId) {
+  // 'F' and 'D' are hex digits, so a lone one must read as a mode and not as a
+  // one-character id: an id is exactly AUTOREPLY_ID_LEN characters, never shorter.
+  const char* letters[] = { "F", "D", "P", "S" };
+  for (const char* l : letters) {
+    char text[128];
+    copyText(text, sizeof(text), (std::string("Louie: test ") + l).c_str());
+    AutoReplyRequest r = autoReplyParseRequest(text, "test");
+    EXPECT_TRUE(r.is_trigger) << l;
+    EXPECT_EQ(nullptr, r.id) << l;
+    EXPECT_NE(AUTOREPLY_MODE_DEFAULT, r.mode) << l;
+  }
+}
+
+TEST(ParseRequest, ModeLetterIsCaseInsensitive) {
+  char text[128];
+  copyText(text, sizeof(text), "Louie: test a1b2c3d4 s");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  ASSERT_TRUE(r.is_trigger);
+  EXPECT_EQ(AUTOREPLY_MODE_SILENT, r.mode);
+}
+
+TEST(ParseRequest, ModeMustBeExactlyOneKnownLetter) {
+  // The strict-match discipline holds for the third part as it does for the id:
+  // 'test a1b2c3d4 x' is chat, and so is anything with a second letter or a second
+  // space. A reply costs airtime; a near-miss must not spend it.
+  const char* bad[] = {
+    "Louie: test a1b2c3d4 X",     // not a mode letter
+    "Louie: test a1b2c3d4 SS",    // two letters
+    "Louie: test a1b2c3d4  S",    // two spaces
+    "Louie: test a1b2c3d4 S x",   // trailing text
+    "Louie: test S S",            // a mode is not an id
+    "Louie: test SS",
+    "Louie: test 123 S",          // a short id is chat, and stays chat with a mode
+  };
+  for (const char* s : bad) {
+    char text[128];
+    copyText(text, sizeof(text), s);
+    EXPECT_FALSE(autoReplyParseRequest(text, "test").is_trigger) << s;
+  }
+}
+
+// ---- the requester's key: where a private reply is addressed ---------------
+
+// A 32-byte key as 64 hex characters, the form `set mqtt.cmd.pubkey` also takes.
+static const char KEY[] =
+  "AA04792D7804529FABF230B32DC8F7FA494D1B3280F153B2215C305E4FD654DC";
+
+TEST(ParseRequest, APrivateModeMayCarryTheRequestersKey) {
+  // A group text names its sender only by a display name anyone can type, so a
+  // reply addressed to a key has to be told the key. It follows the mode letter.
+  const char* forms[] = {
+    "Louie: test a1b2c3d4 P ", "Louie: test a1b2c3d4 D ", "Louie: test P ", "Louie: test D ",
+  };
+  for (const char* f : forms) {
+    char text[192];
+    copyText(text, sizeof(text), (std::string(f) + KEY).c_str());
+    AutoReplyRequest r = autoReplyParseRequest(text, "test");
+    ASSERT_TRUE(r.is_trigger) << f;
+    ASSERT_NE(nullptr, r.pubkey_hex) << f;
+    EXPECT_EQ(std::string(KEY), std::string(r.pubkey_hex)) << f;
+  }
+}
+
+TEST(ParseRequest, APrivateModeWithoutAKeyStillTriggers) {
+  // The request is well formed; it just cannot be answered privately. Resolution
+  // (below) turns it into a flood reply rather than dropping it.
+  char text[128];
+  copyText(text, sizeof(text), "Louie: test a1b2c3d4 P");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  ASSERT_TRUE(r.is_trigger);
+  EXPECT_EQ(AUTOREPLY_MODE_PRIVATE, r.mode);
+  EXPECT_EQ(nullptr, r.pubkey_hex);
+}
+
+TEST(ParseRequest, TheKeyIsExactly64HexCharacters) {
+  std::string key(KEY);
+  const std::string bad[] = {
+    "Louie: test a1b2c3d4 P " + key.substr(0, 63),      // short
+    "Louie: test a1b2c3d4 P " + key + "A",               // long
+    "Louie: test a1b2c3d4 P " + key.substr(0, 63) + "G", // not hex
+    "Louie: test a1b2c3d4 P  " + key,                    // two spaces
+    "Louie: test a1b2c3d4 P " + key + " x",              // trailing text
+  };
+  for (const std::string& s : bad) {
+    char text[192];
+    copyText(text, sizeof(text), s.c_str());
+    EXPECT_FALSE(autoReplyParseRequest(text, "test").is_trigger) << s;
+  }
+}
+
+TEST(ParseRequest, OnlyAPrivateModeMayCarryAKey) {
+  // A flood reply and a silent one have nowhere to send a key to. A key after F or
+  // S is not a slightly odd request, it is chat.
+  const char* forms[] = { "Louie: test a1b2c3d4 F ", "Louie: test a1b2c3d4 S " };
+  for (const char* f : forms) {
+    char text[192];
+    copyText(text, sizeof(text), (std::string(f) + KEY).c_str());
+    EXPECT_FALSE(autoReplyParseRequest(text, "test").is_trigger) << f;
+  }
+}
+
+// ---- the mode a reply is actually sent in ----------------------------------
+
+TEST(ResolveMode, ARequestThatNamesNothingTakesTheNodeDefault) {
+  EXPECT_EQ(AUTOREPLY_MODE_FLOOD,
+            autoReplyResolveMode(AUTOREPLY_MODE_DEFAULT, AUTOREPLY_MODE_FLOOD, false));
+  EXPECT_EQ(AUTOREPLY_MODE_PRIVATE,
+            autoReplyResolveMode(AUTOREPLY_MODE_DEFAULT, AUTOREPLY_MODE_PRIVATE, true));
+  // An unconfigured default is the flood reply every node makes today.
+  EXPECT_EQ(AUTOREPLY_MODE_FLOOD,
+            autoReplyResolveMode(AUTOREPLY_MODE_DEFAULT, AUTOREPLY_MODE_DEFAULT, false));
+}
+
+TEST(ResolveMode, ARequestThatNamesAModeWins) {
+  EXPECT_EQ(AUTOREPLY_MODE_SILENT,
+            autoReplyResolveMode(AUTOREPLY_MODE_SILENT, AUTOREPLY_MODE_FLOOD, false));
+  EXPECT_EQ(AUTOREPLY_MODE_FLOOD,
+            autoReplyResolveMode(AUTOREPLY_MODE_FLOOD, AUTOREPLY_MODE_PRIVATE, true));
+  EXPECT_EQ(AUTOREPLY_MODE_DIRECT,
+            autoReplyResolveMode(AUTOREPLY_MODE_DIRECT, AUTOREPLY_MODE_FLOOD, true));
+}
+
+TEST(ResolveMode, APrivateReplyWithNowhereToGoFloodsInstead) {
+  // Never silence: a probe unanswered for an addressing gap looks exactly like a
+  // dead repeater, and this system exists to tell those apart.
+  EXPECT_EQ(AUTOREPLY_MODE_FLOOD,
+            autoReplyResolveMode(AUTOREPLY_MODE_PRIVATE, AUTOREPLY_MODE_FLOOD, false));
+  EXPECT_EQ(AUTOREPLY_MODE_FLOOD,
+            autoReplyResolveMode(AUTOREPLY_MODE_DIRECT, AUTOREPLY_MODE_FLOOD, false));
+  // ...including when it is the node's own default that asked for privacy.
+  EXPECT_EQ(AUTOREPLY_MODE_FLOOD,
+            autoReplyResolveMode(AUTOREPLY_MODE_DEFAULT, AUTOREPLY_MODE_PRIVATE, false));
+  // Silence needs no address, so a key is irrelevant to it.
+  EXPECT_EQ(AUTOREPLY_MODE_SILENT,
+            autoReplyResolveMode(AUTOREPLY_MODE_SILENT, AUTOREPLY_MODE_FLOOD, true));
+}
+
+TEST(ParseRequest, AReplyCanNeverTriggerAReply) {
+  // The invariant the whole-string match used to guarantee for free. A reply body
+  // begins with the bracketed requester name, or with "SNR" when there was none,
+  // and neither can match the keyword however the tail is parsed. Widening the
+  // match must not cost this, or two repeaters could answer each other forever.
+  const char* replies[] = {
+    "SE-JKG-Rep: [SE-JKG-LouHome-A] #a1b2c3d4 SNR 1.0 RSSI -100 2h AA,BB",
+    "SE-JKG-Rep: [SE-JKG-LouHome-A] SNR 1.0 RSSI -100 0h direct",
+    "SE-JKG-Rep: SNR 1.0 RSSI -100 0h direct",
+    "SE-JKG-Rep: [test] SNR 1.0 RSSI -100 0h direct",
+    "SE-JKG-Rep: [test a1b2c3d4] SNR 1.0 RSSI -100 0h direct",
+    "SE-JKG-Rep: [test a1b2c3d4 S] SNR 1.0 RSSI -100 0h direct",
+    "SE-JKG-Rep: [test S] SNR 1.0 RSSI -100 0h direct",
+    // A private reply has the same body as a channel one, and a requester who
+    // names their own node after the keyword still gets an answer that cannot
+    // come back around -- even with a key in the brackets.
+    "SE-JKG-Rep: [test a1b2c3d4 P AA04792D7804529FABF230B32DC8F7FA494D1B3280F153B2215C305E4FD654DC] "
+      "#a1b2c3d4 SNR 1.0 RSSI -100 2h AA,BB",
+    "SE-JKG-Rep: [test] #a1b2c3d4 SNR 1.0 RSSI -100 0h direct",
+    // The reply seen by a node with no name prefix of its own is the whole body.
+    "[test a1b2c3d4] SNR 1.0 RSSI -100 0h direct",
+  };
+  for (const char* s : replies) {
+    char text[256];
+    copyText(text, sizeof(text), s);
+    EXPECT_FALSE(autoReplyParseRequest(text, "test").is_trigger) << s;
+  }
+}
+
+TEST(ParseRequest, TheKeywordAloneTriggersOnlyAtTheStartOfTheMessage) {
+  // The invariant rests on where the keyword sits, not on what surrounds it: a
+  // message whose keyword is preceded by anything -- a node name, a bracket, a
+  // measurement -- is not a request. Pinned separately so a future match that
+  // searched for the keyword anywhere would fail here before it failed on air.
+  const char* not_at_start[] = {
+    "Louie: SNR 1.0 test", "Louie: [x] test", "Louie: #a1b2c3d4 test", "Louie: -test",
+  };
+  for (const char* s : not_at_start) {
+    char text[128];
+    copyText(text, sizeof(text), s);
+    EXPECT_FALSE(autoReplyParseRequest(text, "test").is_trigger) << s;
+  }
+}
+
+TEST(ParseRequest, PrefixNeedsColonAndSpace) {
+  // Documents the split: a bare colon is not a name prefix, so the whole text is
+  // the message and there is no sender to echo.
+  char text[128];
+  copyText(text, sizeof(text), "Louie:test");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  EXPECT_FALSE(r.is_trigger);
+  EXPECT_EQ(0u, r.sender_len);
+  EXPECT_STREQ("Louie:test", r.message);
+}
+
+TEST(ParseRequest, SplitsOnTheFirstPrefixOnly) {
+  char text[128];
+  copyText(text, sizeof(text), "Louie: re: test");
+  AutoReplyRequest r = autoReplyParseRequest(text, "test");
+  EXPECT_FALSE(r.is_trigger);
+  EXPECT_EQ(5u, r.sender_len);
+  EXPECT_STREQ("re: test", r.message);
+}
+
+TEST(ParseRequest, HandlesNulls) {
+  char text[128];
+  copyText(text, sizeof(text), "Louie: test");
+  EXPECT_FALSE(autoReplyParseRequest(nullptr, "test").is_trigger);
+  EXPECT_FALSE(autoReplyParseRequest(text, nullptr).is_trigger);
+}
+
+TEST(ParseRequest, KeywordIsConfigurable) {
+  // AUTOREPLY_KEYWORD can be overridden at build time.
+  char text[128];
+  copyText(text, sizeof(text), "Louie: ping");
+  EXPECT_TRUE(autoReplyParseRequest(text, "ping").is_trigger);
+  copyText(text, sizeof(text), "Louie: ping");
+  EXPECT_FALSE(autoReplyParseRequest(text, "test").is_trigger);
+}
+
+// ---- sender identity ------------------------------------------------------
+
+TEST(SenderId, IsCaseFolded) {
+  EXPECT_EQ(autoReplySenderId("Louie", 5), autoReplySenderId("louie", 5));
+  EXPECT_EQ(autoReplySenderId("Louie", 5), autoReplySenderId("LOUIE", 5));
+}
+
+TEST(SenderId, DistinguishesNames) {
+  EXPECT_NE(autoReplySenderId("louie", 5), autoReplySenderId("bertil", 6));
+  EXPECT_NE(autoReplySenderId("louie", 5), autoReplySenderId("louis", 5));
+}
+
+TEST(SenderId, UsesOnlyTheGivenLength) {
+  // The caller passes sender_len, which spans the name prefix and not the message.
+  EXPECT_EQ(autoReplySenderId("Louie", 5), autoReplySenderId("Louie: test", 5));
+}
+
+TEST(SenderId, EmptyNamesShareOneIdentity) {
+  EXPECT_EQ(autoReplySenderId("", 0), autoReplySenderId("anything", 0));
+}
+
+// ---- a fresh correlation id is a new question ------------------------------
+//
+// Operator decision 2026-09-20: "Bypass for a fresh ID." The 300 s cooldown keyed on
+// the sender alone, so a retry carrying a new id was swallowed as a repeat.
+
+TEST(RequestId, ABareKeywordKeepsTheSendersOwnIdentity) {
+  // The nightly probe always sends a bare `test`. Nothing about it may change.
+  const uint32_t sender = autoReplySenderId("LouHome", 7);
+  EXPECT_EQ(autoReplyRequestId(sender, NULL, 0), sender);
+  EXPECT_EQ(autoReplyRequestId(sender, "abcd1234", 0), sender);
+}
+
+TEST(RequestId, TwoIdsFromOneSenderAreDifferentQuestions) {
+  const uint32_t sender = autoReplySenderId("LouHome", 7);
+  EXPECT_NE(autoReplyRequestId(sender, "aaaa1111", 8),
+            autoReplyRequestId(sender, "bbbb2222", 8));
+  EXPECT_NE(autoReplyRequestId(sender, "aaaa1111", 8), sender);
+}
+
+TEST(RequestId, TheSameIdFromOneSenderIsTheSameQuestion) {
+  const uint32_t sender = autoReplySenderId("LouHome", 7);
+  EXPECT_EQ(autoReplyRequestId(sender, "aaaa1111", 8),
+            autoReplyRequestId(sender, "AAAA1111", 8));   // ids are hex, case folded
+}
+
+TEST(RequestId, OneIdAskedByTwoSendersStaysTwoQuestions) {
+  // Otherwise one node's retry would spend another node's cooldown.
+  EXPECT_NE(autoReplyRequestId(autoReplySenderId("A", 1), "aaaa1111", 8),
+            autoReplyRequestId(autoReplySenderId("B", 1), "aaaa1111", 8));
+}
+
+TEST(SenderAllowed, ARetryWithAFreshIdIsAnsweredInsideTheWindow) {
+  AutoReplySender ring[8] = {};
+  uint8_t next = 0;
+  const uint32_t sender = autoReplySenderId("LouHome", 7);
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 8, next,
+                                     autoReplyRequestId(sender, "aaaa1111", 8), 1000, 300));
+  // Same sender, same second, a different id: a new question.
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 8, next,
+                                     autoReplyRequestId(sender, "bbbb2222", 8), 1000, 300));
+  // ...and the same id again is still a repeat.
+  EXPECT_FALSE(autoReplySenderAllowed(ring, 8, next,
+                                      autoReplyRequestId(sender, "aaaa1111", 8), 1000, 300));
+  // ...and a bare `test` is still bound by its own entry, as it always was.
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 8, next, sender, 1000, 300));
+  EXPECT_FALSE(autoReplySenderAllowed(ring, 8, next, sender, 1000, 300));
+}
+
+TEST(ReplyBudget, AStreamOfFreshIdsIsBoundedByTheNodesOwnBudget) {
+  // The cooldown is also a flood guard and this deliberately opens it, so the per-node
+  // reply budget is what is left holding. A sender cycling ids as fast as it likes gets
+  // AUTOREPLY_MAX_REPLIES answers per window and no more.
+  SlidingBudget budget(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS);
+  AutoReplySender ring[AUTOREPLY_MAX_SENDERS] = {};
+  uint8_t next = 0;
+  const uint32_t sender = autoReplySenderId("flooder", 7);
+  int answered = 0;
+  for (int i = 0; i < 200; i++) {
+    char id[9];
+    snprintf(id, sizeof(id), "%08x", i);
+    if (!autoReplySenderAllowed(ring, AUTOREPLY_MAX_SENDERS, next,
+                                autoReplyRequestId(sender, id, 8), 1000 + i, 300)) continue;
+    if (budget.allow(1000 + i)) answered++;
+  }
+  EXPECT_EQ(answered, AUTOREPLY_MAX_REPLIES);
+}
+
+TEST(ReplyBudget, NoWindowHoldsMoreThanTheBudgetHoweverTheIdsAreTimed) {
+  // The reply budget used to be a fixed window, which was tolerable only because the
+  // per-sender cooldown stopped one sender reaching it twice. With fresh ids bypassing
+  // the cooldown, a boundary would have been twenty replies in two seconds.
+  SlidingBudget budget(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS);
+  const uint32_t t0 = 1000;
+  for (int i = 0; i < AUTOREPLY_MAX_REPLIES; i++) {
+    EXPECT_TRUE(budget.allow(t0 + AUTOREPLY_WINDOW_SECS - 1));
+  }
+  EXPECT_FALSE(budget.allow(t0 + AUTOREPLY_WINDOW_SECS));
+  EXPECT_FALSE(budget.allow(t0 + AUTOREPLY_WINDOW_SECS + 1));
+  // All ten were given in the same second, so all ten age out in the same second --
+  // and the eleventh is still refused. The bound is on any window, not on any instant.
+  for (int i = 0; i < AUTOREPLY_MAX_REPLIES; i++) {
+    EXPECT_TRUE(budget.allow(t0 + 2 * AUTOREPLY_WINDOW_SECS - 1));
+  }
+  EXPECT_FALSE(budget.allow(t0 + 2 * AUTOREPLY_WINDOW_SECS - 1));
+}
+
+// ---- per-sender cooldown --------------------------------------------------
+
+TEST(SenderAllowed, FirstRequestIsAnswered) {
+  AutoReplySender ring[4] = {};
+  uint8_t next = 0;
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, 111, 1000, 300));
+}
+
+TEST(SenderAllowed, WindowBoundary) {
+  AutoReplySender ring[4] = {};
+  uint8_t next = 0;
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, 111, 1000, 300));
+  EXPECT_FALSE(autoReplySenderAllowed(ring, 4, next, 111, 1000, 300));
+  EXPECT_FALSE(autoReplySenderAllowed(ring, 4, next, 111, 1299, 300));
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, 111, 1300, 300));
+}
+
+TEST(SenderAllowed, DeniedRequestsDoNotExtendTheWindow) {
+  // Retrying must not push the next allowed reply further away, or a persistent
+  // sender could lock themselves out indefinitely.
+  AutoReplySender ring[4] = {};
+  uint8_t next = 0;
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, 111, 1000, 300));
+  for (uint32_t t = 1001; t < 1300; t += 50) {
+    EXPECT_FALSE(autoReplySenderAllowed(ring, 4, next, 111, t, 300));
+  }
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, 111, 1300, 300));
+}
+
+TEST(SenderAllowed, SendersAreIndependent) {
+  // One person retrying cannot spend everyone else's share of the global limit.
+  AutoReplySender ring[4] = {};
+  uint8_t next = 0;
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, 111, 1000, 300));
+  EXPECT_FALSE(autoReplySenderAllowed(ring, 4, next, 111, 1010, 300));
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, 222, 1010, 300));
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, 333, 1020, 300));
+}
+
+TEST(SenderAllowed, RingEvictsTheOldestEntry) {
+  // A full ring forgets the earliest sender, who is then answered again at once.
+  AutoReplySender ring[2] = {};
+  uint8_t next = 0;
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 2, next, 111, 1000, 300));
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 2, next, 222, 1001, 300));
+  EXPECT_FALSE(autoReplySenderAllowed(ring, 2, next, 111, 1002, 300));   // still remembered
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 2, next, 333, 1003, 300));    // evicts 111
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 2, next, 111, 1004, 300));    // forgotten, so answered
+}
+
+TEST(SenderAllowed, RingIndexWraps) {
+  AutoReplySender ring[2] = {};
+  uint8_t next = 0;
+  for (uint32_t id = 1; id <= 10; id++) {
+    EXPECT_TRUE(autoReplySenderAllowed(ring, 2, next, id, 1000 + id, 300));
+    EXPECT_LT(next, 2);
+  }
+}
+
+TEST(SenderAllowed, WithoutARingEverythingIsAllowed) {
+  uint8_t next = 0;
+  AutoReplySender ring[1] = {};
+  EXPECT_TRUE(autoReplySenderAllowed(nullptr, 4, next, 111, 1000, 300));
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 0, next, 111, 1000, 300));
+}
+
+TEST(SenderAllowed, MirrorsTheFirmwareSettings) {
+  // AUTOREPLY_MAX_SENDERS = 16, AUTOREPLY_WINDOW_SECS = 300.
+  AutoReplySender ring[16] = {};
+  uint8_t next = 0;
+  for (uint32_t id = 1; id <= 16; id++) {
+    EXPECT_TRUE(autoReplySenderAllowed(ring, 16, next, id, 1000, 300));
+  }
+  for (uint32_t id = 1; id <= 16; id++) {
+    EXPECT_FALSE(autoReplySenderAllowed(ring, 16, next, id, 1299, 300));
+  }
+  for (uint32_t id = 1; id <= 16; id++) {
+    EXPECT_TRUE(autoReplySenderAllowed(ring, 16, next, id, 1300, 300));
+  }
+}
+
+// ---- how far a request may have travelled ---------------------------------
+
+TEST(HopsAllowed, AcceptsUpToAndIncludingTheLimit) {
+  EXPECT_TRUE(autoReplyHopsAllowed(0, 8));
+  EXPECT_TRUE(autoReplyHopsAllowed(7, 8));
+  EXPECT_TRUE(autoReplyHopsAllowed(8, 8));
+  EXPECT_FALSE(autoReplyHopsAllowed(9, 8));
+}
+
+TEST(HopsAllowed, ZeroAnswersDirectNeighboursOnly) {
+  EXPECT_TRUE(autoReplyHopsAllowed(0, 0));
+  EXPECT_FALSE(autoReplyHopsAllowed(1, 0));
+}
+
+// ---- charging a private request to its key ---------------------------------
+
+TEST(KeyId, SameKeySameIdDifferentKeyDifferentId) {
+  uint8_t a[32], b[32];
+  memset(a, 0x5A, sizeof(a));
+  memcpy(b, a, sizeof(b));
+  EXPECT_EQ(autoReplyKeyId(a, 32), autoReplyKeyId(b, 32));
+  b[31] ^= 1;                                     // one bit of the last byte
+  EXPECT_NE(autoReplyKeyId(a, 32), autoReplyKeyId(b, 32));
+}
+
+TEST(KeyId, BytesAreNotFoldedLikeAName) {
+  // 0x41 and 0x61 are 'A' and 'a' as text and one sender to autoReplySenderId;
+  // as key bytes they are two different keys and must stay so.
+  uint8_t upper[32], lower[32];
+  memset(upper, 0x41, sizeof(upper));
+  memset(lower, 0x61, sizeof(lower));
+  EXPECT_NE(autoReplyKeyId(upper, 32), autoReplyKeyId(lower, 32));
+  EXPECT_EQ(autoReplySenderId((const char*)upper, 32), autoReplySenderId((const char*)lower, 32));
+}
+
+TEST(KeyId, TheCooldownRingWorksOnKeysUnchanged) {
+  // The same ring the channel uses, keyed by key id: a retry inside the window
+  // is refused, a second key is admitted, the first is admitted again after it.
+  AutoReplySender ring[4] = {};
+  uint8_t next = 0;
+  uint8_t k1[32], k2[32];
+  memset(k1, 1, 32); memset(k2, 2, 32);
+  uint32_t id1 = autoReplyKeyId(k1, 32), id2 = autoReplyKeyId(k2, 32);
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, id1, 1000, 300));
+  EXPECT_FALSE(autoReplySenderAllowed(ring, 4, next, id1, 1100, 300));
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, id2, 1100, 300));
+  EXPECT_TRUE(autoReplySenderAllowed(ring, 4, next, id1, 1300, 300));
+}
+
+// ---- a private test request: the body an anonymous request carries ---------
+
+TEST(ParsePrivateTest, BareAndIdForms) {
+  char text[64];
+  const char* id = NULL; size_t id_len = 0;
+  copyText(text, sizeof(text), "test");
+  EXPECT_TRUE(autoReplyParsePrivateTest(text, "test", &id, &id_len));
+  EXPECT_EQ(NULL, id);
+  copyText(text, sizeof(text), "TEST a1b2c3d4");
+  EXPECT_TRUE(autoReplyParsePrivateTest(text, "test", &id, &id_len));
+  EXPECT_EQ(std::string("a1b2c3d4"), std::string(id, id_len));
+}
+
+TEST(ParsePrivateTest, TrimsWhatATerminalOrClientMayAdd) {
+  char text[64];
+  const char* id = NULL; size_t id_len = 0;
+  copyText(text, sizeof(text), "  test a1b2c3d4 \r\n");
+  EXPECT_TRUE(autoReplyParsePrivateTest(text, "test", &id, &id_len));
+  EXPECT_EQ(std::string("a1b2c3d4"), std::string(id, id_len));
+}
+
+TEST(ParsePrivateTest, AModeOrAKeyHasNothingToSayHere) {
+  // The packet already makes the reply private and already names the sender by
+  // key, so a mode letter or a key in the body is refused as chat -- the same
+  // refusal a mode-less caller makes on the channel, from the same function.
+  const std::string bad[] = {
+    "test S", "test a1b2c3d4 P", std::string("test a1b2c3d4 P ") + KEY, "test a1b2c3d4 F",
+  };
+  for (const std::string& s : bad) {
+    char text[160];
+    const char* id = NULL; size_t id_len = 0;
+    copyText(text, sizeof(text), s.c_str());
+    EXPECT_FALSE(autoReplyParsePrivateTest(text, "test", &id, &id_len)) << s;
+    EXPECT_EQ(NULL, id) << s;
+  }
+}
+
+TEST(ParsePrivateTest, NoNamePrefixToSplit) {
+  // A channel request may say "Louie: test"; a private one is from a key, and a
+  // name prefix would only be a way to type a request that is not one.
+  char text[64];
+  const char* id = NULL; size_t id_len = 0;
+  copyText(text, sizeof(text), "Louie: test");
+  EXPECT_FALSE(autoReplyParsePrivateTest(text, "test", &id, &id_len));
+}
+
+TEST(ParsePrivateTest, AReplyCanNeverBeAPrivateRequestEither) {
+  // A RESPONSE is never dispatched as a request at all -- the anon handler acts
+  // only on ANON_REQ -- but the body-level property holds too, and for the same
+  // reason as on the channel: the report begins with the node's name.
+  const char* replies[] = {
+    "SE-JKG-Rep: [AA04792D] #a1b2c3d4 SNR 1.0 RSSI -100 2h AA,BB",
+    "SE-JKG-Rep: [AA04792D] SNR 1.0 RSSI -100 0h direct",
+    "test: [AA04792D] SNR 1.0 RSSI -100 0h direct",   // a node named 'test'
+  };
+  for (const char* s : replies) {
+    char text[160];
+    const char* id = NULL; size_t id_len = 0;
+    copyText(text, sizeof(text), s);
+    EXPECT_FALSE(autoReplyParsePrivateTest(text, "test", &id, &id_len)) << s;
+  }
+}
+
+TEST(ParsePrivateTest, HandlesNullsAndChat) {
+  char text[64];
+  const char* id = NULL; size_t id_len = 0;
+  EXPECT_FALSE(autoReplyParsePrivateTest(NULL, "test", &id, &id_len));
+  copyText(text, sizeof(text), "test");
+  EXPECT_FALSE(autoReplyParsePrivateTest(text, NULL, &id, &id_len));
+  copyText(text, sizeof(text), "test me");
+  EXPECT_FALSE(autoReplyParsePrivateTest(text, "test", &id, &id_len));
+  copyText(text, sizeof(text), "");
+  EXPECT_FALSE(autoReplyParsePrivateTest(text, "test", &id, &id_len));
+}
+
+// ---- the requester's side: `trigger private <key> [<id>]` ------------------
+
+TEST(PrivateTrigger, KeyAloneOrKeyAndId) {
+  const char* key = NULL; const char* id = NULL; size_t id_len = 0;
+  std::string cmd = std::string("trigger private ") + KEY;
+  EXPECT_TRUE(autoReplyParsePrivateTrigger(cmd.c_str(), &key, &id, &id_len));
+  ASSERT_NE(nullptr, key);
+  EXPECT_EQ(std::string(KEY), std::string(key, 64));
+  EXPECT_EQ(NULL, id);
+
+  cmd += " a1b2c3d4";
+  EXPECT_TRUE(autoReplyParsePrivateTrigger(cmd.c_str(), &key, &id, &id_len));
+  EXPECT_EQ(std::string(KEY), std::string(key, 64));   // the key is not NUL-terminated here
+  EXPECT_EQ(std::string("a1b2c3d4"), std::string(id, id_len));
+}
+
+TEST(PrivateTrigger, IsAsStrictAsTheRest) {
+  std::string k(KEY);
+  const std::string bad[] = {
+    "trigger private",                              // no key
+    "trigger private " + k.substr(0, 63),           // short key
+    "trigger private " + k + "A",                   // long key
+    "trigger private " + k.substr(0, 63) + "G",     // not hex
+    "trigger private " + k + " a1b2c3d",            // short id
+    "trigger private " + k + " a1b2c3d4 S",         // a mode has no place: the reply is private
+    "trigger private " + k + "  a1b2c3d4",          // two spaces
+    "trigger test " + k,                            // the wrong trigger for a key
+  };
+  for (const std::string& s : bad) {
+    const char* key = NULL; const char* id = NULL; size_t id_len = 0;
+    EXPECT_FALSE(autoReplyParsePrivateTrigger(s.c_str(), &key, &id, &id_len)) << s;
+    EXPECT_EQ(NULL, key) << s;
+  }
+  const char* key = NULL; const char* id = NULL; size_t id_len = 0;
+  EXPECT_FALSE(autoReplyParsePrivateTrigger(NULL, &key, &id, &id_len));
+}
+
+TEST(PrivateTrigger, IsCaseInsensitiveLikeTheOthers) {
+  const char* key = NULL; const char* id = NULL; size_t id_len = 0;
+  std::string cmd = std::string("TRIGGER Private ") + KEY;
+  EXPECT_TRUE(autoReplyParsePrivateTrigger(cmd.c_str(), &key, &id, &id_len));
+}
+
+// ---- reading a mode name, as `set autoreply.mode` takes it -----------------
+
+TEST(ParseModeName, AcceptsTheThreeStandingModesInAnyCase) {
+  uint8_t m = AUTOREPLY_MODE_DEFAULT;
+  EXPECT_TRUE(autoReplyParseModeName("flood", &m));
+  EXPECT_EQ(AUTOREPLY_MODE_FLOOD, m);
+  EXPECT_TRUE(autoReplyParseModeName("Private", &m));
+  EXPECT_EQ(AUTOREPLY_MODE_PRIVATE, m);
+  EXPECT_TRUE(autoReplyParseModeName("DIRECT", &m));
+  EXPECT_EQ(AUTOREPLY_MODE_DIRECT, m);
+}
+
+TEST(ParseModeName, SilentIsNotAStandingMode) {
+  // A node that should answer nobody is switched off. Silence is what a request
+  // asks for, one probe at a time, never a setting the node keeps.
+  uint8_t m = AUTOREPLY_MODE_FLOOD;
+  EXPECT_FALSE(autoReplyParseModeName("silent", &m));
+  EXPECT_EQ(AUTOREPLY_MODE_FLOOD, m);   // a rejected argument leaves the setting alone
+}
+
+TEST(ParseModeName, MeasuresTheTokenLikeAnOnOffArgument) {
+  uint8_t m = AUTOREPLY_MODE_FLOOD;
+  EXPECT_FALSE(autoReplyParseModeName("flooding", &m));
+  EXPECT_FALSE(autoReplyParseModeName("priv", &m));
+  EXPECT_FALSE(autoReplyParseModeName("", &m));
+  EXPECT_FALSE(autoReplyParseModeName("   ", &m));
+  EXPECT_FALSE(autoReplyParseModeName(NULL, &m));
+  EXPECT_FALSE(autoReplyParseModeName("flood", NULL));
+  EXPECT_EQ(AUTOREPLY_MODE_FLOOD, m);
+  EXPECT_TRUE(autoReplyParseModeName("  direct\r\n", &m));
+  EXPECT_EQ(AUTOREPLY_MODE_DIRECT, m);
+}
+
+TEST(ParseModeName, NamesRoundTrip) {
+  // What `get autoreply.mode` prints is what `set autoreply.mode` accepts.
+  const uint8_t standing[] = { AUTOREPLY_MODE_FLOOD, AUTOREPLY_MODE_PRIVATE, AUTOREPLY_MODE_DIRECT };
+  for (uint8_t mode : standing) {
+    uint8_t back = AUTOREPLY_MODE_DEFAULT;
+    EXPECT_TRUE(autoReplyParseModeName(autoReplyModeName(mode), &back));
+    EXPECT_EQ(mode, back);
+  }
+  EXPECT_STREQ("silent", autoReplyModeName(AUTOREPLY_MODE_SILENT));
+  EXPECT_STREQ("default", autoReplyModeName(AUTOREPLY_MODE_DEFAULT));
+}
+
+// ---- the route back: a flood's path, read backwards ------------------------
+
+TEST(ReversePath, ReversesWholeHashesNotBytes) {
+  // Three 2-byte hashes: the flood came AA11 -> BB22 -> CC33, so the way back
+  // starts at CC33. The bytes inside each hash keep their order.
+  const uint8_t path[] = { 0xAA, 0x11, 0xBB, 0x22, 0xCC, 0x33 };
+  const uint8_t path_len = (1 << 6) | 3;      // hash size 2, count 3
+  uint8_t back[sizeof(path)];
+  EXPECT_EQ(path_len, autoReplyReversePath(path, path_len, back));
+  const uint8_t want[] = { 0xCC, 0x33, 0xBB, 0x22, 0xAA, 0x11 };
+  EXPECT_EQ(0, memcmp(want, back, sizeof(want)));
+}
+
+TEST(ReversePath, OneByteHashesAndASingleHop) {
+  const uint8_t path[] = { 0x01, 0x02, 0x03, 0x04 };
+  uint8_t back[4];
+  autoReplyReversePath(path, 4, back);          // hash size 1, count 4
+  const uint8_t want[] = { 0x04, 0x03, 0x02, 0x01 };
+  EXPECT_EQ(0, memcmp(want, back, 4));
+
+  const uint8_t one[] = { 0x7A, 0x15, 0xAA };
+  uint8_t same[3];
+  EXPECT_EQ((2 << 6) | 1, autoReplyReversePath(one, (2 << 6) | 1, same));
+  EXPECT_EQ(0, memcmp(one, same, 3));           // a single hop is its own reverse
+}
+
+TEST(ReversePath, AnEmptyPathStaysEmpty) {
+  uint8_t back[1] = { 0xEE };
+  EXPECT_EQ(0, autoReplyReversePath(NULL, 0, back));
+  EXPECT_EQ(0xEE, back[0]);                     // nothing written
+}
+
+// ---- direct request: one packet, or one a repeater can carry back -----------
+
+TEST(ReplyIsZeroHop, DirectRequestOnlyWhenDirectFloodIsOff) {
+  EXPECT_TRUE(autoReplyReplyIsZeroHop(0, false));
+  EXPECT_FALSE(autoReplyReplyIsZeroHop(0, true));
+}
+
+TEST(ReplyIsZeroHop, AnythingThatTravelledIsAlwaysFlooded) {
+  // A reply can only skip the flood when the request needed no repeater to reach us.
+  for (uint8_t hops = 1; hops <= 63; hops++) {
+    EXPECT_FALSE(autoReplyReplyIsZeroHop(hops, false));
+    EXPECT_FALSE(autoReplyReplyIsZeroHop(hops, true));
+  }
+}
+
+TEST(ReplyIsZeroHop, SilenceOnTheMeshNeedsBothSettings) {
+  // 'autoreply.hops' bounds which requests are answered, not how they are answered,
+  // so only the pair of them keeps a reply off the mesh entirely.
+  EXPECT_TRUE(autoReplyHopsAllowed(0, 0));
+  EXPECT_FALSE(autoReplyReplyIsZeroHop(0, true));
+  EXPECT_TRUE(autoReplyReplyIsZeroHop(0, false));
+}
+
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}
+
+// ---- `trigger test` -----------------------------------------------------------
+//
+// The command a signed MQTT envelope carries to make this node originate a probe.
+// It had no handler at all: it was on the allowlist and classified as a transmit
+// command, so it verified, authorised, spent a trigger slot, persisted the replay
+// counter -- and then fell through to "Unknown command", sending nothing.
+
+TEST(TriggerCommand, BareFormIsAccepted) {
+  const char* id = NULL; size_t id_len = 0;
+  EXPECT_TRUE(autoReplyParseTrigger("trigger test", "test", &id, &id_len));
+  EXPECT_EQ(NULL, id);
+  EXPECT_EQ(0u, id_len);
+}
+
+TEST(TriggerCommand, IdFormIsAcceptedAndEchoedNotGenerated) {
+  const char* id = NULL; size_t id_len = 0;
+  EXPECT_TRUE(autoReplyParseTrigger("trigger test A1B2C3D4", "test", &id, &id_len));
+  ASSERT_TRUE(id != NULL);
+  EXPECT_EQ(std::string("A1B2C3D4"), std::string(id, id_len));
+}
+
+TEST(TriggerCommand, TheIdGrammarIsTheSameOneARequestUses) {
+  // Defined once, in autoReplyMatchTrigger: whatever a node accepts in a request
+  // it accepts in a trigger, so the two cannot drift into disagreeing.
+  const char* id = NULL; size_t id_len = 0;
+  EXPECT_FALSE(autoReplyParseTrigger("trigger test A1B2C3", "test", &id, &id_len));    // 6
+  EXPECT_FALSE(autoReplyParseTrigger("trigger test A1B2C3D4E", "test", &id, &id_len)); // 9
+  EXPECT_FALSE(autoReplyParseTrigger("trigger test ZZZZZZZZ", "test", &id, &id_len));  // not hex
+  EXPECT_FALSE(autoReplyParseTrigger("trigger test A1B2C3D4 x", "test", &id, &id_len));
+}
+
+TEST(TriggerCommand, ACallerWithNoUseForAModeRejectsOne) {
+  // The trigger command parses without a mode out-param today. A request naming
+  // a mode must then be a non-trigger, and carry nothing out -- never a trigger
+  // with the mode quietly dropped, which would probe in a mode nobody chose.
+  const char* id = NULL; size_t id_len = 0;
+  EXPECT_FALSE(autoReplyParseTrigger("trigger test A1B2C3D4 S", "test", &id, &id_len));
+  EXPECT_EQ(NULL, id);
+  EXPECT_EQ(0u, id_len);
+  EXPECT_FALSE(autoReplyParseTrigger("trigger test S", "test", &id, &id_len));
+}
+
+TEST(TriggerCommand, CarriesAModeWhenAskedFor) {
+  const char* id = NULL; size_t id_len = 0; uint8_t mode = AUTOREPLY_MODE_DEFAULT;
+  EXPECT_TRUE(autoReplyParseTrigger("trigger test A1B2C3D4 S", "test", &id, &id_len, &mode));
+  EXPECT_EQ(AUTOREPLY_MODE_SILENT, mode);
+  EXPECT_EQ(std::string("A1B2C3D4"), std::string(id, id_len));
+  EXPECT_TRUE(autoReplyParseTrigger("trigger test p", "test", &id, &id_len, &mode));
+  EXPECT_EQ(AUTOREPLY_MODE_PRIVATE, mode);
+  EXPECT_EQ(NULL, id);
+  // and none when it was not
+  EXPECT_TRUE(autoReplyParseTrigger("trigger test", "test", &id, &id_len, &mode));
+  EXPECT_EQ(AUTOREPLY_MODE_DEFAULT, mode);
+}
+
+TEST(TriggerCommand, NeverCarriesAKey) {
+  // The probe's requester is this node, which knows its own key; a command that
+  // tries to supply one is refused rather than trusted.
+  const char* id = NULL; size_t id_len = 0; uint8_t mode = AUTOREPLY_MODE_DEFAULT;
+  std::string cmd = std::string("trigger test A1B2C3D4 P ") + KEY;
+  EXPECT_FALSE(autoReplyParseTrigger(cmd.c_str(), "test", &id, &id_len, &mode));
+  EXPECT_EQ(NULL, id);
+}
+
+TEST(TriggerCommand, IsCaseInsensitiveLikeTheKeywordItself) {
+  // The trigger word is documented case-insensitive, so the command that carries
+  // it is too -- a requester should not have to guess which half cares.
+  const char* id = NULL; size_t id_len = 0;
+  EXPECT_TRUE(autoReplyParseTrigger("TRIGGER TEST", "test", &id, &id_len));
+  EXPECT_TRUE(autoReplyParseTrigger("Trigger Test", "test", &id, &id_len));
+  EXPECT_TRUE(autoReplyParseTrigger("trigger test a1b2c3d4", "test", &id, &id_len));
+  EXPECT_EQ(std::string("a1b2c3d4"), std::string(id, id_len));
+}
+
+TEST(TriggerCommand, RefusesAnythingThatIsNotATrigger) {
+  const char* id = NULL; size_t id_len = 0;
+  EXPECT_FALSE(autoReplyParseTrigger("test", "test", &id, &id_len));
+  EXPECT_FALSE(autoReplyParseTrigger("triggertest", "test", &id, &id_len));
+  EXPECT_FALSE(autoReplyParseTrigger("trigger", "test", &id, &id_len));
+  EXPECT_FALSE(autoReplyParseTrigger("trigger other", "test", &id, &id_len));
+  EXPECT_FALSE(autoReplyParseTrigger(NULL, "test", &id, &id_len));
+  EXPECT_FALSE(autoReplyParseTrigger("trigger test", NULL, &id, &id_len));
+}
+
+TEST(TriggerCommand, ATriggeredProbeCannotItselfTriggerAProbe) {
+  // The probe body is bare `test`, and `trigger ` is required, so a probe this
+  // node originates can never be read back as a command to originate another.
+  char body[64];
+  size_t n = autoReplyBuildProbe(body, sizeof(body), NULL, "test", NULL, 0);
+  ASSERT_GT(n, 0u);
+  const char* id = NULL; size_t id_len = 0;
+  EXPECT_FALSE(autoReplyParseTrigger(body, "test", &id, &id_len));
+}
+
+TEST(BuildProbe, BareAndIdForms) {
+  char out[64];
+  EXPECT_EQ(4u, autoReplyBuildProbe(out, sizeof(out), NULL, "test", NULL, 0));
+  EXPECT_EQ(std::string("test"), std::string(out));
+
+  EXPECT_EQ(13u, autoReplyBuildProbe(out, sizeof(out), NULL, "test", "A1B2C3D4", 8));
+  EXPECT_EQ(std::string("test A1B2C3D4"), std::string(out));
+}
+
+TEST(BuildProbe, NamesAModeOnlyWhenAsked) {
+  // The bare and id forms are untouched by the mode work: a probe that named a
+  // mode by default would be one an un-flashed repeater ignores.
+  char out[64];
+  autoReplyBuildProbe(out, sizeof(out), NULL, "test", "A1B2C3D4", 8, AUTOREPLY_MODE_DEFAULT, KEY);
+  EXPECT_EQ(std::string("test A1B2C3D4"), std::string(out));
+
+  autoReplyBuildProbe(out, sizeof(out), NULL, "test", "A1B2C3D4", 8, AUTOREPLY_MODE_SILENT);
+  EXPECT_EQ(std::string("test A1B2C3D4 S"), std::string(out));
+  autoReplyBuildProbe(out, sizeof(out), NULL, "test", NULL, 0, AUTOREPLY_MODE_FLOOD);
+  EXPECT_EQ(std::string("test F"), std::string(out));
+}
+
+TEST(BuildProbe, APrivateModeCarriesTheKeyAndTheOthersDoNot) {
+  char out[160];
+  autoReplyBuildProbe(out, sizeof(out), NULL, "test", "A1B2C3D4", 8, AUTOREPLY_MODE_PRIVATE, KEY);
+  EXPECT_EQ(std::string("test A1B2C3D4 P ") + KEY, std::string(out));
+  autoReplyBuildProbe(out, sizeof(out), NULL, "test", NULL, 0, AUTOREPLY_MODE_DIRECT, KEY);
+  EXPECT_EQ(std::string("test D ") + KEY, std::string(out));
+  // F and S have nowhere to send a key, and the parser would refuse one.
+  autoReplyBuildProbe(out, sizeof(out), NULL, "test", NULL, 0, AUTOREPLY_MODE_FLOOD, KEY);
+  EXPECT_EQ(std::string("test F"), std::string(out));
+  autoReplyBuildProbe(out, sizeof(out), NULL, "test", NULL, 0, AUTOREPLY_MODE_SILENT, KEY);
+  EXPECT_EQ(std::string("test S"), std::string(out));
+}
+
+TEST(BuildProbe, ARealRepeaterParsesEveryModeWeSend) {
+  // Round trip through the request parser, which is what the receiving node runs.
+  struct { uint8_t mode; bool keyed; } cases[] = {
+    { AUTOREPLY_MODE_FLOOD, false }, { AUTOREPLY_MODE_PRIVATE, true },
+    { AUTOREPLY_MODE_DIRECT, true }, { AUTOREPLY_MODE_SILENT, false },
+  };
+  for (const auto& c : cases) {
+    char body[160];
+    autoReplyBuildProbe(body, sizeof(body), "SE-JKG-Rep", "test", "A1B2C3D4", 8, c.mode, KEY);
+    AutoReplyRequest r = autoReplyParseRequest(body, "test");
+    ASSERT_TRUE(r.is_trigger) << body;
+    EXPECT_EQ(c.mode, r.mode) << body;
+    EXPECT_EQ(c.keyed, r.pubkey_hex != NULL) << body;
+    if (c.keyed) EXPECT_EQ(std::string(KEY), std::string(r.pubkey_hex));
+  }
+}
+
+TEST(BuildProbe, RefusesRatherThanTruncatingAKey) {
+  char out[70];   // room for "test A1B2C3D4 P " but not the 64-character key
+  EXPECT_EQ(0u, autoReplyBuildProbe(out, sizeof(out), NULL, "test", "A1B2C3D4", 8,
+                                    AUTOREPLY_MODE_PRIVATE, KEY));
+  EXPECT_EQ(std::string(""), std::string(out));
+}
+
+TEST(BuildProbe, ProbeBodyIsExactlyWhatAPersonWouldSend) {
+  // A probe that differed from a hand-sent request would be answered by different
+  // nodes under different rules, and the two measurements would not compare.
+  char out[64];
+  autoReplyBuildProbe(out, sizeof(out), NULL, "test", "DEADBEEF", 8);
+
+  char text[128];
+  copyText(text, sizeof(text), (std::string("alice: ") + out).c_str());
+  AutoReplyRequest req = autoReplyParseRequest(text, "test");
+  EXPECT_TRUE(req.is_trigger);
+  ASSERT_TRUE(req.id != NULL);
+  EXPECT_EQ(std::string("DEADBEEF"), std::string(req.id, req.id_len));
+}
+
+TEST(BuildProbe, RefusesRatherThanTruncating) {
+  // A truncated probe would be a different message: `test A1B2` is not a request
+  // any node answers, so sending one would spend airtime for nothing.
+  char out[8];
+  EXPECT_EQ(0u, autoReplyBuildProbe(out, sizeof(out), NULL, "test", "A1B2C3D4", 8));
+  EXPECT_EQ(0u, autoReplyBuildProbe(out, 4, NULL, "test", NULL, 0));   // no room for NUL
+  EXPECT_EQ(4u, autoReplyBuildProbe(out, 5, NULL, "test", NULL, 0));   // exactly fits
+  EXPECT_EQ(0u, autoReplyBuildProbe(NULL, sizeof(out), NULL, "test", NULL, 0));
+}
+
+// ---- the probe carries the sender's name -------------------------------------
+//
+// Found on air, not in a test: a triggered probe sent as bare `test` drew replies
+// reading `SNR 7.75 RSSI -106 1h 70`, where a client's probe draws
+// `[SE-JKG-LouHome-A] SNR ...`. autoReplyParseRequest splits at ": " to find the
+// requester, and a repeater echoes that name into its reply. Without the prefix
+// the second vantage's replies are anonymous, and with two probes in flight
+// nothing distinguishes them.
+
+TEST(BuildProbe, CarriesTheSenderSoRepliesCanNameIt) {
+  char out[96];
+  size_t n = autoReplyBuildProbe(out, sizeof(out), "SE-JKG-LOUTEST", "test", NULL, 0);
+  EXPECT_EQ(std::string("SE-JKG-LOUTEST: test"), std::string(out));
+  EXPECT_EQ(n, strlen(out));
+}
+
+TEST(BuildProbe, CarriesBothSenderAndId) {
+  char out[96];
+  autoReplyBuildProbe(out, sizeof(out), "SE-JKG-LOUTEST", "test", "A1B2C3D4", 8);
+  EXPECT_EQ(std::string("SE-JKG-LOUTEST: test A1B2C3D4"), std::string(out));
+}
+
+TEST(BuildProbe, ARealRepeaterCanParseWhatWeSend) {
+  // The round trip that matters: what we build must come back out of the parser
+  // as a trigger, with the sender and id intact.
+  char out[96];
+  autoReplyBuildProbe(out, sizeof(out), "SE-JKG-LOUTEST", "test", "DEADBEEF", 8);
+
+  char text[128];
+  copyText(text, sizeof(text), out);
+  AutoReplyRequest req = autoReplyParseRequest(text, "test");
+  EXPECT_TRUE(req.is_trigger);
+  EXPECT_EQ(std::string("SE-JKG-LOUTEST"), std::string(req.sender, req.sender_len));
+  ASSERT_TRUE(req.id != NULL);
+  EXPECT_EQ(std::string("DEADBEEF"), std::string(req.id, req.id_len));
+}
+
+TEST(BuildProbe, AnUnnamedNodeStillSendsAUsableProbe) {
+  // A node with no name set must still be able to probe; it just cannot be named
+  // in the replies. Silence would be worse than anonymity.
+  char out[96];
+  EXPECT_EQ(4u, autoReplyBuildProbe(out, sizeof(out), "", "test", NULL, 0));
+  EXPECT_EQ(std::string("test"), std::string(out));
+  EXPECT_EQ(4u, autoReplyBuildProbe(out, sizeof(out), NULL, "test", NULL, 0));
+}
+
+TEST(BuildProbe, RefusesRatherThanTruncatingAName) {
+  // A truncated name would be attributed to the wrong node, which is worse than
+  // no probe at all.
+  char out[16];
+  EXPECT_EQ(0u, autoReplyBuildProbe(out, sizeof(out), "SE-JKG-LOUTEST", "test", "A1B2C3D4", 8));
+}
+
+TEST(LegacyState, InertWithoutAnIataCode) {
+  EXPECT_STREQ("on", autoReplyLegacyState(true, true));
+  EXPECT_STREQ("off", autoReplyLegacyState(false, true));
+  EXPECT_STREQ("off", autoReplyLegacyState(false, false));
+  EXPECT_STREQ("on, inert: no MQTT", autoReplyLegacyState(true, false));
+}
+
+TEST(LegacyState, NoIataCodeDerivesNoLegacyChannel) {
+  // What a build without the bridge passes: NULL. The region's own channel stands.
+  char region[32], legacy[32];
+  autoReplyChannelNames("se-jkp", NULL, true, region, legacy, sizeof(region));
+  EXPECT_STREQ("#test-se-jkp", region);
+  EXPECT_STREQ("", legacy);
+  autoReplyChannelNames("", NULL, true, region, legacy, sizeof(region));
+  EXPECT_STREQ("", legacy);
+}
+
+// An anonymous request as it arrives: timestamp, sub-type, body.
+static size_t anonRequest(uint8_t* out, uint8_t sub_type, const char* body) {
+  memset(out, 0x5A, 4);
+  out[4] = sub_type;
+  memcpy(&out[5], body, strlen(body));
+  return 5 + strlen(body);
+}
+
+TEST(PrivateTest, TheTestSubTypeWithTheKeywordIsOurs) {
+  uint8_t req[64];
+  EXPECT_EQ(0xF0, AUTOREPLY_ANON_TEST_SUBTYPE);
+  EXPECT_TRUE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "test"), "test"));
+  EXPECT_TRUE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "TEST A1B2C3D4"), "test"));
+  EXPECT_TRUE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "test a1b2c3d4\r\n"), "test"));
+}
+
+TEST(PrivateTest, TheOldSubTypeIsNoLongerAnswered) {
+  // ar-11..13 asked with 0x04. The cut-off is hard: such a request is not a test, and
+  // goes on to whatever upstream makes of it (an unknown sub-type, so nothing).
+  uint8_t req[64];
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0x04, "test"), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0x04, "test A1B2C3D4"), "test"));
+}
+
+TEST(PrivateTest, NoOtherSubTypeIsATest) {
+  // Upstream's own requests (0x01-0x03) and every login byte -- 0 for an empty
+  // password, ' ' and up for a typed one -- must reach upstream's handler untouched.
+  uint8_t req[64];
+  for (int b = 0; b <= 0xFF; b++) {
+    if (b == AUTOREPLY_ANON_TEST_SUBTYPE) continue;
+    EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, (uint8_t)b, "test"), "test")) << b;
+  }
+}
+
+TEST(PrivateTest, APasswordThatStartsWithAnEmojiIsALogin) {
+  // A UTF-8 password beginning with a four-byte character puts 0xF0 where the
+  // sub-type sits. Taking it as a test would lock its owner out of every repeater
+  // with auto-reply.
+  uint8_t req[64];
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "\x9F\x94\x91secret"), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "\x9F\x98\x80test"), "test"));
+}
+
+TEST(PrivateTest, ChatAndShortRequestsAreNot) {
+  uint8_t req[64];
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "test me"), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "testing"), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, ""), "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, 4, "test"));       // no sub-type byte at all
+  EXPECT_FALSE(autoReplyIsPrivateTest(NULL, 9, "test"));
+  EXPECT_FALSE(autoReplyIsPrivateTest(req, anonRequest(req, 0xF0, "test"), NULL));
+}
+
+TEST(CommandIs, APrefixIsNotTheWholeCommand) {
+  // The bug this exists to stop: a bare memcmp accepts anything beginning with the
+  // name, so an operator's typo is answered as though it were the command.
+  EXPECT_TRUE(autoReplyCommandIs("set autoreply.channel", "set autoreply.channel"));
+  EXPECT_TRUE(autoReplyCommandIs("set autoreply.channel ", "set autoreply.channel"));
+  EXPECT_TRUE(autoReplyCommandIs("set autoreply.channel 3", "set autoreply.channel"));
+
+  EXPECT_FALSE(autoReplyCommandIs("set autoreply.channelfoo", "set autoreply.channel"));
+  EXPECT_FALSE(autoReplyCommandIs("set autoreply.channels", "set autoreply.channel"));
+}
+
+TEST(CommandIs, AShortCommandIsNotAMatch) {
+  // And it must decide that from the bytes that exist, not from whatever follows
+  // the terminator.
+  EXPECT_FALSE(autoReplyCommandIs("set autoreply.chan", "set autoreply.channel"));
+  EXPECT_FALSE(autoReplyCommandIs("", "set autoreply.channel"));
+  EXPECT_FALSE(autoReplyCommandIs("set", "set autoreply.channel"));
+}
+
+TEST(ParsePrivateTest, AnEmptyBodyIsNotARequest) {
+  // What a length-underflowed call would hand the parser: nothing, or a fragment.
+  // Neither is a request, and neither may be answered.
+  const char* id; size_t id_len;
+  char empty[8] = "";
+  char one[8]   = "t";
+  char part[8]  = "tes";
+  EXPECT_FALSE(autoReplyParsePrivateTest(empty, "test", &id, &id_len));
+  EXPECT_FALSE(autoReplyParsePrivateTest(one, "test", &id, &id_len));
+  EXPECT_FALSE(autoReplyParsePrivateTest(part, "test", &id, &id_len));
+}
+
+// ---- reply slots (Sprint F04 T-02) ------------------------------------------
+
+TEST(AutoReplySlot, ZeroIsUnassignedAndIsAValidSetting) {
+  // The default. It is not "no slot" in the sense of refusing to answer -- it means
+  // the node derives one from its own key, which is what an unconfigured mesh does.
+  EXPECT_TRUE(autoReplySlotValid(AUTOREPLY_SLOT_UNASSIGNED));
+  EXPECT_EQ(AUTOREPLY_SLOT_UNASSIGNED, 0);
+}
+
+TEST(AutoReplySlot, AcceptsTheWholeRangeAndNothingOutsideIt) {
+  EXPECT_TRUE(autoReplySlotValid(1));
+  EXPECT_TRUE(autoReplySlotValid(AUTOREPLY_SLOT_MAX));
+  EXPECT_FALSE(autoReplySlotValid(AUTOREPLY_SLOT_MAX + 1));
+  EXPECT_FALSE(autoReplySlotValid(-1));
+}
+
+TEST(AutoReplySlot, AStoredByteOutsideTheRangeReadsAsUnassigned) {
+  // A truncated or corrupt config file. Unassigned is the safe reading: the node
+  // falls back to its key-derived slot rather than sitting on slot 0 as though it
+  // had been assigned there, which is where a collision would come from.
+  EXPECT_EQ(autoReplyStoredSlot(0), 0);
+  EXPECT_EQ(autoReplyStoredSlot(7), 7);
+  EXPECT_EQ(autoReplyStoredSlot(AUTOREPLY_SLOT_MAX), AUTOREPLY_SLOT_MAX);
+  EXPECT_EQ(autoReplyStoredSlot(AUTOREPLY_SLOT_MAX + 1), AUTOREPLY_SLOT_UNASSIGNED);
+  EXPECT_EQ(autoReplyStoredSlot(255), AUTOREPLY_SLOT_UNASSIGNED);
+}
+
+// ---- the slot -> delay rule (Sprint F04 T-03) --------------------------------
+
+static const uint32_t WIN_START = 10000, WIN_END = 120000;
+
+TEST(AutoReplySlotDelay, TwoDistinctSlotsNeverOverlapOnAnyDay) {
+  // The property the whole scheme rests on. Checked across a year of days and every
+  // pair of slots, at both extremes of the jitter.
+  const uint8_t K = 16;
+  for (uint32_t day = 0; day < 370; day++) {
+    for (uint8_t a = 0; a < K; a++) {
+      for (uint8_t b = (uint8_t)(a + 1); b < K; b++) {
+        uint8_t ra = autoReplyRotatedSlot(a, K, day), rb = autoReplyRotatedSlot(b, K, day);
+        uint32_t a_lo = autoReplySlotDelayMs(ra, K, WIN_START, WIN_END, 0);
+        uint32_t a_hi = autoReplySlotDelayMs(ra, K, WIN_START, WIN_END, 0xFFFFFFFF);
+        uint32_t b_lo = autoReplySlotDelayMs(rb, K, WIN_START, WIN_END, 0);
+        uint32_t b_hi = autoReplySlotDelayMs(rb, K, WIN_START, WIN_END, 0xFFFFFFFF);
+        EXPECT_TRUE(a_hi < b_lo || b_hi < a_lo)
+            << "slots " << (int)a << " and " << (int)b << " touch on day " << day;
+      }
+    }
+  }
+}
+
+TEST(AutoReplySlotDelay, RotationIsAPermutation) {
+  // Every slot lands somewhere, and no two land on the same place -- otherwise the
+  // rotation would be quietly colliding nodes it was meant to keep apart.
+  const uint8_t K = 16;
+  for (uint32_t day = 0; day < 40; day++) {
+    bool taken[16] = {false};
+    for (uint8_t i = 0; i < K; i++) {
+      uint8_t r = autoReplyRotatedSlot(i, K, day);
+      ASSERT_LT(r, K);
+      EXPECT_FALSE(taken[r]) << "day " << day << " maps two slots onto " << (int)r;
+      taken[r] = true;
+    }
+  }
+}
+
+TEST(AutoReplySlotDelay, TheDelayStaysInsideTheWindow) {
+  const uint8_t K = 16;
+  for (uint8_t r = 0; r < K; r++) {
+    for (uint32_t e = 0; e < 5; e++) {
+      uint32_t d = autoReplySlotDelayMs(r, K, WIN_START, WIN_END, e * 999983u);
+      EXPECT_GE(d, WIN_START);
+      EXPECT_LE(d, WIN_END);
+    }
+  }
+}
+
+TEST(AutoReplySlotDelay, JitterStaysInsideTheGuards) {
+  const uint8_t K = 16;
+  const uint32_t width = (WIN_END - WIN_START) / K, guard = width / 8;
+  for (uint8_t r = 0; r < K; r++) {
+    uint32_t lo = autoReplySlotDelayMs(r, K, WIN_START, WIN_END, 0);
+    uint32_t hi = autoReplySlotDelayMs(r, K, WIN_START, WIN_END, 0xFFFFFFFF);
+    EXPECT_EQ(lo, WIN_START + (uint32_t)r * width + guard);
+    EXPECT_LE(hi, WIN_START + (uint32_t)(r + 1) * width - guard);
+  }
+}
+
+TEST(AutoReplySlotDelay, AnUnsyncedClockIsDayZeroAndStillOrders) {
+  // Day 0 is what a node with no NTP passes. It must be a legal ordering, not a refusal
+  // and not everyone on slot 0.
+  const uint8_t K = 8;
+  EXPECT_EQ(autoReplyRotatedSlot(3, K, 0), 3);
+  EXPECT_NE(autoReplySlotDelayMs(autoReplyRotatedSlot(3, K, 0), K, WIN_START, WIN_END, 0),
+            autoReplySlotDelayMs(autoReplyRotatedSlot(4, K, 0), K, WIN_START, WIN_END, 0));
+}
+
+TEST(AutoReplySlotDelay, DegenerateInputsDoNotDivideByZero) {
+  EXPECT_EQ(autoReplyRotatedSlot(3, 0, 5), 0);
+  EXPECT_EQ(autoReplySlotDelayMs(0, 0, WIN_START, WIN_END, 7), WIN_START);
+  EXPECT_EQ(autoReplySlotDelayMs(0, 16, WIN_END, WIN_START, 7), WIN_END);
+}
+
+// ---- the unassigned node's slot (Sprint F04 T-04) ----------------------------
+
+// A stand-in for an Ed25519 public key, which is indistinguishable from random. An
+// arithmetic pattern is not: bytes of the form seed*37 + i*101 collide mod 16 on every
+// day of the year, which failed this suite's own spread test the first time it ran.
+static void fillKey(uint8_t* key, uint8_t seed) {
+  uint32_t x = 0x9E3779B9u ^ (seed * 0x85EBCA6Bu);
+  for (int i = 0; i < 32; i++) {
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;      // xorshift32
+    key[i] = (uint8_t)(x >> 24);
+  }
+}
+
+TEST(AutoReplyKeySlot, SameKeyAndDayGiveTheSameSlotEveryTime) {
+  uint8_t key[32]; fillKey(key, 5);
+  for (uint32_t day = 0; day < 10; day++) {
+    uint8_t first = autoReplySlotFromKey(key, sizeof(key), 16, day);
+    for (int again = 0; again < 3; again++) {
+      EXPECT_EQ(autoReplySlotFromKey(key, sizeof(key), 16, day), first);
+    }
+  }
+}
+
+TEST(AutoReplyKeySlot, TheSlotIsAlwaysInsideTheSlotCount) {
+  uint8_t key[32]; fillKey(key, 9);
+  for (uint8_t slots = 1; slots <= 32; slots++) {
+    for (uint32_t day = 0; day < 40; day++) {
+      EXPECT_LT(autoReplySlotFromKey(key, sizeof(key), slots, day), slots);
+    }
+  }
+}
+
+TEST(AutoReplyKeySlot, ANodeDoesNotSitOnOneSlotForEver) {
+  // Not a fairness guarantee -- a key whose bytes happen to agree mod 16 would sit
+  // still, and that is allowed. This asserts the day actually reaches the choice.
+  uint8_t key[32]; fillKey(key, 3);
+  bool moved = false;
+  for (uint32_t day = 1; day < 32 && !moved; day++) {
+    moved = autoReplySlotFromKey(key, sizeof(key), 16, day)
+         != autoReplySlotFromKey(key, sizeof(key), 16, 0);
+  }
+  EXPECT_TRUE(moved);
+}
+
+TEST(AutoReplyKeySlot, DifferentKeysMostlyLandApartButNotAlways) {
+  // The honest property: this spreads like a random draw, so collisions happen at the
+  // birthday rate. The test records that rather than pretending otherwise -- with 12
+  // keys over 16 slots, some days will have a clash, and most keys still differ.
+  uint8_t keys[12][32];
+  for (uint8_t i = 0; i < 12; i++) fillKey(keys[i], (uint8_t)(i + 1));
+  int days_with_a_clash = 0;
+  for (uint32_t day = 0; day < 32; day++) {
+    bool used[16] = {false}; bool clash = false;
+    for (uint8_t i = 0; i < 12; i++) {
+      uint8_t slot = autoReplySlotFromKey(keys[i], 32, 16, day);
+      if (used[slot]) clash = true;
+      used[slot] = true;
+    }
+    if (clash) days_with_a_clash++;
+  }
+  EXPECT_GT(days_with_a_clash, 0);        // it is not collision-free, by construction
+  EXPECT_LT(days_with_a_clash, 32);       // nor is it always colliding
+}
+
+TEST(AutoReplyKeySlot, DegenerateInputsAreSafe) {
+  uint8_t key[32]; fillKey(key, 1);
+  EXPECT_EQ(autoReplySlotFromKey(NULL, 32, 16, 3), 0);
+  EXPECT_EQ(autoReplySlotFromKey(key, 0, 16, 3), 0);
+  EXPECT_EQ(autoReplySlotFromKey(key, sizeof(key), 0, 3), 0);
+}
+
+// ---- assignment vs fallback, and the clock (Sprint F04 T-05) -----------------
+
+TEST(AutoReplySlotIndex, AnAssignedSlotIsOneBasedSoNobodyFallsOntoTheFirstByAccident) {
+  uint8_t key[32]; fillKey(key, 11);
+  EXPECT_EQ(autoReplySlotIndex(1, key, sizeof(key), 16, 0), 0);
+  EXPECT_EQ(autoReplySlotIndex(2, key, sizeof(key), 16, 0), 1);
+  EXPECT_EQ(autoReplySlotIndex(16, key, sizeof(key), 16, 0), 15);
+}
+
+TEST(AutoReplySlotIndex, AnAssignmentBeyondTheSlotCountWrapsRatherThanEscaping) {
+  uint8_t key[32]; fillKey(key, 12);
+  // A slot assigned before the count was narrowed. Wrapping keeps it inside the
+  // window; letting it through would index past the last slot.
+  EXPECT_LT(autoReplySlotIndex(40, key, sizeof(key), 16, 0), 16);
+  EXPECT_EQ(autoReplySlotIndex(17, key, sizeof(key), 16, 0), 0);
+}
+
+TEST(AutoReplySlotIndex, UnassignedUsesTheKeyAndAssignedIgnoresIt) {
+  uint8_t a[32], b[32]; fillKey(a, 21); fillKey(b, 22);
+  EXPECT_EQ(autoReplySlotIndex(5, a, sizeof(a), 16, 3), autoReplySlotIndex(5, b, sizeof(b), 16, 3));
+  EXPECT_EQ(autoReplySlotIndex(0, a, sizeof(a), 16, 3), autoReplySlotFromKey(a, sizeof(a), 16, 3));
+}
+
+TEST(AutoReplyDay, AnUnsyncedClockReadsAsDayZero) {
+  EXPECT_EQ(autoReplyDayNumber(0), 0u);
+  EXPECT_EQ(autoReplyDayNumber(1234), 0u);
+  EXPECT_EQ(autoReplyDayNumber(AUTOREPLY_EPOCH_SANE - 1), 0u);
+}
+
+TEST(AutoReplyDay, ARealClockAdvancesOncePerDayAtMidnightUTC) {
+  uint32_t t = 1789800000UL;                       // 2026-09-19
+  uint32_t day = autoReplyDayNumber(t);
+  EXPECT_EQ(autoReplyDayNumber(t + 3600), day);    // an hour later, same order
+  EXPECT_EQ(autoReplyDayNumber(t + 86400), day + 1);
+}
+
+// ---- the window and the slot count (Sprint F04 T-06) ------------------------
+
+TEST(AutoReplyWindow, TheDefaultsAreUsable) {
+  EXPECT_TRUE(autoReplyWindowValid(AUTOREPLY_WINDOW_START_DEF, AUTOREPLY_WINDOW_END_DEF,
+                                   AUTOREPLY_SLOTS_DEF));
+  EXPECT_TRUE(autoReplySlotsValid(AUTOREPLY_SLOTS_DEF, AUTOREPLY_WINDOW_START_DEF,
+                                  AUTOREPLY_WINDOW_END_DEF));
+}
+
+TEST(AutoReplyWindow, RefusesAWindowThatCannotHoldItsSlots) {
+  // 48 slots in a 110 s window is 2.3 s each, narrower than two replies and their
+  // guards -- measured to make even assigned nodes collide.
+  EXPECT_FALSE(autoReplySlotsValid(48, 10, 120));
+  EXPECT_TRUE(autoReplySlotsValid(48, 10, 300));
+}
+
+TEST(AutoReplyWindow, RefusesAnInvertedOrEmptyWindow) {
+  EXPECT_FALSE(autoReplyWindowValid(120, 10, 16));
+  EXPECT_FALSE(autoReplyWindowValid(60, 60, 16));
+  EXPECT_FALSE(autoReplyWindowValid(-1, 120, 16));
+}
+
+TEST(AutoReplyWindow, RefusesAWindowLongerThanTheCeiling) {
+  EXPECT_TRUE(autoReplyWindowValid(10, AUTOREPLY_WINDOW_MAX, 16));
+  EXPECT_FALSE(autoReplyWindowValid(10, AUTOREPLY_WINDOW_MAX + 1, 16));
+}
+
+TEST(AutoReplyWindow, RefusesASlotCountOutsideTheRange) {
+  EXPECT_FALSE(autoReplySlotsValid(0, 10, 120));
+  EXPECT_FALSE(autoReplySlotsValid(AUTOREPLY_SLOTS_MAX + 1, 10, 600));
+  EXPECT_TRUE(autoReplySlotsValid(1, 10, 120));
+}
+
+// ---- the cross-check against the model (Sprint F04 T-09) --------------------
+//
+// The same four vectors are asserted in Meshcore-Panopticon's
+// tests/test_reply_slots.py. Two implementations of one timing rule is exactly where
+// this project has gone wrong before: reply timing lived only in the firmware for six
+// nights while the model scored storm_duration against a number it could not produce.
+// If either side drifts, one of these two suites goes red.
+
+TEST(AutoReplySlotDelay, AgreesWithTheModelOnFixedVectors) {
+  uint8_t key[32];
+  memset(key, 0xAA, sizeof(key));
+  const uint8_t K = 16;
+  const uint32_t start = 10000, end = 120000;
+  const uint32_t width = (end - start) / K, guard = width / 8, span = width - 2 * guard;
+
+  struct Vector { uint8_t assigned; uint32_t day; uint32_t entropy; uint32_t expect_ms; };
+  const Vector vectors[] = {
+    {1, 0,       0,          10859},
+    {1, 0,       span / 2,   13437},
+    {5, 7,       span / 4,   87773},
+    {0, 0,       0,          79609},   // unassigned: 0xAA % 16 = slot 10
+  };
+
+  for (const Vector& v : vectors) {
+    uint8_t index = autoReplySlotIndex(v.assigned, key, sizeof(key), K, v.day);
+    uint32_t got = autoReplySlotDelayMs(autoReplyRotatedSlot(index, K, v.day), K,
+                                        start, end, v.entropy);
+    EXPECT_EQ(got, v.expect_ms) << "assigned=" << (int)v.assigned << " day=" << v.day;
+  }
+}
+
+// ---- the stored config, every version of it (Sprint 18 T-07) ----------------
+//
+// Seven versions of /autoreply exist in the field or in the history, and until now
+// none was tested: AutoReply.cpp needs a filesystem. The layout is a pure codec now.
+
+static AutoReplyStoredConfig decodeFrom(const std::vector<uint8_t>& bytes, bool* ok = nullptr) {
+  AutoReplyStoredConfig c;
+  autoReplyConfigDefaults(&c);
+  bool r = autoReplyConfigDecode(bytes.data(), bytes.size(), &c);
+  if (ok) *ok = r;
+  return c;
+}
+
+static std::vector<uint8_t> v4Prefix(uint8_t ver, const char* region) {
+  std::vector<uint8_t> b = {ver, 1 /*enabled*/, 5 /*hops*/, 0 /*direct_flood*/, 60 /*retired delay*/};
+  std::vector<uint8_t> r(AUTOREPLY_MAX_REGION + 1, 0);
+  memcpy(r.data(), region, strlen(region));
+  b.insert(b.end(), r.begin(), r.end());
+  return b;
+}
+
+TEST(AutoReplyConfig, V1TurnsANamedChannelIntoEnabled) {
+  std::vector<uint8_t> b(1 + 32 + 1, 0);
+  b[0] = 1; b[1] = '#'; b[33] = 3;
+  AutoReplyStoredConfig c = decodeFrom(b);
+  EXPECT_TRUE(c.enabled);
+  EXPECT_EQ(c.hops, 3);
+  b[1] = 0;                                   // no channel was named: it was off
+  EXPECT_FALSE(decodeFrom(b).enabled);
+}
+
+TEST(AutoReplyConfig, V2AndV3KeepTheDefaultsForWhatTheyPredate) {
+  AutoReplyStoredConfig v2 = decodeFrom({2, 1, 4});
+  EXPECT_TRUE(v2.enabled); EXPECT_EQ(v2.hops, 4);
+  EXPECT_TRUE(v2.direct_flood);               // v2 predates the flag; the default holds
+  AutoReplyStoredConfig v3 = decodeFrom({3, 1, 4, 0});
+  EXPECT_FALSE(v3.direct_flood);
+  EXPECT_EQ(v3.slot, AUTOREPLY_SLOT_UNASSIGNED);
+  EXPECT_EQ(v3.slots, AUTOREPLY_SLOTS_DEF);
+}
+
+TEST(AutoReplyConfig, V4ReadsTheRegionAndThrowsTheOldDelayAway) {
+  AutoReplyStoredConfig c = decodeFrom(v4Prefix(4, "JKG"));
+  EXPECT_TRUE(c.enabled); EXPECT_EQ(c.hops, 5); EXPECT_FALSE(c.direct_flood);
+  EXPECT_STREQ(c.region, "JKG");
+  EXPECT_EQ(c.mode, AUTOREPLY_MODE_FLOOD);    // v4 predates the mode
+}
+
+TEST(AutoReplyConfig, V5AndV6AddTheModeThenThePrivateSwitch) {
+  std::vector<uint8_t> b = v4Prefix(5, "JKG");
+  b.push_back(AUTOREPLY_MODE_DIRECT);
+  EXPECT_EQ(decodeFrom(b).mode, AUTOREPLY_MODE_DIRECT);
+  // v5 predates the field, so it keeps the default -- which is ON since 2026-09-20.
+  // A node upgrading from v5 therefore starts answering private requests, which is the
+  // intent: it never had a way to say otherwise, and the answer was always private.
+  EXPECT_EQ(decodeFrom(b).priv, AUTOREPLY_PRIVATE_DEF);
+  b[0] = 6; b.push_back(1);
+  EXPECT_TRUE(decodeFrom(b).priv);
+  b.back() = 0;
+  EXPECT_FALSE(decodeFrom(b).priv);           // and a node that said no keeps saying no
+}
+
+TEST(AutoReplyConfig, APrivateRequestIsAnsweredOutOfTheBox) {
+  // Operator, 2026-09-20: "when someone messages the repeater in private the answer
+  // should be in private." The mechanism was always there and the switch was shut, so a
+  // private request got nothing back -- indistinguishable, from outside, from a dead node.
+  AutoReplyStoredConfig fresh;
+  autoReplyConfigDefaults(&fresh);
+  EXPECT_TRUE(fresh.priv);
+}
+
+TEST(AutoReplyConfig, ANodeThatTurnedItOffKeepsItOffAcrossAnUpgrade) {
+  // The default reaches a fresh flash or an erase. It must not reach back into a node
+  // whose operator already answered the question.
+  AutoReplyStoredConfig off;
+  autoReplyConfigDefaults(&off);
+  off.priv = false;
+  strcpy(off.region, "JKG");
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&off, buf, sizeof(buf));
+  AutoReplyStoredConfig back;
+  autoReplyConfigDefaults(&back);
+  ASSERT_TRUE(autoReplyConfigDecode(buf, n, &back));
+  EXPECT_FALSE(back.priv);
+}
+
+TEST(AutoReplyConfig, V7RoundTripsEveryField) {
+  AutoReplyStoredConfig in;
+  autoReplyConfigDefaults(&in);
+  in.enabled = true; in.hops = 6; in.direct_flood = false;
+  strcpy(in.region, "JKG"); in.mode = AUTOREPLY_MODE_PRIVATE; in.priv = true;
+  in.slot = 9; in.window_start = 15; in.window_end = 300; in.slots = 32;
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  ASSERT_GT(n, 0u);
+  EXPECT_EQ(buf[0], AUTOREPLY_CONFIG_VERSION);
+  AutoReplyStoredConfig out = decodeFrom(std::vector<uint8_t>(buf, buf + n));
+  EXPECT_TRUE(out.enabled); EXPECT_EQ(out.hops, 6); EXPECT_FALSE(out.direct_flood);
+  EXPECT_STREQ(out.region, "JKG"); EXPECT_EQ(out.mode, AUTOREPLY_MODE_PRIVATE);
+  EXPECT_TRUE(out.priv); EXPECT_EQ(out.slot, 9);
+  EXPECT_EQ(out.window_start, 15); EXPECT_EQ(out.window_end, 300); EXPECT_EQ(out.slots, 32);
+}
+
+TEST(AutoReplyConfig, AFileFromNewerFirmwareIsReadByTheFieldsWeKnow) {
+  // What stops a rollback switching the feature off in silence.
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  in.enabled = true; in.slot = 4;
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  buf[0] = 9;                                 // some later version
+  std::vector<uint8_t> b(buf, buf + n);
+  b.push_back(0x77); b.push_back(0x88);       // and fields we have never heard of
+  AutoReplyStoredConfig out = decodeFrom(b);
+  EXPECT_TRUE(out.enabled);
+  EXPECT_EQ(out.slot, 4);
+}
+
+TEST(AutoReplyConfig, ATruncatedFileKeepsDefaultsForWhatItNeverReached) {
+  std::vector<uint8_t> b = v4Prefix(7, "JKG");
+  b.push_back(AUTOREPLY_MODE_DIRECT);         // mode present, then the file ends
+  AutoReplyStoredConfig c = decodeFrom(b);
+  EXPECT_EQ(c.mode, AUTOREPLY_MODE_DIRECT);
+  EXPECT_EQ(c.priv, AUTOREPLY_PRIVATE_DEF);
+  EXPECT_EQ(c.slots, AUTOREPLY_SLOTS_DEF);
+  EXPECT_EQ(c.window_end, AUTOREPLY_WINDOW_END_DEF);
+}
+
+TEST(AutoReplyConfig, ADamagedWindowFallsBackAsAWhole) {
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  in.window_start = 120; in.window_end = 10; in.slots = 16;      // inverted
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  AutoReplyStoredConfig out = decodeFrom(std::vector<uint8_t>(buf, buf + n));
+  EXPECT_EQ(out.window_start, AUTOREPLY_WINDOW_START_DEF);
+  EXPECT_EQ(out.window_end, AUTOREPLY_WINDOW_END_DEF);
+  EXPECT_EQ(out.slots, AUTOREPLY_SLOTS_DEF);
+}
+
+TEST(AutoReplyConfig, ADamagedModeOrSlotTakesTheSafeReading) {
+  std::vector<uint8_t> b = v4Prefix(7, "");
+  b.push_back(0xEE);                           // not a mode
+  b.push_back(0);
+  b.push_back(200);                            // not a slot
+  b.insert(b.end(), {10, 0, 120, 0, 16});
+  AutoReplyStoredConfig c = decodeFrom(b);
+  EXPECT_EQ(c.mode, AUTOREPLY_MODE_FLOOD);
+  EXPECT_EQ(c.slot, AUTOREPLY_SLOT_UNASSIGNED);
+}
+
+TEST(AutoReplyConfig, RefusesAnEmptyFileOrAVersionItHasNeverHeardOf) {
+  bool ok = true;
+  AutoReplyStoredConfig c = decodeFrom({}, &ok);
+  EXPECT_FALSE(ok);
+  decodeFrom({0, 1, 1}, &ok);
+  EXPECT_FALSE(ok);
+  EXPECT_FALSE(c.enabled);
+}
+
+TEST(AutoReplyConfig, EncodeRefusesABufferTooSmall) {
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  uint8_t tiny[8];
+  EXPECT_EQ(autoReplyConfigEncode(&in, tiny, sizeof(tiny)), 0u);
+}
+
+TEST(AutoReplyConfig, AV5FilesTrailingByteIsNotThePrivateSwitch) {
+  // v5 ends at the mode. Anything after it is not a field this version defined, so the
+  // version gates the read, not the length. The byte is 0 and the default is on, so this
+  // still fails the moment the length is what decides -- the direction flipped with the
+  // default on 2026-09-20, the guarantee did not. Reading a stray byte as `private`
+  // would let whatever followed decide an unauthenticated transmit path either way.
+  std::vector<uint8_t> b = v4Prefix(5, "JKG");
+  b.push_back(AUTOREPLY_MODE_DIRECT);
+  b.push_back(0);
+  EXPECT_EQ(decodeFrom(b).priv, AUTOREPLY_PRIVATE_DEF);
+  EXPECT_TRUE(AUTOREPLY_PRIVATE_DEF);   // or the line above proves nothing
+}
+
+// ---- the channel named by autoreply.region, and the legacy one (ar-12) ------
+//
+// Interview 2026-10-10: one setting names the channel and the reply's scope;
+// `autoreply.legacy`, on by default, keeps '#test-<iata>' answered beside it.
+
+// '#test-' + 25 + NUL: a companion's 32-byte channel name, AUTOREPLY_MAX_CHANNEL.
+static const size_t REGION_CHANNEL_BUF = 32;
+
+TEST(RegionName, AcceptsGroupsJoinedBySingleHyphens) {
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_TRUE(autoReplyRegionName("se-jkp", out, sizeof(out)));
+  EXPECT_STREQ("se-jkp", out);
+  EXPECT_TRUE(autoReplyRegionName("se-jkp-mul", out, sizeof(out)));
+  EXPECT_TRUE(autoReplyRegionName("jkg", out, sizeof(out)));
+  EXPECT_TRUE(autoReplyRegionName("a1-2b", out, sizeof(out)));
+}
+
+TEST(RegionName, RefusesALeadingTrailingOrDoubledHyphen) {
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_FALSE(autoReplyRegionName("-xyz", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("xyz-", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("ab--cd", out, sizeof(out)));
+  EXPECT_STREQ("", out);
+}
+
+TEST(RegionName, RefusesAnythingButLettersDigitsAndHyphens) {
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_FALSE(autoReplyRegionName("se_jkp", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("se jkp", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("#se-jkp", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("$se-jkp", out, sizeof(out)));
+  EXPECT_FALSE(autoReplyRegionName("j\xc3\xb6k", out, sizeof(out)));   // no accents
+  EXPECT_FALSE(autoReplyRegionName(nullptr, out, sizeof(out)));
+}
+
+TEST(RegionName, LengthIsThreeToTwentyFive) {
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_FALSE(autoReplyRegionName("ab", out, sizeof(out)));
+  EXPECT_TRUE(autoReplyRegionName("abc", out, sizeof(out)));
+  std::string max(AUTOREPLY_REGION_NAME_MAX, 'a');
+  EXPECT_TRUE(autoReplyRegionName(max.c_str(), out, sizeof(out)));
+  std::string over(AUTOREPLY_REGION_NAME_MAX + 1, 'a');
+  EXPECT_FALSE(autoReplyRegionName(over.c_str(), out, sizeof(out)));
+  // The longest region's channel fills a companion's channel name exactly.
+  char ch[REGION_CHANNEL_BUF];
+  EXPECT_TRUE(autoReplyRegionChannel(max.c_str(), ch, sizeof(ch)));
+  EXPECT_EQ(strlen(ch) + 1, REGION_CHANNEL_BUF);
+}
+
+TEST(RegionName, FoldsToLowerCase) {
+  // A hashtag key is the hash of the exact name: '#test-SE-JKP' would be a channel of
+  // its own, which nobody probes.
+  char out[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_TRUE(autoReplyRegionName("SE-Jkp-MUL", out, sizeof(out)));
+  EXPECT_STREQ("se-jkp-mul", out);
+  char ch[REGION_CHANNEL_BUF];
+  EXPECT_TRUE(autoReplyRegionChannel("SE-JKP", ch, sizeof(ch)));
+  EXPECT_STREQ("#test-se-jkp", ch);
+}
+
+TEST(RegionVerdict, TheNameMustBeInTheRegionTable) {
+  char name[AUTOREPLY_REGION_NAME_MAX + 1];
+  std::vector<std::string> asked;
+  auto table = [&asked](const char* n) { asked.push_back(n); return strcmp(n, "se-jkp") == 0; };
+  EXPECT_EQ(autoReplyRegionVerdict("SE-JKP", name, sizeof(name), table), AUTOREPLY_REGION_SET);
+  EXPECT_STREQ("se-jkp", name);
+  EXPECT_EQ(autoReplyRegionVerdict("se-jkp-mul", name, sizeof(name), table),
+            AUTOREPLY_REGION_NOT_IN_TABLE);
+  EXPECT_STREQ("se-jkp-mul", name);           // folded, for the 'region put' in the error
+  ASSERT_EQ(asked.size(), 2u);
+  EXPECT_EQ(asked[0], "se-jkp");              // the table is asked with the folded name
+}
+
+TEST(RegionVerdict, ABadNameNeverReachesTheTableAndEmptyClears) {
+  char name[AUTOREPLY_REGION_NAME_MAX + 1] = "old";
+  int asked = 0;
+  auto table = [&asked](const char*) { asked++; return true; };
+  EXPECT_EQ(autoReplyRegionVerdict("a--b", name, sizeof(name), table), AUTOREPLY_REGION_BAD_NAME);
+  EXPECT_EQ(autoReplyRegionVerdict("", name, sizeof(name), table), AUTOREPLY_REGION_CLEARED);
+  EXPECT_STREQ("", name);
+  EXPECT_EQ(asked, 0);
+}
+
+struct Channels { char region[REGION_CHANNEL_BUF]; char legacy[REGION_CHANNEL_BUF]; };
+
+static Channels channelsFor(const char* region, const char* iata, bool legacy) {
+  Channels c;
+  autoReplyChannelNames(region, iata, legacy, c.region, c.legacy, REGION_CHANNEL_BUF);
+  return c;
+}
+
+TEST(ChannelNames, LegacyOnAnswersBothWithARegion) {
+  Channels c = channelsFor("se-jkp", "JKG", true);
+  EXPECT_STREQ("#test-se-jkp", c.region);
+  EXPECT_STREQ("#test-jkg", c.legacy);
+}
+
+TEST(ChannelNames, LegacyOnWithoutARegionStillAnswersTheOldChannel) {
+  // Ruling 4: an upgrade never silences a node.
+  Channels c = channelsFor("", "JKG", true);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("#test-jkg", c.legacy);
+}
+
+TEST(ChannelNames, LegacyOffLeavesOnlyTheRegion) {
+  Channels c = channelsFor("se-jkp", "JKG", false);
+  EXPECT_STREQ("#test-se-jkp", c.region);
+  EXPECT_STREQ("", c.legacy);
+  // and with no region either, the node is silent (ruling 2)
+  c = channelsFor("", "JKG", false);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("", c.legacy);
+}
+
+TEST(ChannelNames, NoIataMeansNoLegacyChannel) {
+  Channels c = channelsFor("se-jkp", "", true);
+  EXPECT_STREQ("#test-se-jkp", c.region);
+  EXPECT_STREQ("", c.legacy);
+  c = channelsFor("se-jkp", "XXX", true);
+  EXPECT_STREQ("", c.legacy);
+  c = channelsFor("se-jkp", nullptr, true);
+  EXPECT_STREQ("", c.legacy);
+  c = channelsFor("", nullptr, true);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("", c.legacy);
+}
+
+TEST(ChannelNames, ARegionSpelledLikeTheIataIsAnsweredOnce) {
+  Channels c = channelsFor("jkg", "JKG", true);
+  EXPECT_STREQ("#test-jkg", c.region);
+  EXPECT_STREQ("", c.legacy);
+}
+
+TEST(ChannelNames, AStoredRegionOfTheOldShapeNamesNoChannel) {
+  // An older release stored any string as the scope; one that is not a valid name now
+  // gets no region channel rather than one nobody could add -- and legacy still answers.
+  Channels c = channelsFor("$private scope", "JKG", true);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("#test-jkg", c.legacy);
+}
+
+TEST(ChannelBudgets, TwoChannelsSpendTheirOwnReplies) {
+  // A test sent on both channels is two requests, each on its own limits.
+  AutoReplyBudgets region_lane, legacy_lane;
+  const uint32_t now = 100000;
+  for (uint32_t i = 0; i < AUTOREPLY_MAX_REPLIES; i++) {
+    ASSERT_TRUE(autoReplySenderAllowed(region_lane.senders, AUTOREPLY_MAX_SENDERS,
+                                       region_lane.next_sender, 1000 + i, now,
+                                       AUTOREPLY_WINDOW_SECS));
+    ASSERT_TRUE(region_lane.limiter.allow(now));
+  }
+  EXPECT_FALSE(region_lane.limiter.allow(now));
+  EXPECT_FALSE(autoReplySenderAllowed(region_lane.senders, AUTOREPLY_MAX_SENDERS,
+                                      region_lane.next_sender, 1000, now, AUTOREPLY_WINDOW_SECS));
+  // the same sender, at the same moment, on the other channel
+  EXPECT_TRUE(autoReplySenderAllowed(legacy_lane.senders, AUTOREPLY_MAX_SENDERS,
+                                     legacy_lane.next_sender, 1000, now, AUTOREPLY_WINDOW_SECS));
+  EXPECT_TRUE(legacy_lane.limiter.allow(now));
+}
+
+TEST(AutoReplyConfig, V8AddsLegacyOnByDefault) {
+  // Every older file predates the flag, so it reads as on: an upgrade keeps answering.
+  std::vector<uint8_t> b = v4Prefix(7, "se-jkp");
+  b.insert(b.end(), {AUTOREPLY_MODE_FLOOD, 1, 0, 10, 0, 120, 0, 16});
+  EXPECT_TRUE(decodeFrom(b).legacy);
+  b[0] = 8; b.push_back(0);
+  EXPECT_FALSE(decodeFrom(b).legacy);
+  b.back() = 1;
+  EXPECT_TRUE(decodeFrom(b).legacy);
+  AutoReplyStoredConfig fresh;
+  autoReplyConfigDefaults(&fresh);
+  EXPECT_TRUE(fresh.legacy);
+}
+
+TEST(AutoReplyConfig, LegacyOffRoundTrips) {
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  in.legacy = false;
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  EXPECT_EQ(buf[0], 8);
+  EXPECT_FALSE(decodeFrom(std::vector<uint8_t>(buf, buf + n)).legacy);
+}
+
+TEST(AutoReplyConfig, APreAr12RegionLoadsIntoItsNewMeaning) {
+  // ar-11 stored `autoreply.region` as the reply's scope alone; read by ar-12 it also
+  // names the channel, and legacy keeps the IATA channel answered beside it.
+  std::vector<uint8_t> b = v4Prefix(7, "se-jkp");
+  b.insert(b.end(), {AUTOREPLY_MODE_FLOOD, 1, 0, 10, 0, 120, 0, 16});
+  AutoReplyStoredConfig c = decodeFrom(b);
+  EXPECT_STREQ("se-jkp", c.region);
+  Channels ch = channelsFor(c.region, "JKG", c.legacy);
+  EXPECT_STREQ("#test-se-jkp", ch.region);
+  EXPECT_STREQ("#test-jkg", ch.legacy);
+}
+
+// The channel hash the mesh matches on is the first byte of sha256 of the 16-byte key, whose
+// key is sha256 of the name (AutoReply::deriveLane). The native env's SHA256 is a mock, so
+// the two colliding values are written down: sha256(sha256("#test-vst")[0:16])[0] and the
+// same for "#test-se-u" are both 0x0B (QA, 2026-10-10, checked with Python's hashlib).
+static const uint8_t HASH_TEST_VST = 0x0B, HASH_TEST_SE_U = 0x0B;
+
+TEST(ChannelMatch, ACollidingRegionChannelDoesNotHideTheLegacyOne) {
+  // A node on region se-u with IATA VST: the mesh tries every candidate's key, so both
+  // lanes must be offered, the region's and the legacy one.
+  const uint8_t hashes[2] = { HASH_TEST_SE_U, HASH_TEST_VST };
+  const bool ready[2] = { true, true };
+  int idx[4];
+  ASSERT_EQ(2, autoReplyMatchingChannels(hashes, ready, 2, 0x0B, idx, 4));
+  EXPECT_EQ(0, idx[0]);
+  EXPECT_EQ(1, idx[1]);
+}
+
+TEST(ChannelMatch, OnlyReadyChannelsWithTheHashAndNoMoreThanAsked) {
+  const uint8_t hashes[2] = { 0x0B, 0x0B };
+  const bool one[2] = { false, true };
+  int idx[4];
+  ASSERT_EQ(1, autoReplyMatchingChannels(hashes, one, 2, 0x0B, idx, 4));
+  EXPECT_EQ(1, idx[0]);
+  const bool both[2] = { true, true };
+  EXPECT_EQ(1, autoReplyMatchingChannels(hashes, both, 2, 0x0B, idx, 1));
+  EXPECT_EQ(0, autoReplyMatchingChannels(hashes, both, 2, 0x0C, idx, 4));
+}
+
+// ---- the region table looked up without regard to case (ar-13) -------------
+
+struct FakeEntry { char name[31]; };
+struct FakeMap {
+  std::vector<FakeEntry> e;
+  int getCount() const { return (int)e.size(); }
+  const FakeEntry* getByIdx(int i) const { return &e[i]; }
+};
+
+TEST(FindRegion, IgnoresCaseAndALeadingHash) {
+  FakeMap m{{{"SE-JKP"}, {"#se-jkp-mul"}, {"jkg"}}};
+  EXPECT_EQ(&m.e[0], autoReplyFindRegion(m, "se-jkp"));
+  EXPECT_EQ(&m.e[1], autoReplyFindRegion(m, "se-jkp-mul"));
+  EXPECT_EQ(&m.e[2], autoReplyFindRegion(m, "JKG"));
+}
+
+TEST(FindRegion, WholeNamesOnlyAndNothingForNothing) {
+  FakeMap m{{{"se-jkp-mul"}}};
+  EXPECT_EQ(nullptr, autoReplyFindRegion(m, "se-jkp"));      // no prefix match here
+  EXPECT_EQ(nullptr, autoReplyFindRegion(m, ""));
+  EXPECT_EQ(nullptr, autoReplyFindRegion(m, nullptr));
+  FakeMap empty;
+  EXPECT_EQ(nullptr, autoReplyFindRegion(empty, "se-jkp"));
+}
+
+TEST(FindRegion, TheVerdictFindsATableNameInCapitals) {
+  // `region put SE-JKP` then `set autoreply.region se-jkp` must be accepted.
+  FakeMap m{{{"SE-JKP"}}};
+  char name[AUTOREPLY_REGION_NAME_MAX + 1];
+  EXPECT_EQ(AUTOREPLY_REGION_SET, autoReplyRegionVerdict("se-jkp", name, sizeof(name),
+      [&m](const char* n) { return autoReplyFindRegion(m, n) != nullptr; }));
+}
