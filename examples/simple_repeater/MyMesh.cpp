@@ -460,16 +460,6 @@ bool MyMesh::isLooped(const mesh::Packet* packet, const uint8_t max_counters[]) 
 }
 
 void MyMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size) {
-  // A reply region the operator configured wins over whatever scope the request
-  // arrived under; with none set, the choice is upstream's.
-#ifdef WITH_AUTO_REPLY
-  TransportKey configured;
-  if (fork.autoReplyScope(&configured)) {
-    sendFloodScoped(configured, packet, delay_millis, path_hash_size);
-    return;
-  }
-#endif
-
   TransportKey req_scope;
   bool is_wildcard = recv_pkt_region != NULL && recv_pkt_region->isWildcard();
   bool req_scope_known = recv_pkt_region != NULL && !is_wildcard

@@ -201,10 +201,15 @@ is settable at runtime rather than compiled in.
 **Default:** empty — no region channel, and the reply mirrors whatever scope the request
 arrived under.
 
-The same name is the test channel (`#test-<name>`, see above). With a region set, every reply
-is scoped to it regardless of how the request arrived. This
-bounds the airtime a survey costs the wider mesh while still letting a reply cross the whole
-region being measured.
+The same name is the test channel (`#test-<name>`, see above). With a region set, every
+auto-reply -- on the channel, private, or to a private request -- and every probe this node
+originates is scoped to it regardless of how the request arrived. This bounds the airtime a
+survey costs the wider mesh while still letting a reply cross the whole region being measured.
+
+Nothing else is. A login's answer, an ACK, a remote CLI reply and a path return follow
+upstream's own rule, the scope the request arrived under, exactly as on a repeater without
+auto-reply. Releases up to ar-13 scoped those too; from lou-14 the setting is auto-reply's
+alone, so a node with a region set answers a login in the scope it was asked in.
 
 Note this bounds propagation by a *stated* boundary rather than by hop count. A hop cap would
 answer a different question — how much comes back to whoever asked — and would quietly hide

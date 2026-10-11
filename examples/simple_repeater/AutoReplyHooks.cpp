@@ -24,6 +24,20 @@ bool Fork::autoReplyScope(TransportKey* scope) {
   return _mesh.region_map.getTransportKeysFor(*entry, scope, 1) > 0;
 }
 
+// Every flood auto-reply sends goes out here: in the 'autoreply.region' scope when one is
+// set and in the table, and otherwise by upstream's own rule, which mirrors the scope the
+// request arrived under. Nothing else this repeater floods back -- a login's answer, an
+// ACK, a remote CLI reply -- is scoped by that setting: those are upstream's, and so is
+// the choice of their scope (TODO 22a ruling 11).
+void Fork::sendAutoReplyFlood(mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size) {
+  TransportKey scope;
+  if (autoReplyScope(&scope)) {
+    _mesh.sendFloodScoped(scope, pkt, delay_millis, path_hash_size);
+  } else {
+    _mesh.sendFloodReply(pkt, delay_millis, path_hash_size);
+  }
+}
+
 // Where this node's reply lands in the window today: its assigned slot if it has one,
 // the slot its own key derives if it has not. The day comes from the node's own clock,
 // so every node agrees on the order without a command being sent and the order holds
@@ -85,7 +99,7 @@ void Fork::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Group
       _mesh.sendDirect(reply, back, back_len, delay_millis);
     } else {
       MESH_DEBUG_PRINTLN("AutoReply: sending private flood reply in %d ms", (uint32_t)delay_millis);
-      _mesh.sendFloodReply(reply, delay_millis, packet->getPathHashSize());
+      sendAutoReplyFlood(reply, delay_millis, packet->getPathHashSize());
     }
     return;
   }
@@ -107,7 +121,7 @@ void Fork::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Group
     if (zero_hop) {
       _mesh.sendZeroHop(reply, delay_millis);
     } else {
-      _mesh.sendFloodReply(reply, delay_millis, packet->getPathHashSize());
+      sendAutoReplyFlood(reply, delay_millis, packet->getPathHashSize());
     }
   } else {
     MESH_DEBUG_PRINTLN("AutoReply: could not build reply packet, pool empty");
@@ -145,7 +159,7 @@ bool Fork::onAnonRequest(mesh::Packet* packet, const uint8_t* secret, const mesh
   if (route == mesh::REPLY_ROUTE_PATH_RETURN) {
     mesh::Packet* path = _mesh.createPathReturn(sender, secret, packet->path, packet->path_len,
                                                 PAYLOAD_TYPE_RESPONSE, report, report_len);
-    if (path) _mesh.sendFloodReply(path, delay_millis, packet->getPathHashSize());
+    if (path) sendAutoReplyFlood(path, delay_millis, packet->getPathHashSize());
     return true;
   }
   mesh::Packet* reply = _mesh.createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, report, report_len);
@@ -153,7 +167,7 @@ bool Fork::onAnonRequest(mesh::Packet* packet, const uint8_t* secret, const mesh
   if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
     _mesh.sendDirect(reply, client->out_path, client->out_path_len, delay_millis);
   } else {
-    _mesh.sendFloodReply(reply, delay_millis, packet->getPathHashSize());
+    sendAutoReplyFlood(reply, delay_millis, packet->getPathHashSize());
   }
   return true;
 }
