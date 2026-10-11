@@ -1,5 +1,8 @@
 # Pull OTA: a signed image, verified before it is trusted
 
+> Not a feature: every Observer image of the fork carries it, whatever its combination
+> ([fork.md](fork.md)); core images have no pull OTA.
+
 An observer node can fetch its own firmware: `ota check` reads a per-variant manifest from the
 release channel it was built with and reports the build on offer; `ota update` downloads the
 image into the inactive slot and reboots into it. From ar-11 (2026-10-08) that path is safe to

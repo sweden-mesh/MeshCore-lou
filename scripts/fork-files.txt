@@ -52,3 +52,5 @@ scripts/release-candidate.sh
 scripts/check-quiet-image.sh
 scripts/ci-pr-plan.sh
 test/test_fork_settings/test_fork_settings.cpp
+docs/fork-contributing.md
+docs/fork-overview.md

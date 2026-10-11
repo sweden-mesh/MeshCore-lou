@@ -1,3 +1,15 @@
+# MeshCore, with the fork's auto-reply
+
+**This branch is a fork.** It adds repeater auto-reply to upstream MeshCore's release
+`repeater-v1.17.1` (the `ar` image; the fork's MQTT features need the Observer and live on
+`fork/observer`): [`docs/fork.md`](docs/fork.md) for the combinations and how they are built,
+[`docs/fork-overview.md`](docs/fork-overview.md) and [`docs/autoreply.md`](docs/autoreply.md)
+for what it does, [`docs/quick-check-guide.md`](docs/quick-check-guide.md) for setting up a
+repeater, and [`docs/fork-contributing.md`](docs/fork-contributing.md) before changing anything.
+Upstream's own README follows.
+
+---
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.

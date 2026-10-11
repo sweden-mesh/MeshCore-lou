@@ -1,3 +1,9 @@
+**Working on this fork's features?** Read [`docs/fork-contributing.md`](docs/fork-contributing.md)
+first: the two branches, the rule that the fork's files are identical on both, the host
+suites per combination, and the house style. What follows is upstream's own guide.
+
+---
+
 # Contributing to MeshCore
 
 Thanks for considering contributing to this project!  
