@@ -1,0 +1,51 @@
+Tbeam_SX1262_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Tbeam_SX1262_repeater_observer_mqtt-ar
+Heltec_T190_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Heltec_T190_repeater_observer_mqtt-ar
+heltec_tracker_v1_1_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=heltec_tracker_v1_1_repeater_observer_mqtt-ar
+heltec_tracker_v2_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=heltec_tracker_v2_repeater_observer_mqtt-ar
+heltec_v4_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=heltec_v4_repeater_observer_mqtt-ar
+heltec_v4_expansionkit_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=heltec_v4_expansionkit_repeater_observer_mqtt-ar
+Station_G2_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Station_G2_repeater_observer_mqtt-ar
+LilyGo_TBeam_1W_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=LilyGo_TBeam_1W_repeater_observer_mqtt-ar
+Xiao_S3_WIO_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1 -UMQTT_DEBUG' version=<mcu>-v1.17.1-lou-14-ar variant=Xiao_S3_WIO_repeater_observer_mqtt-ar quiet
+Station_G3_ESP32_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Station_G3_ESP32_repeater_observer_mqtt-ar
+Heltec_v3_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Heltec_v3_repeater_observer_mqtt-ar
+Heltec_WSL3_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Heltec_WSL3_repeater_observer_mqtt-ar
+LilyGo_T3S3_sx1262_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=LilyGo_T3S3_sx1262_repeater_observer_mqtt-ar
+RAK_3112_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=RAK_3112_repeater_observer_mqtt-ar
+Tbeam_SX1276_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Tbeam_SX1276_repeater_observer_mqtt-ar
+ThinkNode_M7_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=ThinkNode_M7_repeater_observer_mqtt-ar
+T_Beam_S3_Supreme_SX1262_repeater_observer_mqtt ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=T_Beam_S3_Supreme_SX1262_repeater_observer_mqtt-ar
+Tbeam_SX1262_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=Tbeam_SX1262_repeater_observer_mqtt-rc
+Heltec_T190_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=Heltec_T190_repeater_observer_mqtt-rc
+heltec_tracker_v1_1_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=heltec_tracker_v1_1_repeater_observer_mqtt-rc
+heltec_tracker_v2_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=heltec_tracker_v2_repeater_observer_mqtt-rc
+heltec_v4_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=heltec_v4_repeater_observer_mqtt-rc
+heltec_v4_expansionkit_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=heltec_v4_expansionkit_repeater_observer_mqtt-rc
+Station_G2_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=Station_G2_repeater_observer_mqtt-rc
+LilyGo_TBeam_1W_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=LilyGo_TBeam_1W_repeater_observer_mqtt-rc
+Xiao_S3_WIO_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1 -UMQTT_DEBUG' version=<mcu>-v1.17.1-lou-14-rc variant=Xiao_S3_WIO_repeater_observer_mqtt-rc quiet
+Station_G3_ESP32_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=Station_G3_ESP32_repeater_observer_mqtt-rc
+Heltec_v3_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=Heltec_v3_repeater_observer_mqtt-rc
+Heltec_WSL3_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=Heltec_WSL3_repeater_observer_mqtt-rc
+LilyGo_T3S3_sx1262_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=LilyGo_T3S3_sx1262_repeater_observer_mqtt-rc
+RAK_3112_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=RAK_3112_repeater_observer_mqtt-rc
+Tbeam_SX1276_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=Tbeam_SX1276_repeater_observer_mqtt-rc
+ThinkNode_M7_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=ThinkNode_M7_repeater_observer_mqtt-rc
+T_Beam_S3_Supreme_SX1262_repeater_observer_mqtt rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-rc variant=T_Beam_S3_Supreme_SX1262_repeater_observer_mqtt-rc
+Tbeam_SX1262_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=Tbeam_SX1262_repeater_observer_mqtt-arrc
+Heltec_T190_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=Heltec_T190_repeater_observer_mqtt-arrc
+heltec_tracker_v1_1_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=heltec_tracker_v1_1_repeater_observer_mqtt-arrc
+heltec_tracker_v2_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=heltec_tracker_v2_repeater_observer_mqtt-arrc
+heltec_v4_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=heltec_v4_repeater_observer_mqtt-arrc
+heltec_v4_expansionkit_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=heltec_v4_expansionkit_repeater_observer_mqtt-arrc
+Station_G2_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=Station_G2_repeater_observer_mqtt-arrc
+LilyGo_TBeam_1W_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=LilyGo_TBeam_1W_repeater_observer_mqtt-arrc
+Xiao_S3_WIO_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1 -UMQTT_DEBUG' version=<mcu>-v1.17.1-lou-14-arrc variant=Xiao_S3_WIO_repeater_observer_mqtt-arrc quiet
+Station_G3_ESP32_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=Station_G3_ESP32_repeater_observer_mqtt-arrc
+Heltec_v3_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=Heltec_v3_repeater_observer_mqtt-arrc
+Heltec_WSL3_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=Heltec_WSL3_repeater_observer_mqtt-arrc
+LilyGo_T3S3_sx1262_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=LilyGo_T3S3_sx1262_repeater_observer_mqtt-arrc
+RAK_3112_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=RAK_3112_repeater_observer_mqtt-arrc
+Tbeam_SX1276_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=Tbeam_SX1276_repeater_observer_mqtt-arrc
+ThinkNode_M7_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=ThinkNode_M7_repeater_observer_mqtt-arrc
+T_Beam_S3_Supreme_SX1262_repeater_observer_mqtt arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.17.1-lou-14-arrc variant=T_Beam_S3_Supreme_SX1262_repeater_observer_mqtt-arrc

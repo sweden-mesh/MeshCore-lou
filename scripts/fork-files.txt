@@ -39,3 +39,8 @@ test/test_ota_verify/test_ota_verify.cpp
 scripts/fork-check.sh
 scripts/fork-files.txt
 scripts/fork-sync.sh
+scripts/boards-core.txt
+scripts/build-matrix.sh
+scripts/check-build-matrix.sh
+test/data/build-matrix-core.txt
+test/data/build-matrix-observer.txt
