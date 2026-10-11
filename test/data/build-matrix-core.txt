@@ -7,6 +7,7 @@ ProMicro_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar
 SenseCap_Solar_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=SenseCap_Solar_repeater-ar
 ThinkNode_M1_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=ThinkNode_M1_repeater-ar
 Heltec_v3_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Heltec_v3_repeater-ar
+Heltec_WSL3_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Heltec_WSL3_repeater-ar
 heltec_v4_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=heltec_v4_repeater-ar
 Station_G2_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Station_G2_repeater-ar
 LilyGo_T3S3_sx1262_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=LilyGo_T3S3_sx1262_repeater-ar
