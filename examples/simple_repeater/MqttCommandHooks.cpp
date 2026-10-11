@@ -255,6 +255,20 @@ void Fork::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome
   _mesh.bridge->publishControlResult(_ctrl_result, payload, n, MQTTCTRL_RESULT_QOS);
 }
 
+// `get stats`, readable over the plane: the counters every status publish carries, read
+// from the mesh itself -- the radio, the dispatcher, the board -- and the bridge's queue
+// when it runs. Any sender_timestamp: it says no more than the status topic does. The
+// `stats-*` dumps it stands in for stay serial-only.
+void Fork::formatNodeStats(char* reply) {
+  const long queue = _mesh.bridge != NULL && _mesh.bridge->isRunning() ? _mesh.bridge->getQueueSize() : -1;
+  mqttCtrlFormatNodeStats(reply, MQTTCTRL_MAX_REPLY, _mesh._cli.getBoard()->getBattMilliVolts(),
+                          _mesh._ms->getMillis() / 1000, (int16_t)_mesh._radio->getNoiseFloor(),
+                          _mesh.getTotalAirTime() / 1000, _mesh.getReceiveAirTime() / 1000,
+                          (long)(_mesh.getNumSentFlood() + _mesh.getNumSentDirect()),
+                          (long)(_mesh.getNumRecvFlood() + _mesh.getNumRecvDirect()),
+                          _mesh.getErrFlags(), (long)_mesh._radio->getPacketsRecvErrors(), queue);
+}
+
 void Fork::ControlLink::onControlMessage(const char* topic, const uint8_t* payload, size_t len) {
   // A pong is the broker's answer to `mqtt.cmd ping`, never a command: it is taken
   // here, before any parsing, and goes no further whether it matches or not.
@@ -282,6 +296,11 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* rep
   }
   if (strcmp(command, "get mqtt.cmd") == 0) {
     describeMqttControl(reply);
+    return true;
+  }
+  if (memcmp(command, "get stats", 9) == 0 && (command[9] == 0 || command[9] == ' ' ||
+                                               command[9] == '\n' || command[9] == '\r')) {
+    formatNodeStats(reply);
     return true;
   }
   if (mqttCtrlTouchesSlot(command, _mqtt_control.slot())) {

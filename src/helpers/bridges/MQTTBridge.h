@@ -671,11 +671,6 @@ public:
   /** On-demand publish-health + heap snapshot for `get mqtt.stats` (per-slot ok/err,
    *  outbox size, free/max heap, queue depth). */
   static void formatMqttStatsReply(char* buf, size_t bufsize);
-  /** The node's own counters as one line, for `get stats` over the control plane:
-   *  the status payload's block (battery, uptime, noise floor, airtime, packets,
-   *  errors, queue) from the same stats sources, in short k=v pairs that fit the
-   *  160-byte reply. "> (no stats sources)" before setStatsSources() ran. */
-  static void formatNodeStatsReply(char* buf, size_t bufsize);
   /** Structured per-slot snapshot for the webconfig stats endpoint. Same state
    *  logic as formatMqttStatusReply, same cross-task read semantics. Returns
    *  false when the bridge is not running, the index is out of range, or the

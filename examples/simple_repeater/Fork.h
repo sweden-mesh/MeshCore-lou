@@ -85,6 +85,7 @@ class Fork {
   void autoSetupMqttControl(char* reply);
   void pingMqttControl(char* reply);
   void describeMqttControl(char* reply);
+  void formatNodeStats(char* reply);
   void loopMqttPing();
   void refreshMqttControlV2Key();
   void loopMqttControl();

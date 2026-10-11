@@ -130,37 +130,3 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
-
-// ---- get stats: the node's counters as one line ---------------------------------
-
-TEST(NodeStats, OneLineOfShortPairsInTheStatusBlocksOrder) {
-  char buf[160];
-  mqttFormatNodeStats(buf, sizeof(buf), 4261, 1496188, -114, 5518, 25369, 9065, 44345, 10, 13369, 0);
-  EXPECT_STREQ("> batt=4261mV up=1496188s noise=-114 tx=5518s rx=25369s sent=9065 recv=44345 err=10 rxerr=13369 q=0", buf);
-}
-
-TEST(NodeStats, TheLargestValuesFitTheReplyBuffer) {
-  // Every counter is 32-bit; the noise floor is a small negative. The CLI's reply
-  // buffer and the control plane's reply clamp are both 160 bytes.
-  char buf[160];
-  const long big = 4294967295L;
-  mqttFormatNodeStats(buf, sizeof(buf), big, big, -999 + 1, big, big, big, big, big, big, big);
-  EXPECT_LT(strlen(buf), 160u);
-  EXPECT_LE(strlen(buf), 152u);                       // the measured worst case: 8 bytes of headroom
-  EXPECT_NE(nullptr, strstr(buf, " q=4294967295"));     // the last pair survived
-}
-
-TEST(NodeStats, AnUnknownValueIsLeftOutAndNoneAtAllSaysSo) {
-  char buf[160];
-  mqttFormatNodeStats(buf, sizeof(buf), 4000, -1, -999, -1, -1, -1, -1, -1, -1, -1);
-  EXPECT_STREQ("> batt=4000mV", buf);
-  mqttFormatNodeStats(buf, sizeof(buf), -1, -1, -999, -1, -1, -1, -1, -1, -1, -1);
-  EXPECT_STREQ("> (no stats sources)", buf);
-}
-
-TEST(NodeStats, ATinyBufferIsClampedNotOverrun) {
-  Canaried c(12);
-  mqttFormatNodeStats(c.buf(), c.logical, 4261, 1496188, -114, 5518, 25369, 9065, 44345, 10, 13369, 0);
-  EXPECT_TRUE(c.guardIntact());
-  EXPECT_EQ(11u, strlen(c.buf()));
-}

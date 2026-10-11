@@ -260,8 +260,10 @@ What this admits that the allowlist did not: every tuning write (`txdelay`, `rxd
 **`get stats`** is the one read added for this plane: the node's own counters -- the block
 every status publish carries -- as one line of short pairs that fits the 160-byte reply,
 `> batt=4261mV up=1496188s noise=-114 tx=5518s rx=25369s sent=9065 recv=44345 err=10
-rxerr=13369 q=0`. A value the node cannot measure is left out; a bridge not yet started
-answers `> (no stats sources)`. The `stats-*` dumps it stands in for stay serial-only. A `set` of a key the CLI does not know travels and is answered "unknown": the deny
+rxerr=13369 q=0`. The counters are read from the mesh itself and `q` from the bridge's queue,
+left out while the bridge is not running; a value the node cannot measure is left out. It is
+the command plane's own command, so an image without it does not have it. The `stats-*` dumps
+it stands in for stay serial-only. A `set` of a key the CLI does not know travels and is answered "unknown": the deny
 list bounds what a command may *do*, not whether it is well formed, and the CLI stays the
 authority on the latter.
 

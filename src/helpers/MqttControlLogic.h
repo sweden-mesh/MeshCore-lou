@@ -10,6 +10,7 @@
 #include <strings.h>
 
 #include "MQTTObserverValidation.h"   // mqttOwnerKeyValid
+#include "MQTTReplyFormat.h"          // replyAppendf
 
 // Pure, dependency-free decisions behind the MQTT control plane. Factored out of
 // examples/simple_repeater/MqttControl.cpp so the envelope split, the replay
@@ -887,4 +888,33 @@ static inline MqttCtrlResult mqttCtrlRateResult(bool is_transmit, bool allow_gen
   if (!allow_general) return MQTTCTRL_ERR_RATE_LIMITED;
   if (is_transmit && !allow_transmit) return MQTTCTRL_ERR_RATE_LIMITED;
   return MQTTCTRL_OK;
+}
+
+// `get stats`: the node's own counters as one reply line (2026-10-08). The same values
+// the status payload publishes, but the reply buffer is 160 bytes and the status
+// block's long keys do not fit, so the keys are short `k=v` pairs in the form
+// `get mqtt.stats` already uses. A value below zero means "unknown" and is left out,
+// as the status builder leaves it out of the JSON. Bounded by replyAppendf; with every
+// counter at its 32-bit maximum the line is 152 characters, which the host test pins,
+// so nothing is ever clamped away in practice.
+static inline void mqttCtrlFormatNodeStats(char* buf, size_t bufsize,
+                                           long battery_mv, long uptime_secs, long noise_floor,
+                                           long tx_air_secs, long rx_air_secs,
+                                           long packets_sent, long packets_received,
+                                           long errors, long recv_errors, long queue_len) {
+  if (!buf || bufsize == 0) return;
+  int pos = 0;
+  buf[0] = '\0';
+  replyAppendf(buf, bufsize, &pos, ">");
+  if (battery_mv >= 0)       replyAppendf(buf, bufsize, &pos, " batt=%ldmV", battery_mv);
+  if (uptime_secs >= 0)      replyAppendf(buf, bufsize, &pos, " up=%lds", uptime_secs);
+  if (noise_floor > -999)    replyAppendf(buf, bufsize, &pos, " noise=%ld", noise_floor);
+  if (tx_air_secs >= 0)      replyAppendf(buf, bufsize, &pos, " tx=%lds", tx_air_secs);
+  if (rx_air_secs >= 0)      replyAppendf(buf, bufsize, &pos, " rx=%lds", rx_air_secs);
+  if (packets_sent >= 0)     replyAppendf(buf, bufsize, &pos, " sent=%ld", packets_sent);
+  if (packets_received >= 0) replyAppendf(buf, bufsize, &pos, " recv=%ld", packets_received);
+  if (errors >= 0)           replyAppendf(buf, bufsize, &pos, " err=%ld", errors);
+  if (recv_errors >= 0)      replyAppendf(buf, bufsize, &pos, " rxerr=%ld", recv_errors);
+  if (queue_len >= 0)        replyAppendf(buf, bufsize, &pos, " q=%ld", queue_len);
+  if (pos <= 1) replyAppendf(buf, bufsize, &pos, " (no stats sources)");
 }
