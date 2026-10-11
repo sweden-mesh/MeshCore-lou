@@ -1,7 +1,9 @@
 #include "MyMesh.h"
 
 void Fork::begin(FILESYSTEM* fs) {
-  _mesh.auto_reply.begin(fs);
+#ifdef WITH_AUTO_REPLY
+  _auto_reply.begin(fs);
+#endif
 #ifdef WITH_MQTT_BRIDGE
   _mesh.mqtt_control.begin(fs);
 #endif
@@ -67,21 +69,8 @@ bool Fork::handleCommand(uint32_t sender_timestamp, char* command, char* reply) 
   if (control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply)) return true;
 #endif
 
-  if (_mesh.auto_reply.handleCommand(_mesh.autoReplyRegion(), _mesh.region_map, command, reply)) {
-    return true;
-  }
-  const char* trigger_id = NULL;
-  const char* trigger_key = NULL;
-  size_t trigger_id_len = 0;
-  uint8_t trigger_mode = AUTOREPLY_MODE_DEFAULT;
-  if (autoReplyParseTrigger(command, AUTOREPLY_KEYWORD, &trigger_id, &trigger_id_len,
-                            &trigger_mode)) {
-    _mesh.triggerProbe(trigger_id, trigger_id_len, trigger_mode, reply);
-    return true;
-  }
-  if (autoReplyParsePrivateTrigger(command, &trigger_key, &trigger_id, &trigger_id_len)) {
-    _mesh.triggerPrivateProbe(trigger_key, trigger_id, trigger_id_len, reply);
-    return true;
-  }
+#ifdef WITH_AUTO_REPLY
+  if (handleAutoReplyCommand(command, reply)) return true;
+#endif
   return false;
 }

@@ -259,7 +259,7 @@ uint8_t MyMesh::handleAnonClockReq(const mesh::Identity& sender, uint32_t sender
 // is the channel one, built by the same code, for whoever's key asked.
 uint8_t MyMesh::handleAnonTestReq(mesh::Packet* packet, const mesh::Identity& sender,
                                   const uint8_t* body, size_t len) {
-  return auto_reply.buildPrivateReply(packet, sender, body, len, _prefs.node_name,
+  return fork._auto_reply.buildPrivateReply(packet, sender, body, len, _prefs.node_name,
                                       radio_driver.getLastRSSI(),
                                       getRTCClock()->getCurrentTimeUnique(), reply_data);
 }
@@ -471,33 +471,16 @@ bool MyMesh::isLooped(const mesh::Packet* packet, const uint8_t max_counters[]) 
   return n >= max_counters[hash_size];
 }
 
-// Resolve the region an auto-reply should be scoped to: the configured one when
-// set, otherwise whatever scope the request itself arrived under.
-//
-// Bounding a reply by region rather than by hop count is deliberate. The question
-// this feature exists to answer is how much of the mesh is connected, and a hop
-// cap answers a different one -- how much comes back to whoever asked -- while
-// quietly hiding the far side of the mesh. A region is a stated boundary; a hop
-// count is an accident of where the requester happens to sit.
-bool MyMesh::resolveAutoReplyScope(TransportKey* scope) {
-  const char* name = auto_reply.replyRegion();
-  if (name == NULL || name[0] == 0) return false;
-
-  // Without regard to case first: the name is stored folded, the table may not be.
-  const RegionEntry* entry = autoReplyFindRegion(region_map, name);
-  if (entry == NULL) entry = region_map.findByNamePrefix(name);
-  if (entry == NULL) return false;
-  return region_map.getTransportKeysFor(*entry, scope, 1) > 0;
-}
-
 void MyMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size) {
   // A reply region the operator configured wins over whatever scope the request
   // arrived under; with none set, the choice is upstream's.
+#ifdef WITH_AUTO_REPLY
   TransportKey configured;
-  if (resolveAutoReplyScope(&configured)) {
+  if (fork.autoReplyScope(&configured)) {
     sendFloodScoped(configured, packet, delay_millis, path_hash_size);
     return;
   }
+#endif
 
   TransportKey req_scope;
   bool is_wildcard = recv_pkt_region != NULL && recv_pkt_region->isWildcard();
@@ -698,29 +681,13 @@ mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
   return Mesh::onRecvPacket(pkt);
 }
 
-// Where this node's reply lands in the window today: its assigned slot if it has one,
-// the slot its own key derives if it has not. The day comes from the node's own clock,
-// so every node agrees on the order without a command being sent and the order holds
-// between midnights; an unsynced clock reads as day 0, a legal ordering rather than a
-// refusal to answer.
-uint32_t MyMesh::slottedReplyDelay() {
-  const uint8_t slots = auto_reply.slots();
-  const uint32_t day = autoReplyDayNumber(getRTCClock()->getCurrentTime());
-  const uint8_t index = autoReplySlotIndex(auto_reply.slot(), self_id.pub_key,
-                                           PUB_KEY_SIZE, slots, day);
-  return autoReplySlotDelayMs(autoReplyRotatedSlot(index, slots, day), slots,
-                              (uint32_t) auto_reply.windowStart() * 1000UL,
-                              (uint32_t) auto_reply.windowEnd() * 1000UL,
-                              (uint32_t) getRNG()->nextInt(0, 0x7FFFFFFF));
-}
-
 // How long an anon reply waits. An admin request answers on the fixed
 // SERVER_RESPONSE_DELAY it always has -- somebody is at a keyboard waiting for it. A
 // test request takes its slot like every other reply, because every repeater that
 // heard the request is about to answer it.
 uint32_t MyMesh::anonReplyDelay(const mesh::Packet* reply, bool stagger) {
   if (!stagger) return SERVER_RESPONSE_DELAY;
-  uint32_t delay_millis = slottedReplyDelay();
+  uint32_t delay_millis = fork.slottedReplyDelay();
   MESH_DEBUG_PRINTLN("AutoReply: answering private test in %d ms", (uint32_t)delay_millis);
   return delay_millis;
 }
@@ -1070,196 +1037,6 @@ const char* MyMesh::autoReplyRegion() const {
 #else
   return NULL;
 #endif
-}
-
-int MyMesh::searchChannelsByHash(const uint8_t* hash, mesh::GroupChannel channels[], int max_matches) {
-  return auto_reply.searchChannelsByHash(autoReplyRegion(), hash, channels, max_matches);
-}
-
-void MyMesh::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::GroupChannel& channel,
-                             uint8_t* data, size_t len) {
-  if (type != PAYLOAD_TYPE_GRP_TXT) return;
-
-  // Anything we flood is kept inside the scope of the request when it had one, and
-  // 'autoreply.hops' bounds how far away a request may be to get one at all. A request
-  // that arrived direct is the one case we can answer without flooding at all, which
-  // 'autoreply.direct.flood off' trades reach for.
-  bool zero_hop = autoReplyReplyIsZeroHop(packet->getPathHashCount(), auto_reply.directFlood());
-
-  uint8_t temp[AUTOREPLY_MAX_PAYLOAD];
-  AutoReplyTarget target;
-  int payload_len = auto_reply.buildReply(packet, channel, data, len, _prefs.node_name,
-                                          radio_driver.getLastRSSI(),
-                                          getRTCClock()->getCurrentTimeUnique(), temp, &target);
-  if (payload_len == 0) return;
-
-  if (target.mode != AUTOREPLY_MODE_FLOOD) {
-    // A private reply: the same payload as a text message addressed to the
-    // requester's key, which only they can read and no repeater re-broadcasts as
-    // a channel message. Direct sends it back down the path the request came in
-    // on, reversed; a request that arrived direct needs no path at all.
-    mesh::Identity dest(target.pubkey);
-    uint8_t secret[PUB_KEY_SIZE];
-    self_id.calcSharedSecret(secret, dest);
-    auto reply = createDatagram(PAYLOAD_TYPE_TXT_MSG, dest, secret, temp, payload_len);
-    if (!reply) {
-      MESH_DEBUG_PRINTLN("AutoReply: could not build private reply packet, pool empty");
-      return;
-    }
-    uint32_t delay_millis = slottedReplyDelay();
-    if (target.mode == AUTOREPLY_MODE_DIRECT && packet->getPathHashCount() == 0) {
-      MESH_DEBUG_PRINTLN("AutoReply: sending private zero-hop reply in %d ms", (uint32_t)delay_millis);
-      sendZeroHop(reply, delay_millis);
-    } else if (target.mode == AUTOREPLY_MODE_DIRECT) {
-      uint8_t back[MAX_PATH_SIZE];
-      uint8_t back_len = autoReplyReversePath(packet->path, packet->path_len, back);
-      MESH_DEBUG_PRINTLN("AutoReply: sending private direct reply in %d ms", (uint32_t)delay_millis);
-      sendDirect(reply, back, back_len, delay_millis);
-    } else {
-      MESH_DEBUG_PRINTLN("AutoReply: sending private flood reply in %d ms", (uint32_t)delay_millis);
-      sendFloodReply(reply, delay_millis, packet->getPathHashSize());
-    }
-    return;
-  }
-
-  auto reply = createGroupDatagram(PAYLOAD_TYPE_GRP_TXT, channel, temp, payload_len);
-  if (reply) {
-    // Every repeater in range answers the same request, and their storms otherwise
-    // land on top of each other. Measured 2026-08-30: replies that overlapped another
-    // transmission reached a median of 2 relays against 5 for one sent into clear
-    // air, and 16 of 18 multi-reply events contained an overlapping pair. So a reply
-    // leaves in this node's own slot rather than after a random wait. The slot, the
-    // window and the slot count are all runtime-settable, because the right values
-    // are not knowable from one mesh and re-flashing this fleet takes months.
-    uint32_t delay_millis = slottedReplyDelay();
-    const char* how = zero_hop ? "zero-hop"
-                    : (recv_pkt_region && !recv_pkt_region->isWildcard()) ? "scoped flood"
-                    : "un-scoped flood";
-    MESH_DEBUG_PRINTLN("AutoReply: sending %s reply in %d ms", how, (uint32_t)delay_millis);
-    if (zero_hop) {
-      sendZeroHop(reply, delay_millis);
-    } else {
-      sendFloodReply(reply, delay_millis, packet->getPathHashSize());
-    }
-  } else {
-    MESH_DEBUG_PRINTLN("AutoReply: could not build reply packet, pool empty");
-  }
-}
-
-// Originate a probe on the test channel -- the second vantage point this whole
-// sprint exists for. Every run so far has started at one node, so degree in the
-// derived graph is as much a fact about where we sit as about the mesh.
-//
-// The body is the same text a person sends by hand, so the nodes that answer it
-// are answering the same question they always answer and the measurements
-// compare. The channel is always derived from the region, never a literal: a
-// probe that went to a hardcoded channel would be measuring someone else's mesh.
-bool MyMesh::triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply) {
-  mesh::GroupChannel channel;
-  if (!auto_reply.probeChannel(autoReplyRegion(), &channel)) {
-    strcpy(reply, "Err - no channel to probe on: set autoreply.region");
-    return false;
-  }
-
-  // A private reply comes back to whoever's key the probe carries, and the probe
-  // is ours, so that is our own.
-  char self_hex[PUB_KEY_SIZE * 2 + 1];
-  mesh::Utils::toHex(self_hex, self_id.pub_key, PUB_KEY_SIZE);
-
-  char body[AUTOREPLY_MAX_PAYLOAD];
-  size_t body_len = autoReplyBuildProbe(body, sizeof(body), _prefs.node_name,
-                                        AUTOREPLY_KEYWORD, id, id_len, mode, self_hex);
-  if (body_len == 0) {
-    strcpy(reply, "Err - could not build probe");
-    return false;
-  }
-
-  // A group text is timestamp-prefixed like any other, so a probe looks on the
-  // wire exactly like the one a client sends.
-  uint8_t payload[AUTOREPLY_MAX_PAYLOAD];
-  uint32_t now = getRTCClock()->getCurrentTimeUnique();
-  memcpy(payload, &now, 4);
-  payload[4] = 0;                       // flags/attempt, as a client sends
-  memcpy(payload + 5, body, body_len);
-  size_t payload_len = 5 + body_len;
-
-  auto pkt = createGroupDatagram(PAYLOAD_TYPE_GRP_TXT, channel, payload, payload_len);
-  if (pkt == NULL) {
-    strcpy(reply, "Err - packet pool empty");
-    return false;
-  }
-
-  // Scoped to the configured region when there is one, un-scoped otherwise.
-  // Deliberately not the 'recv_pkt_region' fallback sendFloodReply uses: that
-  // member holds the scope of the last packet *received*, which for a probe
-  // originated from MQTT is unrelated to anything and would scope the probe to
-  // wherever the last traffic happened to come from.
-  TransportKey scope;
-  if (resolveAutoReplyScope(&scope)) {
-    sendFloodScoped(scope, pkt, (uint32_t)0, (uint8_t)1);
-  } else {
-    sendFlood(pkt, (uint32_t)0, (uint8_t)1);
-  }
-
-  if (id != NULL && id_len > 0) {
-    snprintf(reply, MQTTCTRL_MAX_REPLY, "OK - probe sent, id %.*s", (int)id_len, id);
-  } else {
-    strcpy(reply, "OK - probe sent");
-  }
-  return true;
-}
-
-// The requester's side of a private test: an anonymous request to one node, the
-// keyword and the echoed id after the sub-type byte, flooded and scoped exactly as
-// a channel probe is so a target with no path from here still hears it. The
-// answer comes back as a RESPONSE addressed to this node; the observer feed sees
-// it arrive, which is the measurement, whether or not this node can read it.
-bool MyMesh::triggerPrivateProbe(const char* pubkey_hex, const char* id, size_t id_len,
-                                 char* reply) {
-  // The key sits inside the command text, followed by the id when there is one,
-  // and fromHex wants it alone.
-  char key_hex[PUB_KEY_SIZE * 2 + 1];
-  memcpy(key_hex, pubkey_hex, PUB_KEY_SIZE * 2);
-  key_hex[PUB_KEY_SIZE * 2] = 0;
-  uint8_t key[PUB_KEY_SIZE];
-  mesh::Utils::fromHex(key, PUB_KEY_SIZE, key_hex);
-  mesh::Identity target(key);
-
-  uint8_t secret[PUB_KEY_SIZE];
-  self_id.calcSharedSecret(secret, target);
-
-  uint8_t inner[5 + AUTOREPLY_MAX_TEXT];
-  uint32_t tag = getRTCClock()->getCurrentTimeUnique();
-  memcpy(inner, &tag, 4);
-  inner[4] = ANON_REQ_TYPE_TEST;
-  size_t body_len = autoReplyBuildProbe((char *) &inner[5], sizeof(inner) - 5, NULL,
-                                        AUTOREPLY_KEYWORD, id, id_len);
-  if (body_len == 0) {
-    strcpy(reply, "Err - could not build request");
-    return false;
-  }
-
-  auto pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, target, secret, inner,
-                                5 + body_len);
-  if (pkt == NULL) {
-    strcpy(reply, "Err - packet pool empty");
-    return false;
-  }
-
-  TransportKey scope;
-  if (resolveAutoReplyScope(&scope)) {
-    sendFloodScoped(scope, pkt, (uint32_t)0, (uint8_t)1);
-  } else {
-    sendFlood(pkt, (uint32_t)0, (uint8_t)1);
-  }
-
-  if (id != NULL && id_len > 0) {
-    snprintf(reply, MQTTCTRL_MAX_REPLY, "OK - private request sent to %.8s.., id %.*s",
-             pubkey_hex, (int)id_len, id);
-  } else {
-    snprintf(reply, MQTTCTRL_MAX_REPLY, "OK - private request sent to %.8s..", pubkey_hex);
-  }
-  return true;
 }
 
 void MyMesh::sendNodeDiscoverReq() {

@@ -48,7 +48,6 @@
 #include <helpers/RegionMap.h>
 #include <helpers/RoutingPolicy.h>
 #include "RateLimiter.h"
-#include "AutoReply.h"
 #include "MqttControl.h"
 #include "Fork.h"
 
@@ -121,7 +120,6 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   RegionEntry* recv_pkt_region;
   TransportKey default_scope;
   RateLimiter discover_limiter, anon_limiter;
-  AutoReply auto_reply;
 #ifdef WITH_MQTT_BRIDGE
   MqttControl mqtt_control;
   // Owned here so the bridge's subscription list outlives every reconnect.
@@ -287,7 +285,6 @@ protected:
   int calcRxDelay(float score, uint32_t air_time) const override;
 
   uint32_t anonReplyDelay(const mesh::Packet* reply, bool stagger);
-  uint32_t slottedReplyDelay();
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
 
@@ -322,13 +319,10 @@ protected:
   bool onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
   void onControlDataRecv(mesh::Packet* packet) override;
   const char* autoReplyRegion() const;
-  int searchChannelsByHash(const uint8_t* hash, mesh::GroupChannel channels[], int max_matches) override;
-  void onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::GroupChannel& channel, uint8_t* data, size_t len) override;
+  int searchChannelsByHash(const uint8_t* hash, mesh::GroupChannel channels[], int max_matches) override { return fork.searchChannelsByHash(hash, channels, max_matches); }
+  void onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::GroupChannel& channel, uint8_t* data, size_t len) override { fork.onGroupDataRecv(packet, type, channel, data, len); }
 
-  bool resolveAutoReplyScope(TransportKey* scope);
   void sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size);
-  bool triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply);
-  bool triggerPrivateProbe(const char* pubkey_hex, const char* id, size_t id_len, char* reply);
 
 public:
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);

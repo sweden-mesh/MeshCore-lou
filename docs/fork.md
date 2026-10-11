@@ -50,6 +50,7 @@ All feature code lives in files of its own; the repeater's `MyMesh` holds one `F
 | hook | where in `MyMesh` | what the features do there |
 |---|---|---|
 | H1, H2 | `MyMesh.h`: `#include "Fork.h"`, `friend class Fork; Fork fork { *this };` | the object, with access to the mesh's own state |
+| H3 | `MyMesh.h`: `searchChannelsByHash` and `onGroupDataRecv` forward to `fork` | auto-reply's channels and its answer to a test; without it, Mesh's defaults (no channel) |
 | H4 | `begin()`, after the ACL is loaded: `fork.begin(_fs)` | each feature reads its settings file |
 | H5 | `loop()`, after the radio: `fork.loop()` | the command queue, the ping, the automatic OTA check |
 | H6 | `handleCommand()`, after upstream's verbs: `else if (!fork.handleCommand(...))` | the features' CLI, before the common CLI |
