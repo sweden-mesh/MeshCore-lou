@@ -109,10 +109,11 @@ itself does not.
 ## The channel
 
 `OTA_MANIFEST_BASE` is baked in by `build.sh` (`OTA_MANIFEST_BASE_URL`), so a node only ever
-takes updates from the channel it was flashed from. The ar-11 channel is the GitHub releases of
+takes updates from the channel it was flashed from. From lou-14 the channel is the GitHub releases of
 `sweden-mesh/MeshCore-lou`
 (`https://github.com/sweden-mesh/MeshCore-lou/releases/latest/download/<variant>.json`);
-GitHub redirects `latest/download` to the asset, and the node follows it over TLS.
+GitHub redirects `latest/download` to the asset, and the node follows it over TLS. ar-11..13
+images ask `the-louie/MeshCore-observer` and are never moved (TODO 22a ruling 3).
 
 ## Cutting a release that nodes will take
 
