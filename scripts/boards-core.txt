@@ -5,8 +5,10 @@
 # What the JKG fleet runs, as far as it is known (2026-10-11): the operator names Heltec T096
 # (nRF52840) and Seeed XIAO boards; Beacon's hardware data covers the 22 Observer nodes only
 # (9 Heltec V3, 7 XIAO S3 WIO, 3 Heltec V4.3 OLED, 1 V4 TFT, 1 V4 OLED, 1 T-Beam). The
-# hardware of the 22 repeaters that are not Observers is unknown; the rest of this list is
-# the common boards.
+# hardware of the 22 repeaters that are not Observers is unknown. JKG's MeshMapper repeater
+# list (2026-10-11, owner-entered, set on 10 of 55) adds: Heltec V3 x2, Heltec Wireless Stick
+# Lite V3 x2, XIAO ESP32S3 + Wio-SX1262 x3, Heltec V4 x2, RAK WisMesh Ethernet MQTT Gateway
+# (RAK4631) x1. The rest of this list is the common boards.
 #
 # nRF52840
 RAK_4631_repeater
@@ -19,6 +21,7 @@ SenseCap_Solar_repeater
 ThinkNode_M1_repeater
 # ESP32-S3
 Heltec_v3_repeater
+Heltec_WSL3_repeater
 heltec_v4_repeater
 Station_G2_repeater
 LilyGo_T3S3_sx1262_repeater
