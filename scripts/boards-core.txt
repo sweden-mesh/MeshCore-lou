@@ -8,10 +8,13 @@
 # hardware of the 22 repeaters that are not Observers is unknown. JKG's MeshMapper repeater
 # list (2026-10-11, owner-entered, set on 10 of 55) adds: Heltec V3 x2, Heltec Wireless Stick
 # Lite V3 x2, XIAO ESP32S3 + Wio-SX1262 x3, Heltec V4 x2, RAK WisMesh Ethernet MQTT Gateway
-# (RAK4631) x1. The rest of this list is the common boards.
+# (RAK4631) x1. The operator adds RAK WisBlock 1W repeaters (RAK3401). No nRF52 board is an
+# Observer (no WiFi), so every nRF52 repeater is outside Beacon's data. The rest of this list
+# is the common boards.
 #
 # nRF52840
 RAK_4631_repeater
+RAK_3401_repeater
 Heltec_t096_repeater
 Heltec_t114_repeater
 Heltec_t114_without_display_repeater
