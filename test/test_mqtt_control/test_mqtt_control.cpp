@@ -249,7 +249,50 @@ TEST(Expiry, RefusesACommandMintedToLastForever) {
 // ---- the allowlist ---------------------------------------------------------
 
 static bool allowed(const std::string& cmd) {
-  return mqttCtrlCommandAllowed(cmd.data(), cmd.size());
+  return mqttCtrlCommandAllowed(cmd.data(), cmd.size(), true);
+}
+
+// The same list in an image built without auto-reply (rc without ar).
+static bool allowedWithoutAutoReply(const std::string& cmd) {
+  return mqttCtrlCommandAllowed(cmd.data(), cmd.size(), false);
+}
+
+TEST(Allowlist, WithoutAutoReplyItsTriggersAndSettingsAreNotAllowed) {
+  const char* theirs[] = {
+    "trigger test", "trigger test A1B2C3D4", "trigger test a1b2c3d4 S", "trigger test F",
+    "trigger private 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "set autoreply on", "set autoreply.region se-jkp", "set autoreply.legacy off",
+    "get autoreply", "get autoreply.channel", "GET AUTOREPLY.hops",
+  };
+  for (const char* c : theirs) {
+    EXPECT_TRUE(allowed(c)) << c;
+    EXPECT_FALSE(allowedWithoutAutoReply(c)) << c;
+  }
+}
+
+TEST(Allowlist, WithoutAutoReplyEverythingElseIsUnchanged) {
+  // Only auto-reply's own commands change verdict; the boundary rule still decides what
+  // is one of them, so `get autoreplyx` and `triggerX` were never admitted either way.
+  const char* others[] = {
+    "ver", "get name", "region", "neighbors", "get mqtt.cmd", "get stats", "get ota",
+    "set ota.auto on", "mqtt.cmd ping", "region put se-jkp *", "set mqtt.iata JKG", "reboot",
+    "set prv.key 00", "erase", "advert", "get autoreplyx", "triggerX", "set autoreplyX on",
+  };
+  for (const char* c : others) {
+    EXPECT_EQ(allowed(c), allowedWithoutAutoReply(c)) << c;
+  }
+}
+
+TEST(Allowlist, WithoutAutoReplyATriggerIsRefusedBeforeAnyBudget) {
+  // mqttCtrlAuthorise runs before the limiters are asked, so a refused trigger costs
+  // the transmit budget nothing.
+  MqttCtrlEnvelope env = {};
+  env.counter = 9;
+  env.expiry = 1788200060;
+  env.command = "trigger test";
+  env.command_len = 12;
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&env, 8, 1788200000, true));
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 8, 1788200000, false));
 }
 
 TEST(Allowlist, AcceptsAutoReplyParametersAndTheTrigger) {
@@ -452,7 +495,7 @@ TEST(Allowlist, RejectsEmptyOverlongAndNonPrintable) {
 
 TEST(Authorise, AcceptsAFreshAllowedCommand) {
   Held h("v1|9|1788200060|trigger test");
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&h.env, 8, 1788200000));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&h.env, 8, 1788200000, true));
 }
 
 TEST(Authorise, StopsAtTheFirstRefusalInOrder) {
@@ -460,22 +503,22 @@ TEST(Authorise, StopsAtTheFirstRefusalInOrder) {
   // command reports replay even when it is also expired and also forbidden, so a
   // caller publishing the reason cannot be used to probe the later checks.
   Held replayed("v1|5|1|erase");
-  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthorise(&replayed.env, 5, 1788200000));
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthorise(&replayed.env, 5, 1788200000, true));
 
   Held expired("v1|9|1|erase");
-  EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthorise(&expired.env, 8, 1788200000));
+  EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthorise(&expired.env, 8, 1788200000, true));
 
   Held forbidden("v1|9|1788200060|erase");
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&forbidden.env, 8, 1788200000));
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&forbidden.env, 8, 1788200000, true));
 }
 
 TEST(Authorise, RefusesEverythingWithoutAClock) {
   Held h("v1|9|1788200060|trigger test");
-  EXPECT_EQ(MQTTCTRL_ERR_NO_CLOCK, mqttCtrlAuthorise(&h.env, 8, 0));
+  EXPECT_EQ(MQTTCTRL_ERR_NO_CLOCK, mqttCtrlAuthorise(&h.env, 8, 0, true));
 }
 
 TEST(Authorise, HandlesANullEnvelope) {
-  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlAuthorise(NULL, 0, 1788200000));
+  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlAuthorise(NULL, 0, 1788200000, true));
 }
 
 // ---- rate limiting ---------------------------------------------------------
@@ -633,7 +676,7 @@ TEST(ErrorCodes, ExhaustedBudgetIsNotTheSameAsUnauthorised) {
 
   MqttCtrlEnvelope env;
   ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|7|1788200000|set prv.key deadbeef"), &env));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 6, 1788199000));
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 6, 1788199000, true));
 }
 
 TEST(ErrorCodes, AForgedSignatureIsNotTheSameAsAMalformedOne) {
@@ -1180,7 +1223,7 @@ TEST(GoldenRead, TheCommandT12SendsVerifiesAndIsAllowed) {
 
   // Verifying is not enough -- it must also survive authorisation, which is where
   // a command absent from the allowlist would be refused.
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&env, 42, 1788000100));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&env, 42, 1788000100, true));
 
   // And it must not be treated as a transmit, or it would spend a trigger slot
   // and be refused on the broadcast topic.
@@ -1279,10 +1322,10 @@ TEST(PrivateKey, ASignedRequestForItIsRefusedAtAuthorisation) {
   // rather than as anything a requester should retry.
   MqttCtrlEnvelope env;
   ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|9|1788200000|get prv.key"), &env));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 8, 1788199000));
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 8, 1788199000, true));
 
   ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|9|1788200000|set prv.key deadbeef"), &env));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 8, 1788199000));
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 8, 1788199000, true));
 }
 
 // ---- exact entries admit the command they name, and nothing else --------------
@@ -1706,40 +1749,49 @@ TEST(Denylist, TheAutomaticUpdateSettingsTravelAndTheManualFlashStillDoesNot) {
 // ar-11 row of firmware.py agree with every line, so the two cannot drift apart
 // without a red test on one side. Runs on the host, writes beside the tests.
 
-TEST(CrossCheck, EveryKnownCommandsVerdictIsWritten) {
-  const char* commands[] = {
-    "ver", "get name", "get autoreply", "region", "neighbors", "get radio", "get repeat",
-    "get flood.max", "get flood.max.unscoped", "get txdelay", "get direct.txdelay", "get rxdelay",
-    "get af", "get cad", "get int.thresh", "get mqtt.status", "get mqtt.cmd", "get mqtt.iata",
-    "get mqtt.interval", "board", "memory", "clock", "ota check", "get stats", "get ota",
-    "set autoreply on", "set autoreply.mode flood", "set autoreply.hops 3", "set autoreply.delay 60",
-    "set autoreply.direct.flood on", "set autoreply.private on", "set autoreply.region se-jkp",
-    "set autoreply.slot 1", "set autoreply.slots 16", "set autoreply.window 10 120",
-    "trigger test", "trigger test F", "region put se-jkp *", "region allowf se-jkp", "region denyf se-jkp",
-    "region remove se06", "region default se-jkp", "region home se-jkp", "region save",
-    "set txdelay 0.5", "set direct.txdelay 0.3", "set rxdelay 0", "set af 9.0", "set cad on",
-    "set int.thresh 1", "set flood.max 8", "set flood.max.unscoped 2", "set path.hash.mode 0",
-    "set loop.detect 0", "set multi.acks on", "set mqtt.iata JKG", "set mqtt.interval 5",
-    "set mqtt.status on", "set mqtt.packets on", "set mqtt.raw on", "set mqtt.neighbors on",
-    "set mqtt.presets 2", "set mqtt1.preset meshat.se", "set mqtt1.server mqtt.louie.se",
-    "set mqtt2.username mcoar", "set mqtt2.password x", "set mqtt3.preset custom",
-    "set name Foo", "reboot", "clkreboot", "clear stats", "neighbor.remove 4AC61A7F",
-    "powersaving on", "gps on", "set ota.auto on", "set ota.check.hours 12",
-    "mqtt.cmd ping", "set autoreply.legacy off",
-    // the denied groups
-    "set prv.key 00", "set public.key 00", "set mqtt.cmd off", "set mqtt.cmd.slot 2", "get mqtt.cmd.pubkey",
-    "set wifi.pwd x", "get wifi.ssid", "password x", "get guest.password", "set alert.psk 00",
-    "get bridge.secret", "get snmp.community", "get mqtt.owner", "set owner.info x", "get tls.x",
-    "get prv.key", "get mqtt1.password", "get mqtt6.token", "erase", "start webconfig", "ota update",
-    "poweroff", "shutdown", "set bootloader.ver 2", "set lat 57.78", "get lon", "set role repeater",
-    "set repeat off", "set freq 869.6", "set radio.rxgain 1", "set tx 20", "set extra.sf 1",
-    "set dutycycle 10", "tempradio 869 62.5 8 8", "advert", "alert test", "set advert.interval 1",
-    "time 1900000000", "log", "stats-core", "floodscan", "set", "get",
-  };
-  FILE* f = fopen("test/data/command-verdicts.txt", "w");
+static const char* const known_commands[] = {
+  "ver", "get name", "get autoreply", "region", "neighbors", "get radio", "get repeat",
+  "get flood.max", "get flood.max.unscoped", "get txdelay", "get direct.txdelay", "get rxdelay",
+  "get af", "get cad", "get int.thresh", "get mqtt.status", "get mqtt.cmd", "get mqtt.iata",
+  "get mqtt.interval", "board", "memory", "clock", "ota check", "get stats", "get ota",
+  "set autoreply on", "set autoreply.mode flood", "set autoreply.hops 3", "set autoreply.delay 60",
+  "set autoreply.direct.flood on", "set autoreply.private on", "set autoreply.region se-jkp",
+  "set autoreply.slot 1", "set autoreply.slots 16", "set autoreply.window 10 120",
+  "trigger test", "trigger test F", "region put se-jkp *", "region allowf se-jkp", "region denyf se-jkp",
+  "region remove se06", "region default se-jkp", "region home se-jkp", "region save",
+  "set txdelay 0.5", "set direct.txdelay 0.3", "set rxdelay 0", "set af 9.0", "set cad on",
+  "set int.thresh 1", "set flood.max 8", "set flood.max.unscoped 2", "set path.hash.mode 0",
+  "set loop.detect 0", "set multi.acks on", "set mqtt.iata JKG", "set mqtt.interval 5",
+  "set mqtt.status on", "set mqtt.packets on", "set mqtt.raw on", "set mqtt.neighbors on",
+  "set mqtt.presets 2", "set mqtt1.preset meshat.se", "set mqtt1.server mqtt.louie.se",
+  "set mqtt2.username mcoar", "set mqtt2.password x", "set mqtt3.preset custom",
+  "set name Foo", "reboot", "clkreboot", "clear stats", "neighbor.remove 4AC61A7F",
+  "powersaving on", "gps on", "set ota.auto on", "set ota.check.hours 12",
+  "mqtt.cmd ping", "set autoreply.legacy off",
+  // the denied groups
+  "set prv.key 00", "set public.key 00", "set mqtt.cmd off", "set mqtt.cmd.slot 2", "get mqtt.cmd.pubkey",
+  "set wifi.pwd x", "get wifi.ssid", "password x", "get guest.password", "set alert.psk 00",
+  "get bridge.secret", "get snmp.community", "get mqtt.owner", "set owner.info x", "get tls.x",
+  "get prv.key", "get mqtt1.password", "get mqtt6.token", "erase", "start webconfig", "ota update",
+  "poweroff", "shutdown", "set bootloader.ver 2", "set lat 57.78", "get lon", "set role repeater",
+  "set repeat off", "set freq 869.6", "set radio.rxgain 1", "set tx 20", "set extra.sf 1",
+  "set dutycycle 10", "tempradio 869 62.5 8 8", "advert", "alert test", "set advert.interval 1",
+  "time 1900000000", "log", "stats-core", "floodscan", "set", "get",
+};
+
+// test/data/command-verdicts.txt is the arrc image's (with auto-reply, as every release
+// up to ar-13); command-verdicts-rc.txt is the same list for an image without it.
+static void writeVerdicts(const char* path, bool auto_reply) {
+  FILE* f = fopen(path, "w");
   ASSERT_NE(nullptr, f) << "run from the repository root";
-  for (const char* c : commands) {
-    fprintf(f, "%s|%s\n", allowed(c) ? "allowed" : "denied", c);
+  for (const char* c : known_commands) {
+    bool ok = mqttCtrlCommandAllowed(c, strlen(c), auto_reply);
+    fprintf(f, "%s|%s\n", ok ? "allowed" : "denied", c);
   }
   fclose(f);
+}
+
+TEST(CrossCheck, EveryKnownCommandsVerdictIsWritten) {
+  writeVerdicts("test/data/command-verdicts.txt", true);
+  writeVerdicts("test/data/command-verdicts-rc.txt", false);
 }

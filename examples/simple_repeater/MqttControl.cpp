@@ -196,7 +196,7 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
       out->command[n] = 0;
     }
 
-    result = mqttCtrlAuthorise(&env, _counter, now);
+    result = mqttCtrlAuthorise(&env, _counter, now, FORK_AUTO_REPLY);
     if (result != MQTTCTRL_OK) break;
 
     // The limiters are stateful and spend budget when asked, so they come after

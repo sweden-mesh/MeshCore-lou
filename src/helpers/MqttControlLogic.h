@@ -640,9 +640,16 @@ static inline bool mqttCtrlCommandDenied(const char* command, size_t len) {
   return mqttCtrlIsSlotCredentialRead(command, len);
 }
 
-static inline bool mqttCtrlCommandAllowed(const char* command, size_t len) {
+// 'auto_reply' says whether this image has auto-reply (WITH_AUTO_REPLY). Without it
+// the triggers and the `autoreply` settings do not exist, and are refused here as
+// not-allowed: the CLI would only answer "unknown", and a trigger would first have
+// spent the transmit budget on nothing (TODO 22a ruling 10).
+static inline bool mqttCtrlCommandAllowed(const char* command, size_t len, bool auto_reply) {
   if (!mqttCtrlCommandCharsOk(command, len)) return false;
   if (mqttCtrlCommandDenied(command, len)) return false;
+  if (!auto_reply && (mqttCtrlPrefixWithBoundary(command, len, "trigger") ||
+                      mqttCtrlPrefixWithBoundary(command, len, "set autoreply") ||
+                      mqttCtrlPrefixWithBoundary(command, len, "get autoreply"))) return false;
 
   // A bare `set` or `get`, or one with nothing after the space, names no setting;
   // refused here so a typo never reaches the CLI's unbounded memcmp.
@@ -694,14 +701,15 @@ static inline bool mqttCtrlIsTransmitCommand(const char* command, size_t len) {
 // refusal. The caller checks the signature between parsing and this call, then
 // persists the counter, then executes.
 static inline MqttCtrlResult mqttCtrlAuthorise(const MqttCtrlEnvelope* env,
-                                               uint32_t last_counter, uint32_t now) {
+                                               uint32_t last_counter, uint32_t now,
+                                               bool auto_reply) {
   if (env == NULL) return MQTTCTRL_ERR_EMPTY;
   if (!mqttCtrlCounterAccepted(last_counter, env->counter)) return MQTTCTRL_ERR_REPLAY;
 
   MqttCtrlResult expiry = mqttCtrlCheckExpiry(now, env->expiry);
   if (expiry != MQTTCTRL_OK) return expiry;
 
-  if (!mqttCtrlCommandAllowed(env->command, env->command_len)) return MQTTCTRL_ERR_NOT_ALLOWED;
+  if (!mqttCtrlCommandAllowed(env->command, env->command_len, auto_reply)) return MQTTCTRL_ERR_NOT_ALLOWED;
   return MQTTCTRL_OK;
 }
 

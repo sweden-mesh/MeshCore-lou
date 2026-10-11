@@ -257,10 +257,10 @@ TEST(Command, AfterOpeningTheV1RulesDecide) {
   char text[MQTTV2_CMD_PAD_LARGE + 1];
   std::string ok = command(9, "get name");
   ASSERT_EQ(MQTTCTRL_OK, mqttV2OpenCommand(key, ok.data(), ok.size(), &env, text));
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&env, 8, EXPIRY - 60));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&env, 8, EXPIRY - 60, true));
   std::string denied = command(10, "set prv.key 00");
   ASSERT_EQ(MQTTCTRL_OK, mqttV2OpenCommand(key, denied.data(), denied.size(), &env, text));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 9, EXPIRY - 60));
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 9, EXPIRY - 60, true));
 }
 
 TEST(Command, NoNonceIsReusedAcrossAReboot) {
@@ -274,10 +274,10 @@ TEST(Command, NoNonceIsReusedAcrossAReboot) {
   std::string p = command(12, "get name");
   ASSERT_EQ(MQTTCTRL_OK, mqttV2OpenCommand(key, p.data(), p.size(), &env, text));
   uint32_t persisted = 11;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&env, persisted, EXPIRY - 60));
+  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&env, persisted, EXPIRY - 60, true));
   persisted = env.counter;                                  // saved, then the node reboots
   ASSERT_EQ(MQTTCTRL_OK, mqttV2OpenCommand(key, p.data(), p.size(), &env, text));
-  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthorise(&env, persisted, EXPIRY - 60));
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthorise(&env, persisted, EXPIRY - 60, true));
 }
 
 TEST(Command, AV1PayloadIsNeverTakenForV2) {

@@ -265,7 +265,12 @@ answers `> (no stats sources)`. The `stats-*` dumps it stands in for stay serial
 list bounds what a command may *do*, not whether it is well formed, and the CLI stays the
 authority on the latter.
 
-The auto-reply family and the triggers are as before:
+The auto-reply family and the triggers are as before, in an image that has auto-reply
+([fork.md](fork.md)). In one built without it (`rc`), every command below that starts with
+`trigger`, `set autoreply` or `get autoreply` is refused as `not-allowed` before any budget is
+spent, rather than reaching a CLI that would answer "unknown"; the region map is unaffected.
+The verdict for every known command, both ways, is in `test/data/command-verdicts.txt` (with
+auto-reply) and `command-verdicts-rc.txt` (without), written by `test_mqtt_control`.
 
 ```
 set autoreply on|off · set autoreply.hops · set autoreply.direct.flood

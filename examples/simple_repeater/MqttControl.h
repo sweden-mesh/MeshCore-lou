@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <ForkFeatures.h>
 #include <Mesh.h>
 #include <helpers/AutoReplyLogic.h>
 #include <helpers/IdentityStore.h>
