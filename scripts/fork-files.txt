@@ -48,3 +48,6 @@ test/data/manifest-lou-14-example.json
 .github/workflows/fork-matrix.yml
 scripts/ci-plan.sh
 scripts/release-candidate.sh
+.github/workflows/fork-pr.yml
+scripts/check-quiet-image.sh
+scripts/ci-pr-plan.sh

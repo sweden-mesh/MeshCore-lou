@@ -1,0 +1,63 @@
+# Every pull request and push to a fork branch compiles each combination of its base on one
+# ESP32 and one nRF52 board (scripts/ci-pr-plan.sh), and on fork/observer builds the XIAO S3
+# WIO Observer image the way a release does and checks it is quiet (TODO 22a ruling 21). The
+# full matrix is fork-matrix.yml, run by hand for a release.
+name: Fork PR build check
+
+on:
+  pull_request:
+    branches: [fork/observer, fork/core]
+  push:
+    branches: [fork/observer, fork/core]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      observer: ${{ steps.plan.outputs.observer }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          echo "matrix=$(bash scripts/ci-pr-plan.sh)" >> "$GITHUB_OUTPUT"
+          if [ -f src/helpers/bridges/MQTTBridge.h ]; then echo "observer=true"; else echo "observer=false"; fi >> "$GITHUB_OUTPUT"
+
+  compile:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+    name: compile ${{ matrix.env }} ${{ matrix.combo }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-pr-${{ matrix.env }}-${{ hashFiles('platformio.ini', 'variants/**/platformio.ini') }}
+      - run: pip install platformio
+      - run: bash scripts/build-matrix.sh -c "${{ matrix.combo }}" -b "${{ matrix.env }}" -o dist
+
+  xiao-quiet:
+    needs: plan
+    if: needs.plan.outputs.observer == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-pr-xiao-${{ hashFiles('platformio.ini', 'variants/**/platformio.ini') }}
+      - run: pip install platformio
+      - run: bash scripts/build-matrix.sh -c arrc -b Xiao_S3_WIO_repeater_observer_mqtt -o dist
+      - run: bash scripts/check-quiet-image.sh $(ls dist/*.bin | grep -v -- -merged)

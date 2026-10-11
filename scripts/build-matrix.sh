@@ -16,9 +16,9 @@
 #   FIRMWARE_VERSION = <mcu>-<base version>-<revision>-<features>   (build.sh adds -<hash>)
 #   OTA_VARIANT      = <env>-<features>     the manifest this image asks its channel for
 # and build.sh build-firmware. The images keep build.sh's names,
-# <env>-<mcu>-v1.17.1-lou-14-<features>-<hash>.bin. On the Observer base each image also gets
-# <OTA_VARIANT>.unsigned.json, its manifest without signatures (scripts/manifest.py). Core
-# images have no pull OTA, and their OTA_VARIANT goes unused.
+# <env>-<mcu>-v1.17.1-lou-14-<features>-<hash>.bin. Each Observer image also gets
+# <OTA_VARIANT>.unsigned.json, its manifest without signatures (scripts/manifest.py). Images
+# without the Observer bridge have no pull OTA, and their OTA_VARIANT goes unused.
 #
 # A failed build is retried once -- on the small host a link killed for memory is the usual
 # cause -- and a second failure is listed at the end and makes the exit status 1; the
@@ -124,7 +124,7 @@ for combo in $COMBOS; do
     cp out/"$env"-*.bin out/"$env"-*.uf2 out/"$env"-*.zip out/"$env"-*.hex "$OUT"/ 2>/dev/null || true
     # The manifest the image will ask for, unsigned: the signatures are added on the
     # release host and nowhere else (scripts/manifest.py, docs/ota.md).
-    if [ "$BASE" = observer ]; then
+    if [[ "$env" == *_observer_mqtt ]]; then
       img=$(ls out/"$env"-*.bin 2>/dev/null | grep -v -- -merged | head -1)
       ver=$(basename "$img" .bin); ver="${ver#$env-}"
       python3 scripts/manifest.py unsigned "$img" "$variant" "$combo" "$ver" "$BASE_VERSION" \
