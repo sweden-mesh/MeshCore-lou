@@ -142,6 +142,15 @@ static inline void autoReplyChannelNames(const char* region, const char* iata, b
   }
 }
 
+// The legacy switch as the CLI shows it. A build without the Observer bridge has no
+// region code, so there is no '#test-<iata>' to answer on: the switch is still kept,
+// so a node flashed back to an Observer build finds it as it left it, but here it does
+// nothing, and the reply says so rather than reading "on".
+static inline const char* autoReplyLegacyState(bool legacy, bool have_iata) {
+  if (!legacy) return "off";
+  return have_iata ? "on" : "on, inert: no MQTT";
+}
+
 // The channels whose one-byte hash is `hash`, as indices into `hashes`, up to `max`; a
 // channel whose name is empty answers nothing and is skipped. A one-byte hash collides
 // one time in 256 -- `#test-vst` and `#test-se-u` are both 0x0B -- and the mesh tries every

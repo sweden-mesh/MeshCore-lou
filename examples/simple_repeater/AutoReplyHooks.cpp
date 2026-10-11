@@ -41,7 +41,7 @@ uint32_t Fork::slottedReplyDelay() {
 }
 
 int Fork::searchChannelsByHash(const uint8_t* hash, mesh::GroupChannel channels[], int max_matches) {
-  return _auto_reply.searchChannelsByHash(_mesh.autoReplyRegion(), hash, channels, max_matches);
+  return _auto_reply.searchChannelsByHash(observerIata(), hash, channels, max_matches);
 }
 
 void Fork::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::GroupChannel& channel,
@@ -168,7 +168,7 @@ bool Fork::onAnonRequest(mesh::Packet* packet, const uint8_t* secret, const mesh
 // probe that went to a hardcoded channel would be measuring someone else's mesh.
 bool Fork::triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply) {
   mesh::GroupChannel channel;
-  if (!_auto_reply.probeChannel(_mesh.autoReplyRegion(), &channel)) {
+  if (!_auto_reply.probeChannel(observerIata(), &channel)) {
     strcpy(reply, "Err - no channel to probe on: set autoreply.region");
     return false;
   }
@@ -277,7 +277,7 @@ bool Fork::triggerPrivateProbe(const char* pubkey_hex, const char* id, size_t id
 // 'set/get autoreply[.*]' and the two triggers. A trigger is answered on serial in
 // every build with auto-reply, and over the command plane only where that admits it.
 bool Fork::handleAutoReplyCommand(char* command, char* reply) {
-  if (_auto_reply.handleCommand(_mesh.autoReplyRegion(), _mesh.region_map, command, reply)) {
+  if (_auto_reply.handleCommand(observerIata(), _mesh.region_map, command, reply)) {
     return true;
   }
   const char* trigger_id = NULL;

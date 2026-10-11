@@ -1194,6 +1194,23 @@ TEST(BuildProbe, RefusesRatherThanTruncatingAName) {
   EXPECT_EQ(0u, autoReplyBuildProbe(out, sizeof(out), "SE-JKG-LOUTEST", "test", "A1B2C3D4", 8));
 }
 
+TEST(LegacyState, InertWithoutAnIataCode) {
+  EXPECT_STREQ("on", autoReplyLegacyState(true, true));
+  EXPECT_STREQ("off", autoReplyLegacyState(false, true));
+  EXPECT_STREQ("off", autoReplyLegacyState(false, false));
+  EXPECT_STREQ("on, inert: no MQTT", autoReplyLegacyState(true, false));
+}
+
+TEST(LegacyState, NoIataCodeDerivesNoLegacyChannel) {
+  // What a build without the bridge passes: NULL. The region's own channel stands.
+  char region[32], legacy[32];
+  autoReplyChannelNames("se-jkp", NULL, true, region, legacy, sizeof(region));
+  EXPECT_STREQ("#test-se-jkp", region);
+  EXPECT_STREQ("", legacy);
+  autoReplyChannelNames("", NULL, true, region, legacy, sizeof(region));
+  EXPECT_STREQ("", legacy);
+}
+
 // An anonymous request as it arrives: timestamp, sub-type, body.
 static size_t anonRequest(uint8_t* out, uint8_t sub_type, const char* body) {
   memset(out, 0x5A, 4);

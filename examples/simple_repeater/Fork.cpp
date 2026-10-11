@@ -29,6 +29,14 @@ void Fork::attachBridge(MQTTBridge* bridge) {
 }
 #endif
 
+const char* Fork::observerIata() const {
+#ifdef WITH_MQTT_BRIDGE
+  return _mesh._cli.getObserverPrefs()->mqtt_iata;
+#else
+  return NULL;
+#endif
+}
+
 void Fork::loop() {
 #ifdef WITH_MQTT_COMMAND
   loopMqttControl();

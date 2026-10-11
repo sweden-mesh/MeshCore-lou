@@ -990,16 +990,6 @@ void MyMesh::onControlDataRecv(mesh::Packet* packet) {
   }
 }
 
-// The legacy auto-reply channel is '#test-<iata>', so it follows the observer region
-// code. Builds without the MQTT bridge have no IATA code, and no legacy channel.
-const char* MyMesh::autoReplyRegion() const {
-#ifdef WITH_MQTT_BRIDGE
-  return _cli.getObserverPrefs()->mqtt_iata;
-#else
-  return NULL;
-#endif
-}
-
 void MyMesh::sendNodeDiscoverReq() {
   uint8_t data[10];
   data[0] = CTL_TYPE_NODE_DISCOVER_REQ; // prefix_only=0

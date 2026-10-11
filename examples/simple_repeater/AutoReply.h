@@ -105,7 +105,7 @@ public:
 
   /**
    * \brief  Handle the 'set/get autoreply[.*]' commands.
-   * \param  iata  the node's region code, or NULL when the build has none
+   * \param  iata  the node's region code, or NULL when the build has none (no legacy channel)
    * \param  regions  the node's region table; a region must be in it to be set
    * \returns  true if the command was ours (and 'reply' was filled in)
    */

@@ -39,6 +39,11 @@ node comes up with — the node answers there too, with or without a region set,
 never silences a node. A region moves its measurement to the new channel once, by switching
 legacy off everywhere in one planned change.
 
+A build without the Observer's MQTT bridge has no `mqtt.iata`, so it has no legacy channel at
+all: it answers on `#test-<autoreply.region>` only, and stays silent until that is set.
+`autoreply.legacy` is still stored, so a node flashed back to an Observer build finds it as it
+was, and `get autoreply` shows it as `legacy on, inert: no MQTT`.
+
 To also get answers from repeaters **more than one hop away**, the request has to carry a
 region scope — see [How far the reply travels](#how-far-the-reply-travels) below.
 

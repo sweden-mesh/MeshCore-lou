@@ -107,6 +107,11 @@ public:
   // Returns true when a feature answered it in 'reply'.
   bool handleCommand(uint32_t sender_timestamp, char* command, char* reply);
 
+  // The Observer's region code (`set mqtt.iata`): what the command plane's topics are
+  // named by and what auto-reply's legacy '#test-<iata>' channel is derived from. NULL
+  // in a build without the Observer bridge, which has no region code at all.
+  const char* observerIata() const;
+
   // Mesh::searchChannelsByHash and Mesh::onGroupDataRecv. Without auto-reply the
   // repeater knows no channel, which is what Mesh's own defaults say.
 #ifdef WITH_AUTO_REPLY

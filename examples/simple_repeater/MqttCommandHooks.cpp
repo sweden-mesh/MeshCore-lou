@@ -45,7 +45,7 @@ void Fork::autoSetupMqttControl(char* reply) {
 // reconnect: docs/mbedtls-tls-footprint.md records a measured largest-free-block
 // ratchet on this exact path, so the buffers are members and stay that way.
 void Fork::setupMqttControl(MQTTBridge* bridge) {
-  const char* iata = _mesh.autoReplyRegion();
+  const char* iata = observerIata();
   if (iata == NULL || iata[0] == 0) return;      // no region, no control plane
   if (_mqtt_control.slot() == 0) return;         // no slot to listen on
 

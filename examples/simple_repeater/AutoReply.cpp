@@ -212,7 +212,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
   }
 
   if (strcmp(command, "get autoreply.legacy") == 0) {
-    sprintf(reply, "> %s", _legacy ? "on" : "off");
+    sprintf(reply, "> %s", autoReplyLegacyState(_legacy, iata != NULL));
     return true;
   }
 
@@ -396,7 +396,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
                          "legacy %s: %s",
              _enabled ? "on" : "off", autoReplyModeName(_mode), _private ? "on" : "off",
              _direct_flood ? "flood" : "0-hop", _hops, _region[0] ? _region : "-", scope,
-             _legacy ? "on" : "off", where);
+             autoReplyLegacyState(_legacy, iata != NULL), where);
     return true;
   }
 
