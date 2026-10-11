@@ -1,0 +1,23 @@
+# The fork's own files must be identical on fork/observer and fork/core (TODO 22a ruling 4):
+# the feature code is written once and builds on both bases. scripts/fork-files.txt lists
+# them; scripts/fork-sync.sh copies them; this compares them on every push to either.
+name: Fork files identical on both branches
+
+on:
+  push:
+    branches: [fork/observer, fork/core]
+  pull_request:
+    branches: [fork/observer, fork/core]
+  workflow_dispatch:
+
+jobs:
+  identical:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compare the listed files on both branches
+        run: |
+          git fetch --no-tags origin fork/observer fork/core
+          bash scripts/fork-check.sh origin/fork/observer origin/fork/core
