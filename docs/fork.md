@@ -96,6 +96,16 @@ All feature code lives in files of its own; the repeater's `MyMesh` holds one `F
 | H6 | `handleCommand()`, after upstream's verbs: `else if (!fork.handleCommand(...))` | the features' CLI, before the common CLI |
 | H7 | `begin()`, before `bridge->begin()`: `fork.attachBridge(bridge)` | with remote command: the control topics and the per-slot client ids |
 | H8 | `onAnonDataRecv()`, first line of the anonymous-request branch: `if (fork.onAnonRequest(...)) return;` | the private test request (sub-type `0xF0`), answered on auto-reply's own path and slot |
+| H9a (reserved) | `onControlDataRecv()`, first line: `if (fork.onControlData(packet)) return;` | auto-scope's request and reply (`as`); not written until auto-scope has code |
+| H9b (reserved) | `createSelfAdvert()`, beside the advert data: `fork.decorateAdvert(...)` | auto-scope's fingerprint in `ADV_FEAT2`; not written until auto-scope has code |
+
+H9 is reserved, not added: a hook line that calls nothing would be dead code in every image.
+When auto-scope's repeater half is written (its plan, `meshcore-auto-scope/AUTO-SCOPE.md`,
+A-03), the two lines go in on both branches with `Fork::onControlData` and
+`Fork::decorateAdvert` -- inline no-ops without `WITH_AUTO_SCOPE`, as the channel hooks are
+without auto-reply -- and its code in `AutoScopeHooks.cpp`; its declaration in its own
+`/autoscope` file, read in `Fork::begin`, and `region client-default` through
+`Fork::handleCommand`, ahead of the common CLI's `region` parser (TODO 22a rulings 1, 19).
 
 ## Two bases, one copy of the feature code
 
