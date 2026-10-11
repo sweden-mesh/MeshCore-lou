@@ -78,3 +78,15 @@ only the hook lines in each base's own files differ. Develop on `fork/observer`,
 `scripts/fork-check.sh` (also run by `.github/workflows/fork-files.yml` on every push) says
 whether the two agree. On core the command plane and OTA compile to nothing and their suites
 are ignored: they need Observer headers that base does not have.
+
+### Auto-reply on core
+
+A core image has no MQTT and so no `mqtt.iata`: no legacy `#test-<iata>` channel, and the node
+stays silent until `autoreply.region` is set; `get autoreply` shows `legacy on, inert: no MQTT`.
+Its replies are measured by the Observer nodes that hear them. Cost, measured on `fork/core`
+(static RAM / flash, `ar` against the same board with no feature):
+
+| board | RAM | flash |
+|---|---|---|
+| RAK_4631_repeater (nRF52840) | 33 784 → 34 576 (+792 B) | 469 620 → 484 612 (+14 992 B of 815 104) |
+| Heltec_t114_repeater (nRF52840) | 31 904 → 32 696 (+792 B) | 427 604 → 442 596 (+14 992 B) |
