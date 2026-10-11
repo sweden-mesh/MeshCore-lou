@@ -67,3 +67,14 @@ All feature code lives in files of its own; the repeater's `MyMesh` holds one `F
 | H6 | `handleCommand()`, after upstream's verbs: `else if (!fork.handleCommand(...))` | the features' CLI, before the common CLI |
 | H7 | `begin()`, before `bridge->begin()`: `fork.attachBridge(bridge)` | with remote command: the control topics and the per-slot client ids |
 | H8 | `onAnonDataRecv()`, first line of the anonymous-request branch: `if (fork.onAnonRequest(...)) return;` | the private test request (sub-type `0xF0`), answered on auto-reply's own path and slot |
+
+## Two bases, one copy of the feature code
+
+The Observer images build from `fork/observer` (the Observer's `observer-firmware` plus the
+fork) and the core images from `fork/core` (upstream's release tag `repeater-v1.17.1` plus the
+fork). Every file the fork owns -- listed in `scripts/fork-files.txt` -- is identical on both;
+only the hook lines in each base's own files differ. Develop on `fork/observer`, then
+`git checkout fork/core && scripts/fork-sync.sh fork/observer`, commit, and
+`scripts/fork-check.sh` (also run by `.github/workflows/fork-files.yml` on every push) says
+whether the two agree. On core the command plane and OTA compile to nothing and their suites
+are ignored: they need Observer headers that base does not have.
