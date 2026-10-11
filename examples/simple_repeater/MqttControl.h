@@ -78,6 +78,7 @@ class MqttControl {
 
   void load();
   void save();
+  void toStored(MqttCtrlStoredConfig* c) const;
 
 public:
   MqttControl();

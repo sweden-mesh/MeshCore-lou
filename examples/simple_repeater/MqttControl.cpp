@@ -7,8 +7,6 @@
 #include <helpers/TxtDataHelpers.h>
 
 #define MQTTCTRL_CONFIG_FILE  "/mqttcontrol"
-#define MQTTCTRL_CONFIG_VER_1 1
-#define MQTTCTRL_CONFIG_VER   3      // v3 (ar-11): two automatic-OTA bytes appended
 
 // The broker permits meshcore/ and silently discards everything else -- a publish
 // elsewhere is accepted, acked and dropped, with no error visible to the sender.
@@ -68,41 +66,38 @@ void MqttControl::load() {
   if (!_fs->exists(MQTTCTRL_CONFIG_FILE)) return;
 
   File file = openRead(_fs, MQTTCTRL_CONFIG_FILE);
-  if (file) {
-    uint8_t ver = 0;
-    file.read(&ver, 1);
-    // Append-only, as /autoreply is. A v1 file has no slot and no key, so it loads
-    // deaf and keyless: guessing a slot would subscribe on a broker that may refuse
-    // it, and the key it used lives in mqtt.owner, which is somebody's ownership
-    // claim rather than a command key.
-    if (ver >= MQTTCTRL_CONFIG_VER_1) {
-      uint8_t enabled = 0;
-      file.read(&enabled, 1);
-      file.read((uint8_t *) &_counter, sizeof(_counter));
-      if (ver >= 2) {
-        file.read(&_slot, 1);
-        file.read((uint8_t *) _pubkey, sizeof(_pubkey));
-      }
-      if (ver >= 3) file.read(_ota_legacy, sizeof(_ota_legacy));
-      _enabled = enabled != 0;
-      if (_slot > RUNTIME_MQTT_SLOTS) _slot = 0;
-      _pubkey[sizeof(_pubkey) - 1] = 0;
-    }
-    file.close();
-  }
+  if (!file) return;
+  uint8_t buf[MQTTCTRL_CONFIG_LEN];
+  size_t len = file.read(buf, sizeof(buf));
+  file.close();
+
+  // The byte layout, every version of it, is mqttCtrlConfigDecode's (MqttControlLogic.h).
+  MqttCtrlStoredConfig c;
+  toStored(&c);
+  if (!mqttCtrlConfigDecode(buf, len, RUNTIME_MQTT_SLOTS, &c)) return;
+  _enabled = c.enabled;
+  _counter = c.counter;
+  _slot = c.slot;
+  memcpy(_pubkey, c.pubkey, sizeof(_pubkey));
+  memcpy(_ota_legacy, c.ota_legacy, sizeof(_ota_legacy));
+}
+
+void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
+  c->enabled = _enabled;
+  c->counter = _counter;
+  c->slot = _slot;
+  memcpy(c->pubkey, _pubkey, sizeof(c->pubkey));
+  memcpy(c->ota_legacy, _ota_legacy, sizeof(c->ota_legacy));
 }
 
 void MqttControl::save() {
+  MqttCtrlStoredConfig c;
+  toStored(&c);
+  uint8_t buf[MQTTCTRL_CONFIG_LEN];
+  size_t len = mqttCtrlConfigEncode(&c, buf, sizeof(buf));
   File file = openWrite(_fs, MQTTCTRL_CONFIG_FILE);
   if (file) {
-    uint8_t ver = MQTTCTRL_CONFIG_VER;
-    uint8_t enabled = _enabled ? 1 : 0;
-    file.write(&ver, 1);
-    file.write(&enabled, 1);
-    file.write((const uint8_t *) &_counter, sizeof(_counter));
-    file.write(&_slot, 1);
-    file.write((const uint8_t *) _pubkey, sizeof(_pubkey));
-    file.write(_ota_legacy, sizeof(_ota_legacy));
+    file.write(buf, len);
     file.close();
   }
 }

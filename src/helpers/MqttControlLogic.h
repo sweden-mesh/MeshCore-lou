@@ -11,6 +11,7 @@
 
 #include "MQTTObserverValidation.h"   // mqttOwnerKeyValid
 #include "MQTTReplyFormat.h"          // replyAppendf
+#include "OtaAutoLogic.h"             // the check interval the file carries a default for
 
 // Pure, dependency-free decisions behind the MQTT control plane. Factored out of
 // examples/simple_repeater/MqttControl.cpp so the envelope split, the replay
@@ -917,4 +918,60 @@ static inline void mqttCtrlFormatNodeStats(char* buf, size_t bufsize,
   if (recv_errors >= 0)      replyAppendf(buf, bufsize, &pos, " rxerr=%ld", recv_errors);
   if (queue_len >= 0)        replyAppendf(buf, bufsize, &pos, " q=%ld", queue_len);
   if (pos <= 1) replyAppendf(buf, bufsize, &pos, " (no stats sources)");
+}
+
+// /mqttcontrol, the plane's settings file. Append-only, as /autoreply is: version 1 was
+// on/off and the counter; 2 added the slot and the command key; 3 two automatic-OTA bytes
+// that releases up to ar-13 kept here. OTA keeps them in /ota now, and they are carried
+// exactly as read, so an image that rolls back to ar-13 still finds what it wrote. A
+// build without the plane neither reads nor writes this file, so it survives untouched.
+//
+//   ver | enabled | counter (4, native order) | slot | key (64 hex + NUL) | ota (2)
+#define MQTTCTRL_CONFIG_VER_1   1
+#define MQTTCTRL_CONFIG_VER     3
+#define MQTTCTRL_CONFIG_KEY_LEN 65
+#define MQTTCTRL_CONFIG_LEN     (1 + 1 + 4 + 1 + MQTTCTRL_CONFIG_KEY_LEN + 2)
+
+struct MqttCtrlStoredConfig {
+  bool enabled;
+  uint32_t counter;
+  uint8_t slot;                              // 1-based, 0 = none
+  char pubkey[MQTTCTRL_CONFIG_KEY_LEN];      // the command key in hex, "" = none
+  uint8_t ota_legacy[2];
+};
+
+static inline void mqttCtrlConfigDefaults(MqttCtrlStoredConfig* c) {
+  if (c == NULL) return;
+  memset(c, 0, sizeof(*c));
+  c->ota_legacy[1] = OTA_AUTO_CHECK_HOURS_DEFAULT;
+}
+
+// Fields the file is too old or too short to hold keep what 'c' had. A version 1 file has
+// no slot and no key, so it loads deaf and keyless: guessing a slot would subscribe on a
+// broker that may refuse it. A slot beyond 'slot_count' reads as none.
+static inline bool mqttCtrlConfigDecode(const uint8_t* buf, size_t len, int slot_count,
+                                        MqttCtrlStoredConfig* c) {
+  if (buf == NULL || c == NULL || len < 2 || buf[0] < MQTTCTRL_CONFIG_VER_1) return false;
+  const uint8_t ver = buf[0];
+  c->enabled = buf[1] != 0;
+  if (len >= 6) memcpy(&c->counter, &buf[2], 4);
+  if (ver >= 2 && len >= 7 + MQTTCTRL_CONFIG_KEY_LEN) {
+    c->slot = buf[6];
+    memcpy(c->pubkey, &buf[7], MQTTCTRL_CONFIG_KEY_LEN);
+    c->pubkey[MQTTCTRL_CONFIG_KEY_LEN - 1] = 0;
+  }
+  if (ver >= 3 && len >= MQTTCTRL_CONFIG_LEN) memcpy(c->ota_legacy, &buf[7 + MQTTCTRL_CONFIG_KEY_LEN], 2);
+  if (c->slot > slot_count) c->slot = 0;
+  return true;
+}
+
+static inline size_t mqttCtrlConfigEncode(const MqttCtrlStoredConfig* c, uint8_t* buf, size_t size) {
+  if (c == NULL || buf == NULL || size < MQTTCTRL_CONFIG_LEN) return 0;
+  buf[0] = MQTTCTRL_CONFIG_VER;
+  buf[1] = c->enabled ? 1 : 0;
+  memcpy(&buf[2], &c->counter, 4);
+  buf[6] = c->slot;
+  memcpy(&buf[7], c->pubkey, MQTTCTRL_CONFIG_KEY_LEN);
+  memcpy(&buf[7 + MQTTCTRL_CONFIG_KEY_LEN], c->ota_legacy, 2);
+  return MQTTCTRL_CONFIG_LEN;
 }
