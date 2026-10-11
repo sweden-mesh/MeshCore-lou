@@ -108,3 +108,12 @@ Its replies are measured by the Observer nodes that hear them. Cost, measured on
 |---|---|---|
 | RAK_4631_repeater (nRF52840) | 33 784 → 34 576 (+792 B) | 469 620 → 484 612 (+14 992 B of 815 104) |
 | Heltec_t114_repeater (nRF52840) | 31 904 → 32 696 (+792 B) | 427 604 → 442 596 (+14 992 B) |
+
+## The index a web page reads
+
+Every release carries `firmware-index.json` (TODO 22a ruling 25): one row per image file --
+board, base, features, MCU, version, file, URL, SHA-256, the form (`bin`, `merged`, `uf2`,
+`zip`) and how to flash it, and for Observer images the manifest it asks for -- and `sig`, the
+release key's Ed25519 signature over the rest as canonical JSON (keys sorted, no spaces,
+ASCII). A page reads that one file and never parses an image name;
+`scripts/manifest.py verify-index` checks it. `release-candidate.sh` writes it.
