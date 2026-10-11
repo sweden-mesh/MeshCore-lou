@@ -1,5 +1,7 @@
 #include "AutoReply.h"
 
+#ifdef WITH_AUTO_REPLY
+
 #include <helpers/TxtDataHelpers.h>
 
 #define AUTOREPLY_CONFIG_FILE   "/autoreply"
@@ -569,3 +571,5 @@ int AutoReply::buildPrivateReply(const mesh::Packet* req, const mesh::Identity& 
   MESH_DEBUG_PRINTLN("AutoReply: private reply '%s'", (const char *) &dest[5]);
   return reply_len;
 }
+
+#endif

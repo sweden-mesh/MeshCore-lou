@@ -6,6 +6,10 @@
 #ifdef WITH_AUTO_REPLY
   #include "AutoReply.h"
 #endif
+#ifdef WITH_MQTT_COMMAND
+  #include <helpers/bridges/MQTTBridge.h>
+  #include "MqttControl.h"
+#endif
 
 class MyMesh;
 #ifdef WITH_MQTT_BRIDGE
@@ -24,6 +28,7 @@ class MQTTBridge;
  * field on a file upstream keeps editing.
  */
 class Fork {
+  friend class MyMesh;
   MyMesh& _mesh;
 #ifdef WITH_AUTO_REPLY
   AutoReply _auto_reply;
@@ -32,6 +37,39 @@ class Fork {
   uint32_t slottedReplyDelay();
   bool triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply);
   bool triggerPrivateProbe(const char* pubkey_hex, const char* id, size_t id_len, char* reply);
+#endif
+#ifdef WITH_MQTT_COMMAND
+  MqttControl _mqtt_control;
+  // The bridge delivers to a sink and the queue runs commands through a runner; this
+  // member is both, so neither interface is a base of MyMesh.
+  struct ControlLink : public MqttCommandRunner, public MQTTBridge::ControlSink {
+    Fork& fork;
+    explicit ControlLink(Fork& f) : fork(f) { }
+    void onControlMessage(const char* topic, const uint8_t* payload, size_t len) override;
+    void runCommand(uint32_t sender_timestamp, char* command, char* reply) override;
+  } _control_link { *this };
+  // Owned here so the bridge's subscription list outlives every reconnect.
+  char _ctrl_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
+  char _ctrl_broadcast[MQTTCTRL_MAX_TOPIC + 1] = {0};
+  char _ctrl_result[MQTTCTRL_MAX_TOPIC + 1] = {0};
+  const char* _ctrl_topics[2];
+  MqttCtrlPing _ping = {};
+  bool _ping_started = false;                 // the command just run armed a ping
+  bool _ping_remote = false;                  // a ping that came over the plane is waiting
+  MqttCtrlOutcome _ping_outcome;              // what its r2 answers, once it settles
+  unsigned long _ctrl_last_verified_ms = 0;   // millis() of the last command the key vouched for
+  char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
+
+  bool handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply);
+  void setupMqttControl(MQTTBridge* bridge);
+  void autoSetupMqttControl(char* reply);
+  void pingMqttControl(char* reply);
+  void describeMqttControl(char* reply);
+  void loopMqttPing();
+  void refreshMqttControlV2Key();
+  void loopMqttControl();
+  void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
+                                const char* reply);
 #endif
 
 public:

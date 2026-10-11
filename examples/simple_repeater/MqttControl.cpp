@@ -1,4 +1,7 @@
 #include "MqttControl.h"
+
+#ifdef WITH_MQTT_COMMAND
+
 #include <helpers/OtaAutoLogic.h>
 
 #include <helpers/MQTTPresets.h>
@@ -338,3 +341,5 @@ bool MqttControl::handleCommand(uint32_t sender_timestamp, int slot_count,
 
   return false;
 }
+
+#endif

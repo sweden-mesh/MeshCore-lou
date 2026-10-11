@@ -97,9 +97,6 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
 #ifdef WITH_WEBCONFIG
     , public WebConfigServer::Callbacks
 #endif
-#ifdef WITH_MQTT_BRIDGE
-    , public MqttCommandRunner, public MQTTBridge::ControlSink
-#endif
 {
   friend class Fork;
   Fork fork { *this };
@@ -121,46 +118,11 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   TransportKey default_scope;
   RateLimiter discover_limiter, anon_limiter;
 #ifdef WITH_MQTT_BRIDGE
-  MqttControl mqtt_control;
-  // Owned here so the bridge's subscription list outlives every reconnect.
-  char _ctrl_topic[MQTTCTRL_MAX_TOPIC + 1];
-  char _ctrl_broadcast[MQTTCTRL_MAX_TOPIC + 1];
-  char _ctrl_result[MQTTCTRL_MAX_TOPIC + 1];
-  const char* _ctrl_topics[2];
-  void setupMqttControl(MQTTBridge* bridge);
-  void autoSetupMqttControl(char* reply);
   void markRunningImageValidOnce();
   void autoOtaTick();
   uint32_t _ota_last_check = 0;        // unix secs of the last automatic check (RAM: a reboot re-checks)
   uint32_t _ota_auto_start_at = 0;     // local unix secs the scheduled update may start, 0 = none
   char _ota_last_result[64] = {0};
-  MqttCtrlPing _ping = {};
-  bool _ping_started = false;                 // the command just run armed a ping
-  bool _ping_remote = false;                  // a ping that came over the plane is waiting
-  MqttCtrlOutcome _ping_outcome;              // what its r2 answers, once it settles
-  unsigned long _ctrl_last_verified_ms = 0;   // millis() of the last command the key vouched for
-  char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
-  void pingMqttControl(char* reply);
-  void describeMqttControl(char* reply);
-  void loopMqttPing();
-  void refreshMqttControlV2Key();
-  void loopMqttControl();
-  void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
-                                const char* reply);
-public:
-  void onControlMessage(const char* topic, const uint8_t* payload, size_t len) override {
-    // A pong is the broker's answer to `mqtt.cmd ping`, never a command: it is taken
-    // here, before any parsing, and goes no further whether it matches or not.
-    if (mqttCtrlIsPong(payload, len)) {
-      mqttCtrlTakePong(&_ping, payload, len, millis());
-      return;
-    }
-    mqtt_control.stage(topic, payload, len);
-  }
-  void runCommand(uint32_t sender_timestamp, char* command, char* reply) override {
-    handleCommand(sender_timestamp, command, reply);
-  }
-private:
 #endif
   uint32_t pending_discover_tag;
   unsigned long pending_discover_until;
