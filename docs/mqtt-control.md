@@ -96,7 +96,9 @@ slot and the command slot on the same broker. The tag keeps the id private: a br
 the older session when a new one takes its id, and on a broker with public credentials an id
 computable from the node's key would let anyone knock its slot off.
 Before ar-12 every slot of a board was esp-mqtt's `ESP32_<MAC>`, and a broker refused the
-second login for as long as the first held the id.
+second login for as long as the first held the id. The per-slot id and the `pw`/`jwt` word in
+`get mqtt.stats` come with this feature: an image without it ([fork.md](fork.md)) keeps the
+Observer's own client ids and `get mqtt.stats` line.
 
 The slot is read at boot, when the subscriptions are made. It cannot be set remotely: a signed
 `set mqtt.cmd.slot 0` would leave a node that only a serial cable could bring back.

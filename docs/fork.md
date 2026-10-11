@@ -55,5 +55,5 @@ All feature code lives in files of its own; the repeater's `MyMesh` holds one `F
 | H4 | `begin()`, after the ACL is loaded: `fork.begin(_fs)` | each feature reads its settings file |
 | H5 | `loop()`, after the radio: `fork.loop()` | the command queue, the ping, the automatic OTA check, the proof that marks a new image good |
 | H6 | `handleCommand()`, after upstream's verbs: `else if (!fork.handleCommand(...))` | the features' CLI, before the common CLI |
-| H7 | `begin()`, before `bridge->begin()`: `fork.attachBridge(bridge)` | the control topics and the slot client ids |
+| H7 | `begin()`, before `bridge->begin()`: `fork.attachBridge(bridge)` | with remote command: the control topics and the per-slot client ids |
 | H8 | `onAnonDataRecv()`, first line of the anonymous-request branch: `if (fork.onAnonRequest(...)) return;` | the private test request (sub-type `0xF0`), answered on auto-reply's own path and slot |

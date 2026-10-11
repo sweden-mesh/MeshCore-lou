@@ -376,6 +376,7 @@ void MQTTBridge::formatMqttStatsReply(char* buf, size_t bufsize) {
   replyAppendf(buf, bufsize, &pos, " |");
   for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) {
     if (!b->_slots[i].enabled || !b->_slots[i].client) continue;
+#ifdef WITH_MQTT_COMMAND
     // The trailing word is how the slot really signs in, which no other `get` shows:
     // a custom slot with a leftover audience is "jwt" whatever its URI says.
     const MQTTSlot& st = b->_slots[i];
@@ -385,6 +386,11 @@ void MQTTBridge::formatMqttStatsReply(char* buf, size_t bufsize) {
                      st.preset != nullptr,
                      st.preset && st.preset->auth_type == MQTT_AUTH_JWT,
                      st.audience[0] != '\0')));
+#else
+    replyAppendf(buf, bufsize, &pos, " s%d=%lu/%lu", i + 1,
+                 b->_slots[i].client->getPublishOk(),
+                 b->_slots[i].client->getPublishErr());
+#endif
   }
 }
 
@@ -1841,9 +1847,7 @@ bool MQTTBridge::setupSlot(int index) {
     slot.last_reconnect_attempt = 0;
   }
 
-  bool uses_jwt = mqttSlotUsesJwt(slot.preset != nullptr,
-                                  slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT,
-                                  slot.audience[0] != '\0');
+  bool uses_jwt = (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) || slot.audience[0] != '\0';
   optimizeMqttClientConfig(slot.client, uses_jwt);  // sets keepalive (45s PSRAM, 75s non-PSRAM)
   #ifndef MQTT_FORCE_KEEPALIVE_45
   #if defined(BOARD_HAS_PSRAM)
@@ -1856,9 +1860,11 @@ bool MQTTBridge::setupSlot(int index) {
   #endif
   #endif
 
+#ifdef WITH_MQTT_COMMAND
   if (mqttSlotClientId(_device_id, _client_tag, index, slot.client_id, sizeof(slot.client_id))) {
     slot.client->setClientId(slot.client_id);
   }
+#endif
 
   if (slot.preset) {
     // Preset-based slot

@@ -14,8 +14,11 @@ void Fork::begin(FILESYSTEM* fs) {
 
 #ifdef WITH_MQTT_BRIDGE
 void Fork::attachBridge(MQTTBridge* bridge) {
+#ifdef WITH_MQTT_COMMAND
   // Each slot's client id ends in a tag only this node can compute: a signature is
-  // deterministic, so the same key gives the same tag on every boot.
+  // deterministic, so the same key gives the same tag on every boot. Only with the
+  // command plane, which is what puts two slots of one node on one broker; without
+  // it every slot keeps the Observer's own client id (TODO 22a ruling 18).
   static const char tag_label[] = "mqtt client id";
   uint8_t tag_sig[SIGNATURE_SIZE];
   _mesh.self_id.sign(tag_sig, (const uint8_t *) tag_label, sizeof(tag_label) - 1);
@@ -23,7 +26,6 @@ void Fork::attachBridge(MQTTBridge* bridge) {
   mesh::Utils::toHex(tag, tag_sig, MQTT_SLOT_CLIENT_TAG_LEN / 2);
   bridge->setClientIdTag(tag);
 
-#ifdef WITH_MQTT_COMMAND
   setupMqttControl(bridge);
 #endif
 }

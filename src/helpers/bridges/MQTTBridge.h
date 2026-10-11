@@ -107,7 +107,9 @@ private:
     char password[64];
     char audience[64];              // JWT audience for custom JWT slots (empty = username/password)
     char broker_uri[128];           // Persistent URI for custom slots (avoids dangling pointer)
+#ifdef WITH_MQTT_COMMAND
     char client_id[MQTT_SLOT_CLIENT_ID_SIZE];   // setClientId() keeps this pointer
+#endif
 
     // Reconnect backoff
     uint8_t reconnect_backoff;      // 0..4 index into backoff table
@@ -642,9 +644,7 @@ public:
    *  usefully-configurable servers; RUNTIME_MQTT_SLOTS carries a spare for
    *  reconfiguration. Safe to call before begin(). */
   static int getMaxActiveSlots();
-  /** Could one more slot be activated now? What `set mqtt.cmd on` asks before it takes a
-   *  slot for the control plane (2026-10-08): the active-slot cap is the observer's and
-   *  is reported, never worked around. */
+  /** Could one more slot be activated now, within the active-slot cap? */
   bool hasRoomForAnotherSlot() const { return activatedSlotCount() < _max_active_slots; }
   /** Resolved origin for MQTT JSON: node_name when mqtt_origin is empty, else mqtt_origin (with quote stripping). */
   static void getEffectiveMqttOrigin(const NodePrefs* np, const MQTTPrefs* obs, char* buf, size_t buf_size);
@@ -700,20 +700,17 @@ public:
   void setSNMPAgent(MeshSNMPAgent* agent) { _snmp_agent = agent; }
 #endif
 
-  // Downlink. The bridge holds no handle on the mesh or the CLI, so a subscriber
-  // that wants to act on a message registers one of these instead. The callback
-  // runs on the client's esp-mqtt event task, which has a fraction of the stack
-  // this task has: implementations must copy and return, never verify or execute.
+  // Downlink: topics subscribed on one slot, delivered to a sink. The callback runs on
+  // the client's esp-mqtt event task, with a fraction of this task's stack: copy and
+  // return, never verify or execute there.
   struct ControlSink {
     virtual ~ControlSink() { }
     virtual void onControlMessage(const char* topic, const uint8_t* payload, size_t len) = 0;
   };
 
-  // 'topics' are subscribed on every connect of the one slot 'slot_index' names
-  // (0-based), so they survive the reconnect ladder. One slot, never all: the
-  // stats presets refuse subscriptions. Both pointers are owned by the caller and
-  // must outlive the bridge. Call before begin() -- subscriptions are registered
-  // when a slot's client is created, and never moved afterwards.
+  // Call before begin(): the topics are subscribed on every connect of slot
+  // 'slot_index' (0-based) and of no other, since the stats presets refuse
+  // subscriptions. Both pointers are the caller's and must outlive the bridge.
   void setControlSink(ControlSink* sink, const char* const* topics, size_t topic_count,
                       int slot_index) {
     _control_sink = sink;
@@ -722,42 +719,37 @@ public:
     _control_slot = slot_index;
   }
 
-  // The answering half of the control plane: the sink verifies and executes on
-  // the loop task, then publishes the outcome here. Deliberately narrow rather
-  // than exposing publishToAllSlots -- a caller gets to answer on the control
-  // plane, not a general publish-anywhere. It answers on the slot the command
-  // came in on and nowhere else. Not retained: a result describes one command at
-  // one moment, and a retained one would be replayed to every later subscriber as
-  // though it were current. Returns false when that slot is not connected, which
-  // is a normal outcome and not an error.
-  //
-  // `qos` has no default on purpose. The caller is on the loop task, and QoS 0 here
-  // means a synchronous write to a socket the bridge task is also writing to; see
-  // MQTTCTRL_RESULT_QOS. A default of 0 is how that went unnoticed.
+  // The answer, on the slot the command came in on and nowhere else, never retained
+  // (a result describes one moment). False when that slot is down, a normal outcome.
+  // `qos` has no default: from the loop task QoS 0 is a synchronous write to a socket
+  // the bridge task also writes to (MQTTCTRL_RESULT_QOS).
   bool publishControlResult(const char* topic, const char* payload, size_t len, uint8_t qos) {
     if (topic == NULL || topic[0] == 0 || payload == NULL || len == 0) return false;
     return publishToSlot(_control_slot, topic, payload, len, false, qos);
   }
 
-  // The control slot's state, for `get mqtt.cmd` and `mqtt.cmd ping`: whether it is
-  // connected, whether the broker has acknowledged a subscription since it connected,
-  // and how it reaches the broker ("mqtts, jwt").
+  // The control slot: connected, every subscription granted since it connected
+  // (SUBACK), and how it reaches the broker ("mqtts, jwt").
   bool controlSlotConnected() const {
     return _control_slot >= 0 && _slots[_control_slot].connected;
   }
   bool controlSubscribed() const { return _control_subscribed; }
   void controlSlotLink(char* out, size_t out_size) const;
 
+#ifdef WITH_MQTT_COMMAND
   // The private part of every slot's client id (mqttSlotClientId); call before begin().
   void setClientIdTag(const char* tag) {
     strncpy(_client_tag, tag, sizeof(_client_tag) - 1);
     _client_tag[sizeof(_client_tag) - 1] = 0;
   }
+#endif
 
 private:
   ControlSink* _control_sink = NULL;
   volatile bool _control_subscribed = false;
+#ifdef WITH_MQTT_COMMAND
   char _client_tag[MQTT_SLOT_CLIENT_TAG_LEN + 1] = {0};
+#endif
   const char* const* _control_topics = NULL;
   size_t _control_topic_count = 0;
   int _control_slot = -1;
