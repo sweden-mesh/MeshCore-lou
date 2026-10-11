@@ -7,7 +7,6 @@
 #include <strings.h>
 
 #include "ForkText.h"
-#include "MQTTObserverValidation.h"
 #include "SlidingBudget.h"
 
 // Pure, dependency-free decisions behind the repeater's auto-reply. Factored out
@@ -31,7 +30,7 @@
 static inline bool autoReplyDeriveChannel(const char* iata, char* out, size_t out_size) {
   if (out == NULL || out_size == 0) return false;
   out[0] = 0;
-  if (!mqttIataValid(iata) || strcasecmp(iata, "XXX") == 0) return false;
+  if (!forkAlnumOfLength(iata, 3) || strcasecmp(iata, "XXX") == 0) return false;
 
   size_t prefix_len = strlen(AUTOREPLY_CHANNEL_PREFIX);
   if (prefix_len + strlen(iata) >= out_size) return false;
@@ -696,7 +695,7 @@ static inline bool autoReplyMatchTrigger(const char* msg, const char* keyword,
   if (ok && tail[1] == ' ') {
     // Only a private reply needs an address, so only P and D may carry one.
     bool addressable = m == AUTOREPLY_MODE_PRIVATE || m == AUTOREPLY_MODE_DIRECT;
-    ok = addressable && pubkey_hex != NULL && mqttOwnerKeyValid(tail + 2);
+    ok = addressable && pubkey_hex != NULL && forkHexOfLength(tail + 2, 64);
     if (ok) *pubkey_hex = tail + 2;
   } else if (ok) {
     ok = tail[1] == 0;

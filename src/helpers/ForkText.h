@@ -1,8 +1,28 @@
 #pragma once
 // Text helpers every feature of the fork shares, so none has to include another's
 // header to read its own settings. Pure, and host-tested in test_fork_seams.
+#include <ctype.h>
 #include <stddef.h>
+#include <string.h>
 #include <strings.h>
+
+// Exactly 'n' characters, every one alphanumeric: a region code (n = 3). NULL is not one.
+static inline bool forkAlnumOfLength(const char* s, size_t n) {
+  if (s == NULL || strlen(s) != n) return false;
+  for (size_t i = 0; i < n; i++) {
+    if (!isalnum((unsigned char)s[i])) return false;
+  }
+  return true;
+}
+
+// Exactly 'n' hex digits: a public key written out (n = 64). NULL is not one.
+static inline bool forkHexOfLength(const char* s, size_t n) {
+  if (s == NULL || strlen(s) != n) return false;
+  for (size_t i = 0; i < n; i++) {
+    if (!isxdigit((unsigned char)s[i])) return false;
+  }
+  return true;
+}
 
 // Read an 'on' or 'off' argument, the form every boolean setting of the fork takes.
 // The token ends at the first space or line ending, so a value typed with trailing
