@@ -8,7 +8,7 @@
 #       manifests, SHA256SUMS)
 #   -t  the release tag, v1.17.1-lou-<nn>; every image must be of that revision
 #   -k  the release key (default ~/.config/mccontrol/release.key); read here and nowhere else
-#   -r  the repository the release lives in (default the-louie/MeshCore-observer)
+#   -r  the repository the release lives in (default sweden-mesh/MeshCore-lou)
 #   -o  where the release's files are assembled (default: release-<tag>/ beside the candidate)
 #   -p  publish: create the GitHub release with gh. Without it the gh command is printed.
 #
@@ -22,7 +22,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PY="${PYTHON:-python3}"
-CAND="" TAG="" KEY="$HOME/.config/mccontrol/release.key" REPO="the-louie/MeshCore-observer" OUT="" PUBLISH=0
+CAND="" TAG="" KEY="$HOME/.config/mccontrol/release.key" REPO="sweden-mesh/MeshCore-lou" OUT="" PUBLISH=0
 while getopts "c:t:k:r:o:p" opt; do
   case "$opt" in
     c) CAND="$OPTARG" ;; t) TAG="$OPTARG" ;; k) KEY="$OPTARG" ;; r) REPO="$OPTARG" ;;

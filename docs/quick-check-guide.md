@@ -37,7 +37,7 @@ the Observer flasher.
 ## 0. What to bring
 
 - The firmware images for the board, from the
-  [releases page](https://github.com/the-louie/MeshCore-observer/releases). Each release has
+  [releases page](https://github.com/sweden-mesh/MeshCore-lou/releases). Each release has
   two files per board:
   - `<board>_repeater_observer_mqtt-<chip>-<version>.bin`: the app image.
   - `<board>_repeater_observer_mqtt-<chip>-<version>-merged.bin`: the full image.

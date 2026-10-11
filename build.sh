@@ -204,7 +204,7 @@ build_firmware() {
   # The auto-reply fork's channel (2026-10-08, ar-11): the GitHub releases of the fork.
   # `releases/latest/download/<asset>` redirects to the newest release's asset, so one
   # baked-in base serves every release; the node follows the redirect over TLS.
-  OTA_MANIFEST_BASE_URL="${OTA_MANIFEST_BASE_URL:-https://github.com/the-louie/MeshCore-observer/releases/latest/download}"
+  OTA_MANIFEST_BASE_URL="${OTA_MANIFEST_BASE_URL:-https://github.com/sweden-mesh/MeshCore-lou/releases/latest/download}"
 
   # The release key's public half (64 hex). An image is flashed only when the manifest's
   # signature by this key verifies (OtaVerifyLogic.h); a build without it refuses every
