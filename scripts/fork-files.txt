@@ -51,3 +51,4 @@ scripts/release-candidate.sh
 .github/workflows/fork-pr.yml
 scripts/check-quiet-image.sh
 scripts/ci-pr-plan.sh
+test/test_fork_settings/test_fork_settings.cpp
