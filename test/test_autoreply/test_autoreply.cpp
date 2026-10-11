@@ -1155,6 +1155,25 @@ TEST(BuildProbe, RefusesRatherThanTruncatingAName) {
   EXPECT_EQ(0u, autoReplyBuildProbe(out, sizeof(out), "SE-JKG-LOUTEST", "test", "A1B2C3D4", 8));
 }
 
+// A core image has no Observer bridge and so no IATA code: whatever the legacy switch
+// says, it has no channel at all until `autoreply.region` names one (TODO 22a ruling 12),
+// and then exactly that one.
+TEST(CoreBuild, SilentUntilARegionIsSet) {
+  char region[32], legacy[32];
+  for (int on = 0; on <= 1; on++) {
+    autoReplyChannelNames("", NULL, on != 0, region, legacy, sizeof(region));
+    EXPECT_STREQ("", region);
+    EXPECT_STREQ("", legacy);
+    autoReplyChannelNames(NULL, NULL, on != 0, region, legacy, sizeof(region));
+    EXPECT_STREQ("", region);
+    EXPECT_STREQ("", legacy);
+    autoReplyChannelNames("SE-JKP", NULL, on != 0, region, legacy, sizeof(region));
+    EXPECT_STREQ("#test-se-jkp", region);
+    EXPECT_STREQ("", legacy);
+  }
+  EXPECT_STREQ("on, inert: no MQTT", autoReplyLegacyState(true, false));
+}
+
 TEST(LegacyState, InertWithoutAnIataCode) {
   EXPECT_STREQ("on", autoReplyLegacyState(true, true));
   EXPECT_STREQ("off", autoReplyLegacyState(false, true));
