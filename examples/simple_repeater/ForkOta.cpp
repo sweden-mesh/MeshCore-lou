@@ -109,9 +109,7 @@ void Fork::otaLoop() {
 #if defined(OTA_MANIFEST_BASE)
   autoOtaTick();
 #endif
-#ifndef WITH_MQTT_COMMAND
   proveImageByBridge();
-#endif
 }
 
 #ifdef ESP_PLATFORM
@@ -139,12 +137,20 @@ void Fork::markRunningImageValid(const char* proof) {
 void Fork::markRunningImageValid(const char*) { _image_valid = true; }
 #endif
 
-#ifndef WITH_MQTT_COMMAND
-// Without the command plane nothing is ever verified, so the bridge is the proof: a
-// slot has published since boot, and the image has stayed up ten minutes. Asked every
-// few seconds until it holds, then never again.
+// While the node is not listening for commands nothing is ever verified, so the bridge
+// is the proof: a slot has published since boot, and the image has stayed up ten
+// minutes (otaImageProven). Asked every few seconds until it holds, then never again.
 void Fork::proveImageByBridge() {
   if (_image_valid) return;
+#ifdef WITH_MQTT_COMMAND
+  // Listening means a signed command could arrive and verify: on, a slot, topics (a
+  // region) and a usable command key.
+  const bool listening = _mqtt_control.isEnabled() && _mqtt_control.slot() != 0 &&
+                         _ctrl_topic[0] != 0 && mqttCtrlOwnerReady(_mqtt_control.pubkey()) == MQTTCTRL_OK;
+#else
+  const bool listening = false;
+#endif
+  if (listening) return;
   const unsigned long now = millis();
   if (now < OTA_PROOF_UPTIME_MS || (long)(now - _ota_proof_next) < 0) return;
   _ota_proof_next = now + 5000;
@@ -153,11 +159,10 @@ void Fork::proveImageByBridge() {
     MQTTBridge::SlotStatusSnapshot slot;
     published = MQTTBridge::getSlotStatusSnapshot(i, &slot) && slot.publish_ok > 0;
   }
-  if (otaImageProvenByBridge(now, published)) {
+  if (otaImageProven(false, listening, now, published)) {
     markRunningImageValid("the bridge published and it ran ten minutes");
   }
 }
-#endif
 
 #if defined(OTA_MANIFEST_BASE)
 // Automatic pull OTA (ar-11): `set ota.auto on`. A check when the interval is up; when a

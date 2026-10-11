@@ -105,3 +105,14 @@ static inline bool otaAutoDecodeLegacy(const uint8_t* buf, size_t len, bool* on,
 static inline bool otaImageProvenByBridge(uint32_t uptime_ms, bool any_slot_published) {
   return any_slot_published && uptime_ms >= OTA_PROOF_UPTIME_MS;
 }
+
+// Which proof counts. A verified command always does. The bridge does whenever the
+// node is not listening for commands -- an image without the plane, and equally one
+// whose plane is switched off or has no slot, no topics or no key: there no command can ever
+// arrive, and waiting for one would leave every new image pending, rolled back on
+// the next reboot, and with ota.auto on pulled and rolled back again, for ever.
+static inline bool otaImageProven(bool command_verified, bool plane_listening,
+                                  uint32_t uptime_ms, bool any_slot_published) {
+  if (command_verified) return true;
+  return !plane_listening && otaImageProvenByBridge(uptime_ms, any_slot_published);
+}

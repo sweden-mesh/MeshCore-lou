@@ -38,7 +38,7 @@ visit. What counts as proof depends on the image's features ([fork.md](fork.md))
 | image | proof |
 |---|---|
 | with remote command (`rc`) | it has **verified one signed command**: the radio came up, WiFi and the bridge reached the broker, and the owner can still reach the node -- and the control plane comes back with the old image if not |
-| without it | **some MQTT slot has published since boot, and it has run ten minutes**: the radio, WiFi, TLS and a broker all work, and it has outlived the watchdog and the reconnect ladder |
+| without it, or with it while the plane cannot take a command (`mqtt.cmd` off, no slot, no region or no command key) | **some MQTT slot has published since boot, and it has run ten minutes**: the radio, WiFi, TLS and a broker all work, and it has outlived the watchdog and the reconnect ladder |
 
 Pull OTA is in every Observer image of this fork, whatever its features, because an image that
 pulled from another channel would replace itself with one that has none of them.

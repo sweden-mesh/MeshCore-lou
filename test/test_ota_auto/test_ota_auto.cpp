@@ -110,6 +110,26 @@ TEST(OtaProof, WithoutThePlaneTheBridgeAndTenMinutesProveAnImage) {
   EXPECT_FALSE(otaImageProvenByBridge(24UL * 3600UL * 1000UL, false));   // up a day, never published
 }
 
+TEST(OtaProof, AVerifiedCommandAlwaysProvesAnImage) {
+  EXPECT_TRUE(otaImageProven(true, true, 0, false));
+  EXPECT_TRUE(otaImageProven(true, false, 0, false));
+}
+
+TEST(OtaProof, WhileThePlaneListensOnlyACommandDoes) {
+  const uint32_t day = 24UL * 3600UL * 1000UL;
+  EXPECT_FALSE(otaImageProven(false, true, day, true));
+}
+
+TEST(OtaProof, APlaneThatIsOffOrSlotlessFallsBackToTheBridge) {
+  // An rc image with mqtt.cmd off or no slot, topics or key: no command can come, so
+  // without the bridge proof every new image would roll back at the next reboot and,
+  // with ota.auto on, be pulled again -- the loop this rule exists to break.
+  const uint32_t ten = 10UL * 60UL * 1000UL;
+  EXPECT_FALSE(otaImageProven(false, false, ten - 1, true));
+  EXPECT_TRUE(otaImageProven(false, false, ten, true));
+  EXPECT_FALSE(otaImageProven(false, false, 24UL * 3600UL * 1000UL, false));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
