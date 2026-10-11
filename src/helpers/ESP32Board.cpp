@@ -360,7 +360,7 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
     } else if (up_to_date) {
       snprintf(reply, 160, "up to date: %s", avail_disp);
     } else if (own_ar >= 0 && avail_ar >= 0 && avail_ar > own_ar) {
-      snprintf(reply, 160, "update available: %s -> %s (ar-%d -> ar-%d)%s", own_disp, avail_disp, own_ar, avail_ar, pc_note);
+      snprintf(reply, 160, "update available: %s -> %s (rev %d -> %d)%s", own_disp, avail_disp, own_ar, avail_ar, pc_note);
     } else if (behind > 0) {
       snprintf(reply, 160, "update available: %s -> %s (%d behind)%s", own_disp, avail_disp, behind, pc_note);
     } else {

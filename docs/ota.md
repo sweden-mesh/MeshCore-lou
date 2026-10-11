@@ -45,12 +45,16 @@ pulled from another channel would replace itself with one that has none of them.
 
 ## What "newer" means
 
-The auto-reply revision in the version string decides: a manifest offering `ar-12` to a node
-on `ar-11` is an update, one offering `ar-10` never is -- a channel cannot roll a node back by
-mistake. Within the same revision the build number (the fourth version component, set by
-`FIRMWARE_BUILD_NUMBER` at build time) decides, and without build numbers the commit hash, as
-upstream does. `ota check` says which: `update available: ... (ar-10 -> ar-11)`,
-`... (2 behind)`, or `up to date: the channel offers an older build`.
+The fork's revision in the version string decides. From lou-14 a version reads
+`<mcu>-v1.17.1-lou-<nn>-<features>-<hash>` (`esp32s3-v1.17.1-lou-14-arrc-1a2b3c4d`); up to
+ar-13 it read `...-ar-<nn>-<hash>`. The two are one counter -- lou-14 follows ar-13 -- and
+`-lou-` is read first, because an image with auto-reply alone carries `-ar-` after its revision
+(`...-lou-14-ar-1a2b3c4d`). A manifest offering a higher revision is an update; a lower one never
+is -- a channel cannot roll a node back by mistake. Within the same revision the build number
+(the fourth version component, set by `FIRMWARE_BUILD_NUMBER` at build time) decides, and
+without build numbers the commit hash, as upstream does. `ota check` says which:
+`update available: ... (rev 13 -> 14)`, `... (2 behind)`, or
+`up to date: the channel offers an older build`.
 
 ## Automatic, but paced
 

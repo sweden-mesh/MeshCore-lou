@@ -103,6 +103,26 @@ TEST(FixedLength, AKeyIsSixtyFourHexDigits) {
   EXPECT_FALSE(forkHexOfLength(NULL, 64));
 }
 
+TEST(ForkFeatureToken, TheVersionNamesTheFeatures) {
+  char f[8];
+  EXPECT_TRUE(forkFeaturesOfVersion("esp32s3-v1.17.1-lou-14-arrc-1a2b3c4d", f, sizeof(f)));
+  EXPECT_STREQ("arrc", f);
+  EXPECT_TRUE(forkFeaturesOfVersion("esp32s3-v1.17.1-lou-14-ar-1a2b3c4d", f, sizeof(f)));
+  EXPECT_STREQ("ar", f);
+  // As an Observer image embeds it: build.sh puts the base's own tag before the hash.
+  EXPECT_TRUE(forkFeaturesOfVersion("esp32s3-v1.17.1-lou-14-rc-observer-1a2b3c4d", f, sizeof(f)));
+  EXPECT_STREQ("rc", f);
+  EXPECT_TRUE(forkFeaturesOfVersion("nrf52-v1.17.1-lou-15-asarrc-1a2b3c4d", f, sizeof(f)));
+  EXPECT_STREQ("asarrc", f);
+  EXPECT_FALSE(forkFeaturesOfVersion("esp32s3-v1.17.1-ar-13-16a05810", f, sizeof(f)));
+  EXPECT_STREQ("", f);
+  EXPECT_FALSE(forkFeaturesOfVersion("esp32s3-v1.17.1-lou-14-rcar-1a2b3c4d", f, sizeof(f)));  // wrong order
+  EXPECT_FALSE(forkFeaturesOfVersion("esp32s3-v1.17.1-lou-14-1a2b3c4d", f, sizeof(f)));       // no features
+  EXPECT_FALSE(forkFeaturesOfVersion("esp32s3-v1.17.1-lou-14-arrc", f, sizeof(f)));           // no hash
+  EXPECT_FALSE(forkFeaturesOfVersion("esp32s3-v1.17.1-lou-14-arrc-x", f, 4));                 // no room
+  EXPECT_FALSE(forkFeaturesOfVersion(NULL, f, sizeof(f)));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
