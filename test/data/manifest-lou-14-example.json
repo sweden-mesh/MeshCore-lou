@@ -1,0 +1,13 @@
+{
+ "version": "esp32s3-v1.17.1-lou-14-ar-1a2b3c4d",
+ "baseVersion": "v1.17.1",
+ "build": 0,
+ "fileName": "Heltec_v3_repeater_observer_mqtt-esp32s3-v1.17.1-lou-14-ar-1a2b3c4d.bin",
+ "sha256": "840596df22fa17a111b1caf6c4c15d2becb25184d8c2c17865acd0bd823d1daf",
+ "partSig": "PS1",
+ "variant": "Heltec_v3_repeater_observer_mqtt-ar",
+ "features": "ar",
+ "file": "https://github.com/the-louie/MeshCore-observer/releases/download/v1.17.1-lou-14/Heltec_v3_repeater_observer_mqtt-esp32s3-v1.17.1-lou-14-ar-1a2b3c4d.bin",
+ "sig": "debc1fd9e5b6913e99b1312a71c83e0aa1b39d914c54984466bf14f1ca1a41ad8e5d37381c07ed94bfb66e761d2862f39bd173f37f8373b3eb8a8d129a405e0b",
+ "sig2": "71a41c5563f50ce0cd9b10a7831683a4f00a8fdedfccd27bf440932b252bfc3188ddbb7e4fb09687f1e4a2157b4d0490bc61bb8844ba59718fd1a222e16b6405"
+}
