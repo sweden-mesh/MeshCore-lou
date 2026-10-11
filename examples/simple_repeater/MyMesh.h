@@ -50,6 +50,7 @@
 #include "RateLimiter.h"
 #include "AutoReply.h"
 #include "MqttControl.h"
+#include "Fork.h"
 
 
 struct RepeaterStats {
@@ -101,6 +102,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
     , public MqttCommandRunner, public MQTTBridge::ControlSink
 #endif
 {
+  friend class Fork;
+  Fork fork { *this };
   FILESYSTEM* _fs;
   uint32_t last_millis;
   uint64_t uptime_millis;

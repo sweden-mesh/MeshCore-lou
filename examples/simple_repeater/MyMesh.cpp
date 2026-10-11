@@ -1414,10 +1414,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
 #endif
 
   acl.load(_fs, self_id);
-  auto_reply.begin(_fs);
-#ifdef WITH_MQTT_BRIDGE
-  mqtt_control.begin(_fs);
-#endif
+  fork.begin(_fs);
   // TODO: key_store.begin();
   region_map.load(_fs);
 
@@ -1455,15 +1452,6 @@ void MyMesh::begin(FILESYSTEM *fs) {
       MESH_DEBUG_PRINTLN("Setting device ID: %s", device_id);
       bridge->setDeviceID(device_id);
 
-      // Each slot's client id ends in a tag only this node can compute: a signature is
-      // deterministic, so the same key gives the same tag on every boot.
-      static const char tag_label[] = "mqtt client id";
-      uint8_t tag_sig[SIGNATURE_SIZE];
-      self_id.sign(tag_sig, (const uint8_t *) tag_label, sizeof(tag_label) - 1);
-      char tag[MQTT_SLOT_CLIENT_TAG_LEN + 1];
-      mesh::Utils::toHex(tag, tag_sig, MQTT_SLOT_CLIENT_TAG_LEN / 2);
-      bridge->setClientIdTag(tag);
-
       // Set firmware version
       bridge->setFirmwareVersion(getFirmwareVer());
 
@@ -1483,7 +1471,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
         bridge->setSNMPAgent(&_snmp_agent);
       }
 #endif
-      setupMqttControl(bridge);
+      fork.attachBridge(bridge);
 #endif
 
       bridge->begin();
@@ -1860,10 +1848,6 @@ void MyMesh::buildStatsJson(char* buf, size_t buf_size) {
 #endif
 
 void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
-  const char* trigger_id = NULL;
-  const char* trigger_key = NULL;
-  size_t trigger_id_len = 0;
-  uint8_t trigger_mode = AUTOREPLY_MODE_DEFAULT;
   if (region_load_active) {
     if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
       region_map = temp_map;  // copy over the temp instance as new current map
@@ -1979,36 +1963,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
   } else if (memcmp(command, "discover.scopes", 15) == 0) {
     strcpy(reply, "Err - neighbors not enabled in this build");
 #endif
-#ifdef WITH_MQTT_BRIDGE
-  } else if (strcmp(command, "get ota") == 0) {
-#if defined(OTA_MANIFEST_BASE)
-    sprintf(reply, "> channel %s, auto %s/%uh, last check %s, next %s",
-            OTA_MANIFEST_BASE, mqtt_control.otaAuto() ? "on" : "off", (unsigned)mqtt_control.otaCheckHours(),
-            _ota_last_result[0] ? _ota_last_result : "(none yet)",
-            _ota_auto_start_at ? "scheduled" : "-");
-#else
-    strcpy(reply, "> no channel in this build (built without build.sh)");
-#endif
-  } else if (strcmp(command, "set mqtt.cmd on") == 0 && mqtt_control.slot() == 0) {
-    autoSetupMqttControl(reply);
-  } else if (strcmp(command, "mqtt.cmd ping") == 0) {
-    pingMqttControl(reply);
-  } else if (strcmp(command, "get mqtt.cmd") == 0) {
-    describeMqttControl(reply);
-  } else if (mqttCtrlTouchesSlot(command, mqtt_control.slot())) {
-    sprintf(reply, "Err - slot %d is the command plane's: move it with set mqtt.cmd.slot first (not over the plane)",
-            mqtt_control.slot());
-  } else if (mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply)) {
-    // reply already filled in
-#endif
-  } else if (auto_reply.handleCommand(autoReplyRegion(), region_map, command, reply)) {
-    // reply already filled in
-  } else if (autoReplyParseTrigger(command, AUTOREPLY_KEYWORD, &trigger_id, &trigger_id_len,
-                                   &trigger_mode)) {
-    triggerProbe(trigger_id, trigger_id_len, trigger_mode, reply);
-  } else if (autoReplyParsePrivateTrigger(command, &trigger_key, &trigger_id, &trigger_id_len)) {
-    triggerPrivateProbe(trigger_key, trigger_id, trigger_id_len, reply);
-  } else{
+  } else if (!fork.handleCommand(sender_timestamp, command, reply)) {
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
@@ -2331,10 +2286,7 @@ void MyMesh::loop() {
   // bridge.loop() is now handled by FreeRTOS task on Core 0 - no need to call it here
 #endif
 
-#ifdef WITH_MQTT_BRIDGE
-  loopMqttControl();
-  loopMqttPing();
-#endif
+  fork.loop();
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();
@@ -2363,7 +2315,6 @@ void MyMesh::loop() {
   }
 
 #if defined(WITH_MQTT_BRIDGE) && defined(OTA_MANIFEST_BASE)
-  autoOtaTick();
   if (_ota_update_at && millisHasNowPassed(_ota_update_at)) { // deferred `ota update`
     _ota_update_at = 0;                                       // clear timer
     // The "Beginning update..." reply has now gone out. Free the bridge for heap

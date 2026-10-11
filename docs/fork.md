@@ -41,3 +41,16 @@ reads nor writes it:
 
 A node flashed from one combination to another therefore keeps every setting of a feature
 it loses, and finds them again when it gets the feature back.
+
+## Where the features attach
+
+All feature code lives in files of its own; the repeater's `MyMesh` holds one `Fork` object
+(`examples/simple_repeater/Fork.{h,cpp}`) and calls it from a few lines:
+
+| hook | where in `MyMesh` | what the features do there |
+|---|---|---|
+| H1, H2 | `MyMesh.h`: `#include "Fork.h"`, `friend class Fork; Fork fork { *this };` | the object, with access to the mesh's own state |
+| H4 | `begin()`, after the ACL is loaded: `fork.begin(_fs)` | each feature reads its settings file |
+| H5 | `loop()`, after the radio: `fork.loop()` | the command queue, the ping, the automatic OTA check |
+| H6 | `handleCommand()`, after upstream's verbs: `else if (!fork.handleCommand(...))` | the features' CLI, before the common CLI |
+| H7 | `begin()`, before `bridge->begin()`: `fork.attachBridge(bridge)` | the control topics and the slot client ids |
