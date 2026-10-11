@@ -61,11 +61,10 @@ class MqttControl {
   uint32_t _counter;          // highest command counter accepted, persisted
   uint8_t _slot;              // 1-based MQTT slot to listen and answer on, 0 = none
   char _pubkey[PUB_KEY_SIZE * 2 + 1];   // hex public key commands must be signed by
-  // Automatic pull OTA (ar-11): off by default; the check interval in hours. Kept in
-  // this file since it is ours, appended as config version 3; the schedule itself is
-  // OtaAutoLogic.h and the last check / last result live in RAM (a reboot re-checks).
-  bool _ota_auto;
-  uint8_t _ota_check_hours;
+  // Version 3 ends in the two automatic-OTA bytes releases up to ar-13 kept here. OTA
+  // keeps its settings in /ota now; the bytes are carried as read, so an image that
+  // rolls back to one of those releases still finds what it wrote.
+  uint8_t _ota_legacy[2];
   MqttControlStaged _staged;
   // The v2 key for this node's own command topic (TODO 17a): derived once per command
   // key, at boot and when the key changes, and kept in RAM only.
@@ -88,8 +87,6 @@ public:
   uint8_t slot() const { return _slot; }
   // `set mqtt.cmd on` with no slot configured chooses one (MyMesh::autoSetupMqttControl).
   void setSlotAndEnable(uint8_t slot) { _slot = slot; _enabled = true; save(); }
-  bool otaAuto() const { return _ota_auto; }
-  uint8_t otaCheckHours() const { return _ota_check_hours; }
   const char* pubkey() const { return _pubkey; }
   // The command key the v2 key was derived from, "" when none.
   const char* v2KeyFor() const { return _v2_key_for; }

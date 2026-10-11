@@ -6,6 +6,9 @@
 #ifdef WITH_AUTO_REPLY
   #include "AutoReply.h"
 #endif
+#ifdef WITH_MQTT_BRIDGE
+  #include <helpers/OtaAutoLogic.h>
+#endif
 #ifdef WITH_MQTT_COMMAND
   #include <helpers/bridges/MQTTBridge.h>
   #include "MqttControl.h"
@@ -28,8 +31,25 @@ class MQTTBridge;
  * field on a file upstream keeps editing.
  */
 class Fork {
-  friend class MyMesh;
   MyMesh& _mesh;
+#ifdef WITH_MQTT_BRIDGE
+  // Signed pull OTA, in every Observer image (ForkOta.cpp).
+  bool _ota_auto = false;
+  uint8_t _ota_check_hours = OTA_AUTO_CHECK_HOURS_DEFAULT;
+  uint32_t _ota_last_check = 0;        // unix secs of the last automatic check (RAM: a reboot re-checks)
+  uint32_t _ota_auto_start_at = 0;     // local unix secs the scheduled update may start, 0 = none
+  char _ota_last_result[64] = {0};
+  bool _image_valid = false;           // marked valid, or found not to need it
+  unsigned long _ota_proof_next = 0;
+
+  void otaBegin();
+  void otaSave();
+  bool handleOtaCommand(char* command, char* reply);
+  void otaLoop();
+  void autoOtaTick();
+  void markRunningImageValid(const char* proof);
+  void proveImageByBridge();
+#endif
 #ifdef WITH_AUTO_REPLY
   AutoReply _auto_reply;
 

@@ -1,6 +1,7 @@
 // Host tests for OtaAutoLogic.h: the paced automatic update's schedule.
 #include <gtest/gtest.h>
 #include "helpers/OtaAutoLogic.h"
+#include <string.h>
 
 TEST(OtaAuto, ACheckIsDueAtTheIntervalAndOnceAtFirstBootWithAClock) {
   EXPECT_FALSE(otaAutoCheckDue(0, 0, 24));                     // no clock: never
@@ -33,6 +34,80 @@ TEST(OtaAuto, NeverInTheNightWindow) {
   EXPECT_EQ(day + 14 * 3600 + 600, otaAutoStartAt(day + 14 * 3600, 600));
   // found at 05:00: 06:00 at the earliest, whatever the hold-off
   EXPECT_EQ(day + 6 * 3600, otaAutoStartAt(day + 5 * 3600, 0));
+}
+
+TEST(OtaAutoFile, RoundTripsAndReadsAnUnsetIntervalAsTheDefault) {
+  uint8_t buf[OTA_AUTO_FILE_LEN];
+  bool on = false;
+  uint8_t hours = 0;
+  otaAutoEncode(buf, true, 6);
+  ASSERT_TRUE(otaAutoDecode(buf, sizeof(buf), &on, &hours));
+  EXPECT_TRUE(on);
+  EXPECT_EQ(6, hours);
+  otaAutoEncode(buf, false, 0);
+  ASSERT_TRUE(otaAutoDecode(buf, sizeof(buf), &on, &hours));
+  EXPECT_FALSE(on);
+  EXPECT_EQ(OTA_AUTO_CHECK_HOURS_DEFAULT, hours);
+}
+
+TEST(OtaAutoFile, AShortOrVersionlessFileIsNotRead) {
+  uint8_t buf[OTA_AUTO_FILE_LEN] = { 0, 1, 6 };
+  bool on = false;
+  uint8_t hours = 9;
+  EXPECT_FALSE(otaAutoDecode(buf, sizeof(buf), &on, &hours));       // version 0
+  otaAutoEncode(buf, true, 6);
+  EXPECT_FALSE(otaAutoDecode(buf, sizeof(buf) - 1, &on, &hours));
+  EXPECT_FALSE(otaAutoDecode(NULL, sizeof(buf), &on, &hours));
+  EXPECT_FALSE(on);
+  EXPECT_EQ(9, hours);                                              // left alone on refusal
+}
+
+// A /mqttcontrol file as MqttControl::save() writes it.
+static size_t mqttControlFile(uint8_t* out, uint8_t ver, bool ota_on, uint8_t ota_hours) {
+  size_t n = 0;
+  out[n++] = ver;
+  out[n++] = 1;                                   // enabled
+  uint32_t counter = 1234;
+  memcpy(&out[n], &counter, 4); n += 4;
+  if (ver < 2) return n;
+  out[n++] = 3;                                   // slot
+  memset(&out[n], 'a', 64); n += 64;
+  out[n++] = 0;
+  if (ver < 3) return n;
+  out[n++] = ota_on ? 1 : 0;
+  out[n++] = ota_hours;
+  return n;
+}
+
+TEST(OtaAutoFile, TheSettingsUpToAr13AreReadFromTheCommandPlanesFile) {
+  uint8_t buf[96];
+  bool on = false;
+  uint8_t hours = 0;
+  size_t n = mqttControlFile(buf, 3, true, 12);
+  EXPECT_EQ((size_t)OTA_AUTO_LEGACY_LEN, n);
+  ASSERT_TRUE(otaAutoDecodeLegacy(buf, n, &on, &hours));
+  EXPECT_TRUE(on);
+  EXPECT_EQ(12, hours);
+  n = mqttControlFile(buf, 3, false, 0);
+  ASSERT_TRUE(otaAutoDecodeLegacy(buf, n, &on, &hours));
+  EXPECT_FALSE(on);
+  EXPECT_EQ(OTA_AUTO_CHECK_HOURS_DEFAULT, hours);
+}
+
+TEST(OtaAutoFile, AnOlderOrShortCommandPlaneFileHasNoSettings) {
+  uint8_t buf[96];
+  bool on = false;
+  uint8_t hours = 0;
+  EXPECT_FALSE(otaAutoDecodeLegacy(buf, mqttControlFile(buf, 2, true, 12), &on, &hours));
+  EXPECT_FALSE(otaAutoDecodeLegacy(buf, mqttControlFile(buf, 1, true, 12), &on, &hours));
+  EXPECT_FALSE(otaAutoDecodeLegacy(buf, mqttControlFile(buf, 3, true, 12) - 1, &on, &hours));
+}
+
+TEST(OtaProof, WithoutThePlaneTheBridgeAndTenMinutesProveAnImage) {
+  EXPECT_FALSE(otaImageProvenByBridge(0, true));
+  EXPECT_FALSE(otaImageProvenByBridge(10UL * 60UL * 1000UL - 1, true));
+  EXPECT_TRUE(otaImageProvenByBridge(10UL * 60UL * 1000UL, true));
+  EXPECT_FALSE(otaImageProvenByBridge(24UL * 3600UL * 1000UL, false));   // up a day, never published
 }
 
 int main(int argc, char** argv) {

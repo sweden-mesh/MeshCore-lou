@@ -400,7 +400,8 @@ get ota                        -> > channel <release URL>, auto off/24h, last ch
 
 A cable-flashed image is final: it is never rolled back. Rollback applies only to an image the
 node installs itself by OTA: such an image is kept only after it has verified one signed
-command. Until then, any reboot returns the node to the previous image.
+command (an image without remote command: once an MQTT slot has published and it has run ten
+minutes). Until then, any reboot returns the node to the previous image.
 
 ## 10. Reboot
 

@@ -1,5 +1,4 @@
 #include "MyMesh.h"
-#include <helpers/OtaAutoLogic.h>
 #include <algorithm>
 #include <stdlib.h>  // for qsort()
 #include <helpers/RxReservePacketManager.h>
@@ -1706,65 +1705,6 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
-
-#ifdef WITH_MQTT_BRIDGE
-
-#ifdef ESP_PLATFORM
-#include <esp_ota_ops.h>
-// The Arduino core would mark the image valid at boot; verifyRollbackLater() says
-// we will do it ourselves, after the image has shown it can be commanded.
-extern "C" bool verifyRollbackLater() { return true; }
-
-void MyMesh::markRunningImageValidOnce() {
-  static bool done = false;
-  if (done) return;
-  done = true;
-  const esp_partition_t* running = esp_ota_get_running_partition();
-  esp_ota_img_states_t state;
-  if (running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
-      state == ESP_OTA_IMG_PENDING_VERIFY) {
-    esp_ota_mark_app_valid_cancel_rollback();
-    MESH_DEBUG_PRINTLN("OTA: running image marked valid after a verified command");
-  }
-}
-#else
-void MyMesh::markRunningImageValidOnce() {}
-#endif
-
-#if defined(WITH_MQTT_COMMAND) && defined(OTA_MANIFEST_BASE)
-// Automatic pull OTA (ar-11): `set ota.auto on`. A check when the interval is up; when a
-// newer signed build is on offer, the update is scheduled after this node's own hold-off
-// (0..60 min from its key, so a region spreads over the hour) and never in the night
-// window, through the same deferred path `ota update` uses -- the bridge is paused,
-// the image verified, the node rebooted, and the old image returns if the new one
-// never verifies a command (docs/ota.md). The schedule is OtaAutoLogic.h.
-void MyMesh::autoOtaTick() {
-  if (!fork._mqtt_control.otaAuto() || _ota_update_at != 0) return;
-  uint32_t now = getRTCClock()->getCurrentTime();
-  if (now == 0) return;
-  uint32_t local_now = now + (uint32_t)((int32_t)_cli.getObserverPrefs()->timezone_offset * 3600);   // hours
-  if (_ota_auto_start_at) {
-    if (local_now >= _ota_auto_start_at) {
-      _ota_auto_start_at = 0;
-      Serial.println("OTA: automatic update starting");
-      beginDeferredOtaUpdate();
-    }
-    return;
-  }
-  if (!otaAutoCheckDue(now, _ota_last_check, fork._mqtt_control.otaCheckHours())) return;
-  _ota_last_check = now;
-  char reply[160];
-  bool available = _cli.getBoard()->otaFromManifest(getFirmwareVer(), true, reply);
-  StrHelper::strncpy(_ota_last_result, reply, sizeof(_ota_last_result));
-  Serial.print("OTA: automatic check: "); Serial.println(reply);
-  if (!available) return;
-  uint32_t holdoff = otaAutoHoldoffSecs(self_id.pub_key, PUB_KEY_SIZE);
-  _ota_auto_start_at = otaAutoStartAt(local_now, holdoff);
-  Serial.printf("OTA: update scheduled in %lu s\n", (unsigned long)(_ota_auto_start_at - local_now));
-}
-#endif
-
-#endif
 
 void MyMesh::loop() {
   // Check radio FIRST to ensure we don't miss incoming packets

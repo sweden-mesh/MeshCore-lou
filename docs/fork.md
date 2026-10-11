@@ -38,6 +38,7 @@ reads nor writes it:
 |---|---|
 | `/autoreply` | auto-reply |
 | `/mqttcontrol` | remote command |
+| `/ota` | pull OTA, in every Observer image; read from `/mqttcontrol` until it is first written |
 
 A node flashed from one combination to another therefore keeps every setting of a feature
 it loses, and finds them again when it gets the feature back.
@@ -52,7 +53,7 @@ All feature code lives in files of its own; the repeater's `MyMesh` holds one `F
 | H1, H2 | `MyMesh.h`: `#include "Fork.h"`, `friend class Fork; Fork fork { *this };` | the object, with access to the mesh's own state |
 | H3 | `MyMesh.h`: `searchChannelsByHash` and `onGroupDataRecv` forward to `fork` | auto-reply's channels and its answer to a test; without it, Mesh's defaults (no channel) |
 | H4 | `begin()`, after the ACL is loaded: `fork.begin(_fs)` | each feature reads its settings file |
-| H5 | `loop()`, after the radio: `fork.loop()` | the command queue, the ping, the automatic OTA check |
+| H5 | `loop()`, after the radio: `fork.loop()` | the command queue, the ping, the automatic OTA check, the proof that marks a new image good |
 | H6 | `handleCommand()`, after upstream's verbs: `else if (!fork.handleCommand(...))` | the features' CLI, before the common CLI |
 | H7 | `begin()`, before `bridge->begin()`: `fork.attachBridge(bridge)` | the control topics and the slot client ids |
 | H8 | `onAnonDataRecv()`, first line of the anonymous-request branch: `if (fork.onAnonRequest(...)) return;` | the private test request (sub-type `0xF0`), answered on auto-reply's own path and slot |

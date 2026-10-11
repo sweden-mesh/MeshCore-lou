@@ -31,10 +31,17 @@ mismatch or a short download aborts the slot untouched (`OtaVerifyLogic.h`, host
 
 The ESP32 bootloader's rollback is on in this core (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`), and
 the Arduino core would mark a new image valid at boot. This firmware says `verifyRollbackLater()`
-and marks the running image valid **only after it has verified one signed command** -- which
-means the radio came up, WiFi and the bridge reached the broker, and the owner can still reach
-the node. Until then any reboot (watchdog, power) returns to the previous image, and the
-control plane comes back with it. A bad release therefore costs one boot, not a visit.
+and marks the running image valid only once it has proved itself. Until then any reboot
+(watchdog, power) returns to the previous image. A bad release therefore costs one boot, not a
+visit. What counts as proof depends on the image's features ([fork.md](fork.md)):
+
+| image | proof |
+|---|---|
+| with remote command (`rc`) | it has **verified one signed command**: the radio came up, WiFi and the bridge reached the broker, and the owner can still reach the node -- and the control plane comes back with the old image if not |
+| without it | **some MQTT slot has published since boot, and it has run ten minutes**: the radio, WiFi, TLS and a broker all work, and it has outlived the watchdog and the reconnect ladder |
+
+Pull OTA is in every Observer image of this fork, whatever its features, because an image that
+pulled from another channel would replace itself with one that has none of them.
 
 ## What "newer" means
 
@@ -53,12 +60,17 @@ set ota.check.hours 24     # 1-168
 get ota                    # channel, auto, last check's result, whether an update is scheduled
 ```
 
+The two settings live in their own file, `/ota`, which every Observer image reads. Up to
+ar-13 they were the last two bytes of the command plane's `/mqttcontrol`; a node with no `/ota`
+yet reads them from there, and that file is never written for them, so an image that rolls back
+to ar-13 still finds what it had.
+
 With `ota.auto on` the node checks the channel at the interval and, when a newer signed build is
 on offer, updates -- after a hold-off of 0-60 minutes drawn from its own key, so a region's
 nodes spread across the hour rather than flash in the same minute, and never between 00:00 and
 06:00 node-local (`set timezone.offset`), when the mesh is being measured. The update then
 takes the same path as `ota update`: bridge paused, image verified, reboot, and the old image
-back if the new one never verifies a command. The schedule is `OtaAutoLogic.h`, host-tested in
+back if the new one never proves itself. The schedule is `OtaAutoLogic.h`, host-tested in
 `test_ota_auto`. `set ota.auto on` is a setting and travels over the control plane; `ota update`
 itself does not.
 

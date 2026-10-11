@@ -9,7 +9,7 @@
 
 #define MQTTCTRL_CONFIG_FILE  "/mqttcontrol"
 #define MQTTCTRL_CONFIG_VER_1 1
-#define MQTTCTRL_CONFIG_VER   3      // v3 (ar-11): ota.auto and ota.check.hours appended
+#define MQTTCTRL_CONFIG_VER   3      // v3 (ar-11): two automatic-OTA bytes appended
 
 // The broker permits meshcore/ and silently discards everything else -- a publish
 // elsewhere is accepted, acked and dropped, with no error visible to the sender.
@@ -45,11 +45,13 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 // MqttControlLogic.h is the independent second guard on the same door.
 MqttControl::MqttControl()
   : _fs(NULL), _enabled(false), _counter(0), _slot(0),
-    _ota_auto(false), _ota_check_hours(OTA_AUTO_CHECK_HOURS_DEFAULT), _v2_ready(false),
+    _v2_ready(false),
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW)
 {
   _pubkey[0] = 0;
+  _ota_legacy[0] = 0;
+  _ota_legacy[1] = OTA_AUTO_CHECK_HOURS_DEFAULT;
   _v2_key_for[0] = 0;
   _v2_topic[0] = 0;
   _staged.pending = false;
@@ -82,13 +84,7 @@ void MqttControl::load() {
         file.read(&_slot, 1);
         file.read((uint8_t *) _pubkey, sizeof(_pubkey));
       }
-      if (ver >= 3) {
-        uint8_t a = 0;
-        file.read(&a, 1);
-        file.read(&_ota_check_hours, 1);
-        _ota_auto = a != 0;
-      }
-      if (_ota_check_hours == 0) _ota_check_hours = OTA_AUTO_CHECK_HOURS_DEFAULT;
+      if (ver >= 3) file.read(_ota_legacy, sizeof(_ota_legacy));
       _enabled = enabled != 0;
       if (_slot > RUNTIME_MQTT_SLOTS) _slot = 0;
       _pubkey[sizeof(_pubkey) - 1] = 0;
@@ -107,9 +103,7 @@ void MqttControl::save() {
     file.write((const uint8_t *) &_counter, sizeof(_counter));
     file.write(&_slot, 1);
     file.write((const uint8_t *) _pubkey, sizeof(_pubkey));
-    uint8_t a = _ota_auto ? 1 : 0;
-    file.write(&a, 1);
-    file.write(&_ota_check_hours, 1);
+    file.write(_ota_legacy, sizeof(_ota_legacy));
     file.close();
   }
 }
@@ -304,33 +298,6 @@ bool MqttControl::handleCommand(uint32_t sender_timestamp, int slot_count,
     _enabled = on;
     save();
     strcpy(reply, "OK");
-    return true;
-  }
-
-  if (memcmp(command, "set ota.auto ", 13) == 0) {
-    bool on = false;
-    if (!autoReplyParseOnOff(&command[13], &on)) {
-      strcpy(reply, "Err - use: set ota.auto on|off");
-      return true;
-    }
-    _ota_auto = on;
-    save();
-    sprintf(reply, "OK - automatic update %s, checked every %u h, never 00-06 local", on ? "on" : "off", (unsigned)_ota_check_hours);
-    return true;
-  }
-  if (memcmp(command, "set ota.check.hours ", 20) == 0) {
-    int hours = atoi(&command[20]);
-    if (hours < OTA_AUTO_CHECK_HOURS_MIN || hours > OTA_AUTO_CHECK_HOURS_MAX) {
-      sprintf(reply, "Err - use: set ota.check.hours %d-%d", OTA_AUTO_CHECK_HOURS_MIN, OTA_AUTO_CHECK_HOURS_MAX);
-      return true;
-    }
-    _ota_check_hours = (uint8_t)hours;
-    save();
-    sprintf(reply, "OK - checked every %d h", hours);
-    return true;
-  }
-  if (strcmp(command, "get ota.auto") == 0) {
-    sprintf(reply, "> %s, every %u h", _ota_auto ? "on" : "off", (unsigned)_ota_check_hours);
     return true;
   }
 

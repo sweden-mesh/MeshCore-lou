@@ -199,7 +199,7 @@ void Fork::loopMqttControl() {
   // the control plane verified a signed command, so the owner can still reach the
   // node. Marked valid here and nowhere earlier; until then a reboot (watchdog, power)
   // returns to the previous image, and the control plane comes back with it.
-  if (outcome.authentic) _mesh.markRunningImageValidOnce();
+  if (outcome.authentic) markRunningImageValid("a verified command");
 }
 
 // The result topic is built once in setupMqttControl and is empty when the node

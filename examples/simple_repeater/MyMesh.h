@@ -117,13 +117,6 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks
   RegionEntry* recv_pkt_region;
   TransportKey default_scope;
   RateLimiter discover_limiter, anon_limiter;
-#ifdef WITH_MQTT_BRIDGE
-  void markRunningImageValidOnce();
-  void autoOtaTick();
-  uint32_t _ota_last_check = 0;        // unix secs of the last automatic check (RAM: a reboot re-checks)
-  uint32_t _ota_auto_start_at = 0;     // local unix secs the scheduled update may start, 0 = none
-  char _ota_last_result[64] = {0};
-#endif
   uint32_t pending_discover_tag;
   unsigned long pending_discover_until;
   bool region_load_active;
