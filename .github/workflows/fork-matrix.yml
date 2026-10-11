@@ -1,0 +1,135 @@
+# Every combination of the fork's features, for every board of both bases (TODO 22a ruling
+# 16): ar, rc and arrc x the 17 Observer repeaters from fork/observer, ar x the curated core
+# boards from fork/core (scripts/boards-core.txt). The host suites per combination first.
+#
+# Out: one artifact holding every image, its UNSIGNED manifest (<env>-<features>.unsigned.json,
+# Observer images only) and SHA256SUMS. Nothing here signs, tags or publishes: the release
+# key never leaves the release host, where the release step downloads this artifact, checks
+# the hashes and signs (ruling 15). The release key's PUBLIC half is baked into the images,
+# so it is an input here; the private half is not, and must never be.
+name: Fork build matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      observer_ref:
+        description: "fork/observer ref to build"
+        default: fork/observer
+      core_ref:
+        description: "fork/core ref to build"
+        default: fork/core
+      revision:
+        description: "the revision, lou-<nn>"
+        default: lou-14
+      release_pubkey:
+        description: "the release key's public half (64 hex), baked into every image"
+        default: 38A263C44AF0E60E766AEF4A2D985ECE2FC16FFC533BF453A37FF4CF15A9325C
+      build_number:
+        description: "FIRMWARE_BUILD_NUMBER"
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ inputs.observer_ref }}", path: observer, fetch-depth: 0 }
+      - uses: actions/checkout@v4
+        with: { ref: "${{ inputs.core_ref }}", path: core }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install platformio
+      - name: The fork's files are identical on both refs
+        working-directory: observer
+        run: |
+          git fetch --no-tags origin "${{ inputs.core_ref }}"
+          bash scripts/fork-check.sh HEAD FETCH_HEAD
+      - name: Each base still plans what it planned
+        run: |
+          (cd observer && bash scripts/check-build-matrix.sh)
+          (cd core && bash scripts/check-build-matrix.sh)
+      - id: plan
+        run: echo "matrix=$(REVISION='${{ inputs.revision }}' bash observer/scripts/ci-plan.sh observer core)" >> "$GITHUB_OUTPUT"
+
+  host-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { base: observer, envs: "-e native -e native_kiss_modem -e native_v2 -e native_ar -e native_rc -e native_arrc" }
+          - { base: core, envs: "-e native -e native_kiss_modem -e native_ar" }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ matrix.base == 'observer' && inputs.observer_ref || inputs.core_ref }}" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install platformio
+      - run: pio test ${{ matrix.envs }}
+
+  build:
+    needs: [plan, host-tests]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+    name: build ${{ matrix.env }} ${{ matrix.combo }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ matrix.base == 'observer' && inputs.observer_ref || inputs.core_ref }}" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ matrix.base }}-${{ matrix.env }}-${{ hashFiles('platformio.ini', 'variants/**/platformio.ini') }}
+      - run: pip install platformio
+      - name: Build
+        env:
+          REVISION: ${{ inputs.revision }}
+          OTA_RELEASE_PUBKEY: ${{ inputs.release_pubkey }}
+          FIRMWARE_BUILD_NUMBER: ${{ inputs.build_number }}
+        run: bash scripts/build-matrix.sh -c "${{ matrix.combo }}" -b "${{ matrix.env }}" -o dist
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: img-${{ matrix.base }}-${{ matrix.env }}-${{ matrix.combo }}
+          path: |
+            dist/*
+            !dist/logs
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: log-${{ matrix.base }}-${{ matrix.env }}-${{ matrix.combo }}
+          path: dist/logs
+
+  collect:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: "img-*", merge-multiple: true, path: candidate }
+      - name: Hashes, and every Observer image has its unsigned manifest
+        working-directory: candidate
+        run: |
+          missing=0
+          for img in *_observer_mqtt-*.bin; do
+            case "$img" in *-merged.bin) continue ;; esac
+            ls *.unsigned.json | xargs grep -l "\"fileName\": \"$img\"" >/dev/null || { echo "no manifest for $img"; missing=1; }
+          done
+          [ $missing -eq 0 ]
+          sha256sum * > SHA256SUMS
+          echo "$(ls | wc -l) files, $(ls *.unsigned.json | wc -l) unsigned manifests"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ inputs.revision }}
+          path: candidate/*
+          retention-days: 30

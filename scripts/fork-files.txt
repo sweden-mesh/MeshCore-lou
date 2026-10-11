@@ -46,3 +46,5 @@ test/data/build-matrix-core.txt
 test/data/build-matrix-observer.txt
 scripts/manifest.py
 test/data/manifest-lou-14-example.json
+.github/workflows/fork-matrix.yml
+scripts/ci-plan.sh
