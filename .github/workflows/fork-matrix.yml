@@ -25,8 +25,8 @@ on:
         description: "the release key's public half (64 hex), baked into every image"
         default: 38A263C44AF0E60E766AEF4A2D985ECE2FC16FFC533BF453A37FF4CF15A9325C
       build_number:
-        description: "FIRMWARE_BUILD_NUMBER"
-        default: "0"
+        description: "FIRMWARE_BUILD_NUMBER; leave empty, a number becomes .<n> in the version, which the lou-<nn>-<features>-<hash> name has no place for"
+        default: ""
 
 permissions:
   contents: read
