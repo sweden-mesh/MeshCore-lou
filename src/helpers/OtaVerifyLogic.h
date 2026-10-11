@@ -60,6 +60,40 @@ static inline bool otaManifestSignatureOk(const char* release_pubkey_hex, const 
   return ed25519_verify(sig, (const uint8_t*)msg, (size_t)n, pub) == 1;
 }
 
+// The combination (lou-14, TODO 22a ruling 22). A manifest also carries the variant it is
+// for (`<env>-<features>`, what the image asked for) and the features, and `sig2`, the
+// release key's signature over "sha256|version|file|variant|features". An image only ever
+// installs its own combination: the second signature must verify, and both names must be
+// the running image's own. `sig` alone says the image is ours, not that it is this node's;
+// a manifest without `sig2` (one cut before lou-14) is refused by every lou-14 image.
+enum OtaCombination {
+  OTA_COMBO_OK = 0,
+  OTA_COMBO_UNSIGNED = 1,        // no sig2, or one the release key did not make
+  OTA_COMBO_OTHER_VARIANT = 2,   // signed, but for another board or combination
+  OTA_COMBO_OTHER_FEATURES = 3,  // signed, but for another set of features
+};
+
+static inline OtaCombination otaManifestCombination(const char* release_pubkey_hex,
+                                                    const char* sha256_hex, const char* version,
+                                                    const char* file, const char* variant,
+                                                    const char* features, const char* sig2_hex,
+                                                    const char* own_variant, const char* own_features) {
+  if (release_pubkey_hex == NULL || sha256_hex == NULL || version == NULL || file == NULL ||
+      variant == NULL || features == NULL || sig2_hex == NULL) return OTA_COMBO_UNSIGNED;
+  if (strlen(release_pubkey_hex) != OTA_PUBKEY_HEX_LEN || strlen(sha256_hex) != OTA_SHA256_HEX_LEN ||
+      strlen(sig2_hex) != OTA_SIG_HEX_LEN) return OTA_COMBO_UNSIGNED;
+  uint8_t pub[32], sig[64];
+  if (!otaHexToBytes(release_pubkey_hex, OTA_PUBKEY_HEX_LEN, pub, sizeof(pub)) ||
+      !otaHexToBytes(sig2_hex, OTA_SIG_HEX_LEN, sig, sizeof(sig))) return OTA_COMBO_UNSIGNED;
+  char msg[OTA_SHA256_HEX_LEN + 1 + 64 + 1 + 256 + 1 + 96 + 1 + 8 + 1];
+  int n = snprintf(msg, sizeof(msg), "%s|%s|%s|%s|%s", sha256_hex, version, file, variant, features);
+  if (n <= 0 || (size_t)n >= sizeof(msg)) return OTA_COMBO_UNSIGNED;
+  if (ed25519_verify(sig, (const uint8_t*)msg, (size_t)n, pub) != 1) return OTA_COMBO_UNSIGNED;
+  if (own_variant == NULL || strcmp(variant, own_variant) != 0) return OTA_COMBO_OTHER_VARIANT;
+  if (own_features == NULL || strcmp(features, own_features) != 0) return OTA_COMBO_OTHER_FEATURES;
+  return OTA_COMBO_OK;
+}
+
 // Does the hash computed over the written bytes match the manifest's? Compared
 // as bytes, so case in the manifest does not matter; a short or malformed
 // manifest hash never matches.

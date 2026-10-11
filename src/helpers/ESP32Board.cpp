@@ -77,6 +77,7 @@ bool ESP32Board::startOTAUpdate(const char* id, char reply[], bool force_ap) {
 #include <ArduinoJson.h>
 #include <mbedtls/sha256.h>
 #include "OtaVerifyLogic.h"
+#include <ForkFeatures.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_partition.h>
@@ -283,6 +284,11 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   char manifest_sha[OTA_SHA256_HEX_LEN + 1] = {0}, manifest_sig[OTA_SIG_HEX_LEN + 1] = {0};
   strncpy(manifest_sha, doc["sha256"] | "", sizeof(manifest_sha) - 1);
   strncpy(manifest_sig, doc["sig"] | "", sizeof(manifest_sig) - 1);
+  // The combination it is for (lou-14): signed again, with the names, as sig2.
+  char manifest_variant[96] = {0}, manifest_features[8] = {0}, manifest_sig2[OTA_SIG_HEX_LEN + 1] = {0};
+  strncpy(manifest_variant, doc["variant"] | "", sizeof(manifest_variant) - 1);
+  strncpy(manifest_features, doc["features"] | "", sizeof(manifest_features) - 1);
+  strncpy(manifest_sig2, doc["sig2"] | "", sizeof(manifest_sig2) - 1);
   doc.clear();
 
   if (!file_url[0]) {
@@ -293,6 +299,19 @@ bool ESP32Board::otaFromManifestImpl(const char* current_ver, bool dry_run, char
   if (!otaManifestSignatureOk(OTA_RELEASE_PUBKEY, manifest_sha, avail_version, file_url, manifest_sig)) {
     strcpy(reply, "ERR: manifest not signed by the release key - refused");
     return false;
+  }
+  switch (otaManifestCombination(OTA_RELEASE_PUBKEY, manifest_sha, avail_version, file_url,
+                                 manifest_variant, manifest_features, manifest_sig2,
+                                 OTA_VARIANT, FORK_FEATURE_TOKEN)) {
+    case OTA_COMBO_OK:
+      break;
+    case OTA_COMBO_UNSIGNED:
+      strcpy(reply, "ERR: manifest does not sign its combination (sig2) - refused");
+      return false;
+    default:
+      snprintf(reply, 160, "ERR: manifest is for %s, this node is %s - refused",
+               manifest_variant, OTA_VARIANT);
+      return false;
   }
 #else
   strcpy(reply, "ERR: no release key in this build - an unsigned image is never flashed");

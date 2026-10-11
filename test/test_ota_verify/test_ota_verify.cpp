@@ -130,6 +130,66 @@ TEST(OtaNewer, LouContinuesTheArCounter) {
                                              "esp32s3-v1.17.1-lou-14-ar-1a2b3c4d", -1, -1, true));
 }
 
+// ---- the combination: sig2 over the variant and the features (lou-14) ---------------
+
+static std::string sign2(const std::string& sha, const std::string& ver, const std::string& file,
+                         const std::string& variant, const std::string& features) {
+  return signManifest(sha, ver, file + "|" + variant + "|" + features);
+}
+
+static const char* V = "esp32s3-v1.17.1-lou-14-ar-1a2b3c4d";
+static const char* F = "https://github.com/the-louie/MeshCore-observer/releases/download/v1.17.1-lou-14/"
+                       "Heltec_v3_repeater_observer_mqtt-esp32s3-v1.17.1-lou-14-ar-1a2b3c4d.bin";
+
+TEST(OtaCombination, OnlyItsOwnCombinationIsAccepted) {
+  makeReleaseKey();
+  std::string s2 = sign2(SHA, V, F, "Heltec_v3_repeater_observer_mqtt-ar", "ar");
+  EXPECT_EQ(OTA_COMBO_OK, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), V, F,
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar", s2.c_str(),
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+}
+
+TEST(OtaCombination, AnArNodeRefusesAnArrcManifest) {
+  // Properly signed, for the same board -- but not this node's features.
+  makeReleaseKey();
+  std::string s2 = sign2(SHA, V, F, "Heltec_v3_repeater_observer_mqtt-arrc", "arrc");
+  EXPECT_EQ(OTA_COMBO_OTHER_VARIANT, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), V, F,
+            "Heltec_v3_repeater_observer_mqtt-arrc", "arrc", s2.c_str(),
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+  // Even under this node's own variant name, the features are checked on their own.
+  s2 = sign2(SHA, V, F, "Heltec_v3_repeater_observer_mqtt-ar", "arrc");
+  EXPECT_EQ(OTA_COMBO_OTHER_FEATURES, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), V, F,
+            "Heltec_v3_repeater_observer_mqtt-ar", "arrc", s2.c_str(),
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+}
+
+TEST(OtaCombination, AnotherBoardIsRefused) {
+  makeReleaseKey();
+  std::string s2 = sign2(SHA, V, F, "heltec_v4_repeater_observer_mqtt-ar", "ar");
+  EXPECT_EQ(OTA_COMBO_OTHER_VARIANT, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), V, F,
+            "heltec_v4_repeater_observer_mqtt-ar", "ar", s2.c_str(),
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+}
+
+TEST(OtaCombination, ANameEditedAfterSigningOrNoSig2IsUnsigned) {
+  makeReleaseKey();
+  std::string s2 = sign2(SHA, V, F, "Heltec_v3_repeater_observer_mqtt-arrc", "arrc");
+  // The channel relabels an arrc manifest as this node's: sig2 no longer verifies.
+  EXPECT_EQ(OTA_COMBO_UNSIGNED, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), V, F,
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar", s2.c_str(),
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+  // sig (the pre-lou-14 signature) in sig2's place does not verify either.
+  std::string s1 = signManifest(SHA, V, F);
+  EXPECT_EQ(OTA_COMBO_UNSIGNED, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), V, F,
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar", s1.c_str(),
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+  EXPECT_EQ(OTA_COMBO_UNSIGNED, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), V, F,
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar", "",
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+  EXPECT_EQ(OTA_COMBO_UNSIGNED, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), V, F,
+            NULL, "ar", s2.c_str(), "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+}
+
 TEST(OtaNewer, TheRunningVersionIsComparedWhole) {
   // Up to lou-14 the firmware compared only the token before the first '-' -- "esp32s3"
   // since ar-11's MCU prefix, "v1.17.1" before it -- which carries no revision, so every
@@ -149,6 +209,39 @@ TEST(OtaNewer, TheRunningVersionIsComparedWhole) {
   EXPECT_STREQ("dev", tok);
   otaVersionToken(NULL, tok, sizeof(tok));
   EXPECT_STREQ("", tok);
+}
+
+// The manifest scripts/manifest.py signs, read back here: the release tooling and the
+// node agree on both signed strings byte for byte. Signed with this suite's test key
+// (seed 40..5f), never the release key.
+static std::string jsonField(const std::string& doc, const std::string& key) {
+  size_t at = doc.find("\"" + key + "\": \"");
+  if (at == std::string::npos) return "";
+  at += key.size() + 5;
+  return doc.substr(at, doc.find('"', at) - at);
+}
+
+TEST(OtaCombination, TheReleaseToolsManifestVerifiesOnTheNode) {
+  makeReleaseKey();
+  EXPECT_EQ("2543B92FF1095511476ADC8369DB6DDC933665A11978DDA1404EE1066CA9559D", R_PUB_HEX);
+  FILE* f = fopen("test/data/manifest-lou-14-example.json", "r");
+  ASSERT_NE(nullptr, f) << "run from the repository root";
+  std::string doc;
+  char buf[512];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) doc.append(buf, n);
+  fclose(f);
+  const std::string sha = jsonField(doc, "sha256"), ver = jsonField(doc, "version"),
+                    file = jsonField(doc, "file"), variant = jsonField(doc, "variant"),
+                    features = jsonField(doc, "features");
+  EXPECT_TRUE(otaManifestSignatureOk(R_PUB_HEX.c_str(), sha.c_str(), ver.c_str(), file.c_str(),
+                                     jsonField(doc, "sig").c_str()));
+  const std::string sig2 = jsonField(doc, "sig2");
+  EXPECT_EQ(OTA_COMBO_OK, otaManifestCombination(R_PUB_HEX.c_str(), sha.c_str(), ver.c_str(), file.c_str(),
+            variant.c_str(), features.c_str(), sig2.c_str(), "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+  EXPECT_EQ(OTA_COMBO_OTHER_VARIANT, otaManifestCombination(R_PUB_HEX.c_str(), sha.c_str(), ver.c_str(),
+            file.c_str(), variant.c_str(), features.c_str(), sig2.c_str(),
+            "Heltec_v3_repeater_observer_mqtt-arrc", "arrc"));
 }
 
 int main(int argc, char** argv) {

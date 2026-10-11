@@ -27,6 +27,31 @@ mismatch or a short download aborts the slot untouched (`OtaVerifyLogic.h`, host
   "partSig": "<the partition signature of the build>" }
 ```
 
+## Only the node's own combination
+
+From lou-14 an image asks its channel for `<env>-<features>.json`
+(`Heltec_v3_repeater_observer_mqtt-arrc.json`), the manifest of its own board and combination
+([fork.md](fork.md)). The manifest names both -- `"variant"` and `"features"` -- and carries a
+second signature by the release key, `sig2`, over `"<sha256>|<version>|<file>|<variant>|<features>"`.
+The node refuses a manifest whose `sig2` does not verify, or whose variant or features are not
+its own (`otaManifestCombination`, `test_ota_verify`): an `ar` node is never offered, and never
+takes, an `arrc` image, whatever the channel serves under its name. There is no `<env>.json`
+alias for the nodes on ar-11..13 (TODO 22a ruling 3): they are re-flashed by hand.
+
+```
+{ "version": "esp32s3-v1.17.1-lou-14-ar-1a2b3c4d", "baseVersion": "v1.17.1", "build": 0,
+  "fileName": "Heltec_v3_repeater_observer_mqtt-esp32s3-v1.17.1-lou-14-ar-1a2b3c4d.bin",
+  "file": "https://github.com/.../download/v1.17.1-lou-14/<fileName>",
+  "sha256": "...", "partSig": "...", "variant": "Heltec_v3_repeater_observer_mqtt-ar",
+  "features": "ar", "sig": "<128 hex>", "sig2": "<128 hex>" }
+```
+
+`scripts/manifest.py unsigned` writes it without `file`, `sig` and `sig2` where the images are
+built (`build-matrix.sh`, CI); `scripts/manifest.py sign` adds them on the release host, after
+checking that the image is the one described and that the version, variant and features agree.
+`test/data/manifest-lou-14-example.json`, signed by `manifest.py` with a test key, is verified by
+the node's own code in `test_ota_verify`.
+
 ## The new image must prove itself, or the old one returns
 
 The ESP32 bootloader's rollback is on in this core (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`), and
