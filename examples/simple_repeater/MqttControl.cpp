@@ -1,7 +1,6 @@
-#include "MqttControl.h"
-
 #ifdef WITH_MQTT_COMMAND
 
+#include "MqttControl.h"
 #include <helpers/OtaAutoLogic.h>
 
 #include <helpers/MQTTPresets.h>
@@ -291,7 +290,7 @@ bool MqttControl::handleCommand(uint32_t sender_timestamp, int slot_count,
 
   if (memcmp(command, "set mqtt.cmd ", 13) == 0) {
     bool on = false;
-    if (!autoReplyParseOnOff(&command[13], &on)) {
+    if (!forkParseOnOff(&command[13], &on)) {
       strcpy(reply, "Err - use: set mqtt.cmd on|off");
       return true;
     }

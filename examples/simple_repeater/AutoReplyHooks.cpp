@@ -214,7 +214,7 @@ bool Fork::triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply
   }
 
   if (id != NULL && id_len > 0) {
-    snprintf(reply, MQTTCTRL_MAX_REPLY, "OK - probe sent, id %.*s", (int)id_len, id);
+    snprintf(reply, AUTOREPLY_MAX_REPLY, "OK - probe sent, id %.*s", (int)id_len, id);
   } else {
     strcpy(reply, "OK - probe sent");
   }
@@ -266,10 +266,10 @@ bool Fork::triggerPrivateProbe(const char* pubkey_hex, const char* id, size_t id
   }
 
   if (id != NULL && id_len > 0) {
-    snprintf(reply, MQTTCTRL_MAX_REPLY, "OK - private request sent to %.8s.., id %.*s",
+    snprintf(reply, AUTOREPLY_MAX_REPLY, "OK - private request sent to %.8s.., id %.*s",
              pubkey_hex, (int)id_len, id);
   } else {
-    snprintf(reply, MQTTCTRL_MAX_REPLY, "OK - private request sent to %.8s..", pubkey_hex);
+    snprintf(reply, AUTOREPLY_MAX_REPLY, "OK - private request sent to %.8s..", pubkey_hex);
   }
   return true;
 }

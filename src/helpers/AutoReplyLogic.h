@@ -6,6 +6,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "ForkText.h"
 #include "MQTTObserverValidation.h"
 #include "SlidingBudget.h"
 
@@ -911,28 +912,6 @@ static inline bool autoReplyParsePrivateTest(char* text, const char* keyword,
   *end = 0;
 
   return autoReplyMatchTrigger(msg, keyword, id, id_len);
-}
-
-// Read an 'on' or 'off' argument, the form every boolean setting in this feature
-// takes. The token ends at the first space or line ending, so a value typed with
-// trailing whitespace still reads, while a word that merely starts with 'on' does
-// not. 'out' is left alone unless a whole valid token was found.
-static inline bool autoReplyParseOnOff(const char* arg, bool* out) {
-  if (arg == NULL || out == NULL) return false;
-
-  while (*arg == ' ') arg++;
-  size_t len = 0;
-  while (arg[len] && arg[len] != ' ' && arg[len] != '\r' && arg[len] != '\n') len++;
-
-  if (len == 2 && strncasecmp(arg, "on", 2) == 0) {
-    *out = true;
-    return true;
-  }
-  if (len == 3 && strncasecmp(arg, "off", 3) == 0) {
-    *out = false;
-    return true;
-  }
-  return false;
 }
 
 // The name a mode is configured and reported by. Silent is deliberately absent:

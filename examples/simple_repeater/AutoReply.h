@@ -13,6 +13,8 @@
 #endif
 
 #define AUTOREPLY_MAX_TEXT    112
+// what a CLI reply may hold: the buffer every handleCommand caller passes
+#define AUTOREPLY_MAX_REPLY   160
 // the requester's name is echoed back so they can pick their reply out of several
 #define AUTOREPLY_MAX_SENDER  16
 // '#test-' plus the longest region name: a companion's 32-byte channel name

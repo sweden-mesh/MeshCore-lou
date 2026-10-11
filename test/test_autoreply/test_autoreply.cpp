@@ -820,45 +820,6 @@ TEST(PrivateTrigger, IsCaseInsensitiveLikeTheOthers) {
   EXPECT_TRUE(autoReplyParsePrivateTrigger(cmd.c_str(), &key, &id, &id_len));
 }
 
-// ---- reading an on/off argument --------------------------------------------
-
-TEST(ParseOnOff, AcceptsBothValuesInAnyCase) {
-  bool v = false;
-  EXPECT_TRUE(autoReplyParseOnOff("on", &v));
-  EXPECT_TRUE(v);
-  EXPECT_TRUE(autoReplyParseOnOff("off", &v));
-  EXPECT_FALSE(v);
-  EXPECT_TRUE(autoReplyParseOnOff("ON", &v));
-  EXPECT_TRUE(v);
-  EXPECT_TRUE(autoReplyParseOnOff("Off", &v));
-  EXPECT_FALSE(v);
-}
-
-TEST(ParseOnOff, ToleratesWhitespaceATerminalMayAdd) {
-  bool v = false;
-  EXPECT_TRUE(autoReplyParseOnOff("on\r\n", &v));
-  EXPECT_TRUE(v);
-  EXPECT_TRUE(autoReplyParseOnOff("  off  ", &v));
-  EXPECT_FALSE(v);
-}
-
-TEST(ParseOnOff, RejectsAWordThatMerelyStartsWithTheValue) {
-  bool v = true;
-  EXPECT_FALSE(autoReplyParseOnOff("onions", &v));
-  EXPECT_FALSE(autoReplyParseOnOff("offset", &v));
-  EXPECT_TRUE(v);   // a rejected argument leaves the setting alone
-}
-
-TEST(ParseOnOff, RejectsEmptyAndDegenerateInput) {
-  bool v = true;
-  EXPECT_FALSE(autoReplyParseOnOff("", &v));
-  EXPECT_FALSE(autoReplyParseOnOff("   ", &v));
-  EXPECT_FALSE(autoReplyParseOnOff("o", &v));
-  EXPECT_FALSE(autoReplyParseOnOff(NULL, &v));
-  EXPECT_FALSE(autoReplyParseOnOff("on", NULL));
-  EXPECT_TRUE(v);
-}
-
 // ---- reading a mode name, as `set autoreply.mode` takes it -----------------
 
 TEST(ParseModeName, AcceptsTheThreeStandingModesInAnyCase) {

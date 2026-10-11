@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <ForkFeatures.h>
 #include <Mesh.h>
-#include <helpers/AutoReplyLogic.h>
+#include <helpers/ForkText.h>
 #include <helpers/IdentityStore.h>
 #include <helpers/MqttControlLogic.h>
 #include <helpers/MqttControlV2.h>

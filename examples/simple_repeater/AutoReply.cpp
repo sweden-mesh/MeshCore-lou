@@ -1,7 +1,6 @@
-#include "AutoReply.h"
-
 #ifdef WITH_AUTO_REPLY
 
+#include "AutoReply.h"
 #include <helpers/TxtDataHelpers.h>
 
 #define AUTOREPLY_CONFIG_FILE   "/autoreply"
@@ -181,7 +180,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
   describeChannels(where, sizeof(where));
 
   if (memcmp(command, "set autoreply ", 14) == 0) {
-    if (!autoReplyParseOnOff(&command[14], &_enabled)) {
+    if (!forkParseOnOff(&command[14], &_enabled)) {
       strcpy(reply, "Err - use: set autoreply on|off");
       return true;
     }
@@ -200,7 +199,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
   }
 
   if (memcmp(command, "set autoreply.legacy ", 21) == 0) {
-    if (!autoReplyParseOnOff(&command[21], &_legacy)) {
+    if (!forkParseOnOff(&command[21], &_legacy)) {
       strcpy(reply, "Err - use: set autoreply.legacy on|off");
       return true;
     }
@@ -229,7 +228,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
   }
 
   if (memcmp(command, "set autoreply.direct.flood ", 27) == 0) {
-    if (!autoReplyParseOnOff(&command[27], &_direct_flood)) {
+    if (!forkParseOnOff(&command[27], &_direct_flood)) {
       strcpy(reply, "Err - use: set autoreply.direct.flood on|off");
       return true;
     }
@@ -349,7 +348,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
   }
 
   if (memcmp(command, "set autoreply.private ", 22) == 0) {
-    if (!autoReplyParseOnOff(&command[22], &_private)) {
+    if (!forkParseOnOff(&command[22], &_private)) {
       strcpy(reply, "Err - use: set autoreply.private on|off");
       return true;
     }

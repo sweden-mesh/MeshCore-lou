@@ -6,6 +6,8 @@
 
 #ifdef WITH_MQTT_BRIDGE
 
+#include <helpers/ForkText.h>
+
 #define OTA_SETTINGS_FILE        "/ota"
 #define OTA_LEGACY_SETTINGS_FILE "/mqttcontrol"
 
@@ -76,7 +78,7 @@ bool Fork::handleOtaCommand(char* command, char* reply) {
   }
   if (memcmp(command, "set ota.auto ", 13) == 0) {
     bool on = false;
-    if (!autoReplyParseOnOff(&command[13], &on)) {
+    if (!forkParseOnOff(&command[13], &on)) {
       strcpy(reply, "Err - use: set ota.auto on|off");
       return true;
     }

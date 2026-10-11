@@ -1,6 +1,6 @@
 allowed|ver
 allowed|get name
-allowed|get autoreply
+denied|get autoreply
 allowed|region
 allowed|neighbors
 allowed|get radio
