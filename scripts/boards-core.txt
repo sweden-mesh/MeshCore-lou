@@ -2,8 +2,15 @@
 # the JKG fleet. Upstream's env names; one per line. Built by scripts/build-matrix.sh on
 # fork/core for each core combination.
 #
+# What the JKG fleet runs, as far as it is known (2026-10-11): the operator names Heltec T096
+# (nRF52840) and Seeed XIAO boards; Beacon's hardware data covers the 22 Observer nodes only
+# (9 Heltec V3, 7 XIAO S3 WIO, 3 Heltec V4.3 OLED, 1 V4 TFT, 1 V4 OLED, 1 T-Beam). The
+# hardware of the 22 repeaters that are not Observers is unknown; the rest of this list is
+# the common boards.
+#
 # nRF52840
 RAK_4631_repeater
+Heltec_t096_repeater
 Heltec_t114_repeater
 Heltec_t114_without_display_repeater
 Xiao_nrf52_repeater
