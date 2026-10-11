@@ -124,7 +124,8 @@ From lou-14 (TODO 22a rulings 15, 16, 25):
    `scripts/release-candidate.sh -c <candidate> -t v1.17.1-lou-14`. It refuses a set that does not
    hold together -- a hash that does not match, an image without its manifest or a manifest
    without its image, two of one variant, another revision, an image without this key's public
-   half -- then signs every manifest (`sig` and `sig2`), verifies each back, and checks the asset count against GitHub's limit of 1 000 per release
+   half -- then signs every manifest (`sig` and `sig2`), verifies each back, writes and verifies the
+   signed `firmware-index.json` (one row for every image, [fork.md](fork.md)), and checks the asset count against GitHub's limit of 1 000 per release
    (lou-14: about 180).
 3. **Publish.** Add `RELEASE_NOTES.md` to the assembled directory and rerun with `-p`, or run the
    `gh release create` it prints. The release must be the repository's *latest*: the nodes'

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Turn a CI candidate into one signed release, on the release host (TODO 22a ruling 15).
+# Turn a CI candidate into one signed release, on the release host (TODO 22a rulings 15, 25).
 #
 #   scripts/release-candidate.sh -c <candidate-dir> -t <tag> [-k key-file] [-r owner/repo]
 #                                [-o out-dir] [-p]
@@ -16,8 +16,9 @@
 # what SHA256SUMS says, an Observer image without its manifest or a manifest without its
 # image, two images for one variant, an image of another revision, or an Observer image
 # that does not carry this key's public half (it could never verify what is signed here).
-# Then signs every manifest (scripts/manifest.py sign), verifies each signature back, and
-# counts the assets against GitHub's limit.
+# Then signs every manifest (scripts/manifest.py sign), verifies each signature back, writes
+# and verifies the signed index the web page reads (firmware-index.json), and counts the
+# assets against GitHub's limit.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PY="${PYTHON:-python3}"
@@ -75,11 +76,18 @@ for m in *.unsigned.json; do
     || fail "$variant.json did not verify after signing"
 done
 
+"$PY" "$ROOT/scripts/manifest.py" index "$OUT" "$TAG" "$base_url" "$KEY" >/dev/null
+"$PY" "$ROOT/scripts/manifest.py" verify-index "$OUT/firmware-index.json" "$PUB" >/dev/null \
+  || fail "firmware-index.json did not verify after signing"
+rows=$("$PY" -c 'import json,sys; print(" ".join(sorted(r["file"] for r in json.load(open(sys.argv[1]))["images"])))' "$OUT/firmware-index.json")
+files=$(cd "$OUT" && ls | grep -E '\.(bin|uf2|zip|hex)$' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+[ "$rows" = "$files" ] || fail "firmware-index.json does not list exactly the release's images"
+
 cd "$OUT"
 sha256sum * > SHA256SUMS
 count=$(ls | wc -l)
 [ "$count" -le "$MAX_ASSETS" ] || fail "$count assets, over GitHub's $MAX_ASSETS per release"
-echo "release $TAG: $count assets in $OUT ($(ls *.json | wc -l) signed manifests), key ${PUB:0:12}..."
+echo "release $TAG: $count assets in $OUT ($(ls "$CAND"/*.unsigned.json 2>/dev/null | wc -l) signed manifests, firmware-index.json), key ${PUB:0:12}..."
 cmd=(gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes-file RELEASE_NOTES.md --prerelease)
 if [ "$PUBLISH" -eq 1 ]; then
   [ -f RELEASE_NOTES.md ] || fail "no RELEASE_NOTES.md in $OUT"

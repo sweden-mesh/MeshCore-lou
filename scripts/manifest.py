@@ -6,6 +6,8 @@ the release key is (TODO 22a rulings 15, 22; docs/ota.md).
                          <partsig-file> <out.json>
     manifest.py sign <unsigned.json> <image.bin> <file-url> <release-key-file> <out.json>
     manifest.py verify <manifest.json> <release-pubkey-hex>
+    manifest.py index <release-dir> <tag> <base-url> <release-key-file>
+    manifest.py verify-index <firmware-index.json> <release-pubkey-hex>
     manifest.py --pubkey <release-key-file>       prints the public key build.sh bakes in
     manifest.py --keygen <release-key-file>       makes a new key (refuses to overwrite)
 
@@ -110,6 +112,66 @@ def verify(manifest_json, pub_hex):
     return 0
 
 
+IMAGE_RE = re.compile(r"^(?P<env>.+?)-(?P<mcu>[a-z0-9]+)-(?P<base>v[0-9.]+)-(?P<rev>lou-\d+)-"
+                      r"(?P<features>[a-z]+)-(?P<hash>[0-9a-f]{7,})(?P<merged>-merged)?\.(?P<ext>bin|uf2|zip|hex)$")
+FLASH = {"bin": "app image at 0x10000 (OTA, or a cable flash that keeps the settings)",
+         "merged": "full image at 0x0 (a clean device)",
+         "uf2": "drag and drop onto the bootloader drive",
+         "zip": "nRF DFU package", "hex": "SWD"}
+
+
+def index_rows(release_dir, base_url):
+    """One row per image file in the release, from its name and its bytes: the page reads
+    this and never parses a name itself (TODO 22a ruling 25)."""
+    rows = []
+    for name in sorted(os.listdir(release_dir)):
+        m = IMAGE_RE.match(name)
+        if not m:
+            continue
+        form = "merged" if m.group("merged") else m.group("ext")
+        env = m.group("env")
+        rows.append({
+            "board": env, "base": "observer" if env.endswith("_observer_mqtt") else "core",
+            "features": m.group("features"), "mcu": m.group("mcu"),
+            "version": f"{m.group('mcu')}-{m.group('base')}-{m.group('rev')}-{m.group('features')}-{m.group('hash')}",
+            "file": name, "url": f"{base_url}/{name}", "sha256": sha256_of(os.path.join(release_dir, name)),
+            "form": form, "flash": FLASH[form],
+            "manifest": f"{env}-{m.group('features')}.json" if env.endswith("_observer_mqtt") else None,
+        })
+    return rows
+
+
+def canonical(doc):
+    return json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+
+
+def index(release_dir, tag, base_url, key_file):
+    from Crypto.Signature import eddsa
+    rows = index_rows(release_dir, base_url)
+    if not rows:
+        sys.exit(f"no images in {release_dir}")
+    body = {"format": 1, "release": tag, "images": rows}
+    sig = eddsa.new(key_from_file(key_file), "rfc8032").sign(canonical(body)).hex()
+    write(os.path.join(release_dir, "firmware-index.json"), dict(body, sig=sig))
+    print(f"firmware-index.json: {len(rows)} images, signed")
+
+
+def verify_index(index_json, pub_hex):
+    """The signature covers the index with `sig` taken out, as canonical JSON (sorted keys,
+    no spaces, ASCII): exit 0 when it is the release key's, 1 otherwise."""
+    from Crypto.Signature import eddsa
+    doc = json.load(open(index_json, encoding="utf-8"))
+    sig = doc.pop("sig", "")
+    try:
+        eddsa.new(eddsa.import_public_key(bytes.fromhex(pub_hex)), "rfc8032").verify(
+            canonical(doc), bytes.fromhex(sig))
+    except ValueError:
+        print(f"{index_json}: not signed by {pub_hex[:12]}...")
+        return 1
+    print(f"{index_json}: {len(doc['images'])} images, signed")
+    return 0
+
+
 def write(out, manifest):
     with open(out, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1)
@@ -136,6 +198,11 @@ def main(argv):
         return 0
     if len(argv) == 4 and argv[1] == "verify":
         return verify(*argv[2:])
+    if len(argv) == 6 and argv[1] == "index":
+        index(*argv[2:])
+        return 0
+    if len(argv) == 4 and argv[1] == "verify-index":
+        return verify_index(*argv[2:])
     sys.exit(__doc__)
 
 
