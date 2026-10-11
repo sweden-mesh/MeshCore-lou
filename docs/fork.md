@@ -44,7 +44,10 @@ The whole matrix runs in GitHub Actions, `.github/workflows/fork-matrix.yml`, st
 with the two refs and the revision: the host suites per combination, then one job per image
 (63 at lou-14), then one artifact, `candidate-<revision>`, with every image, every Observer
 image's unsigned manifest and `SHA256SUMS`. It signs nothing and publishes nothing; the
-release step on the release host does both.
+release step on the release host does both. Every pull request and push to either branch runs
+`.github/workflows/fork-pr.yml`: each combination of the base on one ESP32 and one nRF52 board
+(`scripts/ci-pr-plan.sh`), and on `fork/observer` the XIAO S3 WIO image built as a release
+builds it, checked free of debug lines by `scripts/check-quiet-image.sh`.
 Without any switch the image is the Observer repeater plus the fork's OTA channel.
 
 ## Tests per combination
