@@ -216,9 +216,10 @@ build_firmware() {
   fi
 
   # add firmware version info to end of existing platformio build flags in environment vars.
-  # OTA_VARIANT is the env name ($1) — it selects this build's slim per-variant manifest
-  # (<OTA_MANIFEST_BASE>/<OTA_VARIANT>.json) that the observer pull-OTA fetches.
-  export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DFIRMWARE_BUILD_DATE='\"${FIRMWARE_BUILD_DATE}\"' -DFIRMWARE_VERSION='\"${EMBEDDED_VERSION_STRING}\"' -DOTA_VARIANT='\"$1\"' -DOTA_MANIFEST_BASE='\"${OTA_MANIFEST_BASE_URL}\"' ${OTA_PUBKEY_FLAG}"
+  # OTA_VARIANT selects this build's slim per-variant manifest
+  # (<OTA_MANIFEST_BASE>/<OTA_VARIANT>.json) that the observer pull-OTA fetches: the env
+  # name ($1), or what the caller sets -- the fork's build-matrix.sh names the features too.
+  export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DFIRMWARE_BUILD_DATE='\"${FIRMWARE_BUILD_DATE}\"' -DFIRMWARE_VERSION='\"${EMBEDDED_VERSION_STRING}\"' -DOTA_VARIANT='\"${OTA_VARIANT:-$1}\"' -DOTA_MANIFEST_BASE='\"${OTA_MANIFEST_BASE_URL}\"' ${OTA_PUBKEY_FLAG}"
 
   # disable debug flags if requested
   disable_debug_flags

@@ -1,0 +1,18 @@
+# The curated core boards (TODO 22a ruling 9): the common boards, and every nRF52 board in
+# the JKG fleet. Upstream's env names; one per line. Built by scripts/build-matrix.sh on
+# fork/core for each core combination.
+#
+# nRF52840
+RAK_4631_repeater
+Heltec_t114_repeater
+Heltec_t114_without_display_repeater
+Xiao_nrf52_repeater
+ProMicro_repeater
+SenseCap_Solar_repeater
+ThinkNode_M1_repeater
+# ESP32-S3
+Heltec_v3_repeater
+heltec_v4_repeater
+Station_G2_repeater
+LilyGo_T3S3_sx1262_repeater
+Xiao_S3_WIO_repeater

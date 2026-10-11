@@ -27,13 +27,19 @@ that has none of its features.
 ## Building one combination
 
 The switches are passed by the build script, never written into a variant's
-`platformio.ini`, so every board builds every combination unchanged:
+`platformio.ini`, so every board builds every combination unchanged.
+`scripts/build-matrix.sh` builds every combination for every board of the base it runs on
+(`ar rc arrc` × the 17 Observer boards on `fork/observer`, `ar` × `scripts/boards-core.txt` on
+`fork/core`), or the ones named with `-c` and `-b`:
 
 ```sh
-PLATFORMIO_BUILD_FLAGS="-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1" \
-  bash build.sh build-firmware Heltec_v3_repeater_observer_mqtt      # arrc
+scripts/build-matrix.sh -c arrc -b Heltec_v3_repeater_observer_mqtt    # one image
+scripts/build-matrix.sh -n                                             # the plan, nothing built
 ```
 
+Each image is `<env>-<mcu>-v1.17.1-lou-<nn>-<features>-<hash>.bin` and asks its channel for the
+manifest `<env>-<features>.json` (`OTA_VARIANT`), so it can only be offered its own combination.
+`scripts/check-build-matrix.sh` compares the plan with `test/data/build-matrix-<base>.txt`.
 Without any switch the image is the Observer repeater plus the fork's OTA channel.
 
 ## Tests per combination

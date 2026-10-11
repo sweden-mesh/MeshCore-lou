@@ -1,0 +1,12 @@
+RAK_4631_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=RAK_4631_repeater-ar
+Heltec_t114_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Heltec_t114_repeater-ar
+Heltec_t114_without_display_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Heltec_t114_without_display_repeater-ar
+Xiao_nrf52_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Xiao_nrf52_repeater-ar
+ProMicro_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=ProMicro_repeater-ar
+SenseCap_Solar_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=SenseCap_Solar_repeater-ar
+ThinkNode_M1_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=ThinkNode_M1_repeater-ar
+Heltec_v3_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Heltec_v3_repeater-ar
+heltec_v4_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=heltec_v4_repeater-ar
+Station_G2_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Station_G2_repeater-ar
+LilyGo_T3S3_sx1262_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=LilyGo_T3S3_sx1262_repeater-ar
+Xiao_S3_WIO_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.17.1-lou-14-ar variant=Xiao_S3_WIO_repeater-ar
