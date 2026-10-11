@@ -120,6 +120,16 @@ TEST(TriggerOverThePlane, WithoutAutoReplyItNeverReachesTheHandler) {
   }
 }
 
+TEST(TriggerOverThePlane, ThisImageAdmitsATriggerOnlyWithAutoReply) {
+  // What MqttControl passes is FORK_AUTO_REPLY, the image's own switch.
+  EXPECT_EQ(FORK_AUTO_REPLY == 1, mqttCtrlCommandAllowed("trigger test", 12, FORK_AUTO_REPLY));
+#ifdef WITH_AUTO_REPLY
+  EXPECT_EQ(1, FORK_AUTO_REPLY);
+#else
+  EXPECT_EQ(0, FORK_AUTO_REPLY);
+#endif
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -29,6 +29,15 @@ PLATFORMIO_BUILD_FLAGS="-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1" \
 
 Without any switch the image is the Observer repeater plus the fork's OTA channel.
 
+## Tests per combination
+
+`pio test -e native` runs every suite as an image with no feature switched on; `native_ar` and
+`native_rc` run the feature's own suites and `test_fork_seams` with that one switch on, so the
+seams -- the feature token, which commands the plane admits -- are checked in the shape each
+image has. `native_v2` and `native_kiss_modem` are as before. The glue in
+`examples/simple_repeater/` is not host-tested; a target compile of each combination is its
+gate.
+
 ## Settings across combinations
 
 Each feature keeps its settings in its own file, and a build without the feature neither
