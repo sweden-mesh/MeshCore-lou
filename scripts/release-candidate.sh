@@ -6,11 +6,14 @@
 #
 #   -c  the unpacked candidate-<revision> artifact of fork-matrix.yml (images, unsigned
 #       manifests, SHA256SUMS)
-#   -t  the release tag, v1.17.1-lou-<nn>; every image must be of that revision
+#   -t  the release tag, v<base>-lou-<nn>; every image must be of that revision
 #   -k  the release key (default ~/.config/mccontrol/release.key); read here and nowhere else
 #   -r  the repository the release lives in (default sweden-mesh/MeshCore-lou)
 #   -o  where the release's files are assembled (default: release-<tag>/ beside the candidate)
-#   -p  publish: create the GitHub release with gh. Without it the gh command is printed.
+#   -p  upload: create the GitHub release with gh, as a draft. Without it the gh command is
+#       printed. A draft is seen by nobody and fetched by no node; publishing it is a separate,
+#       deliberate step (the command is printed), since every node with automatic OTA updates
+#       fetches a full release the moment it is published.
 #
 # Refuses, before signing anything, a set that does not hold together: a file that is not
 # what SHA256SUMS says, an Observer image without its manifest or a manifest without its
@@ -88,10 +91,13 @@ sha256sum * > SHA256SUMS
 count=$(ls | wc -l)
 [ "$count" -le "$MAX_ASSETS" ] || fail "$count assets, over GitHub's $MAX_ASSETS per release"
 echo "release $TAG: $count assets in $OUT ($(ls "$CAND"/*.unsigned.json 2>/dev/null | wc -l) signed manifests, firmware-index.json), key ${PUB:0:12}..."
-cmd=(gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes-file RELEASE_NOTES.md --prerelease)
+# A full release, not a pre-release: the OTA channel is releases/latest/download, which
+# skips pre-releases.
+cmd=(gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes-file RELEASE_NOTES.md --draft)
 if [ "$PUBLISH" -eq 1 ]; then
   [ -f RELEASE_NOTES.md ] || fail "no RELEASE_NOTES.md in $OUT"
   "${cmd[@]}" ./*
+  echo "uploaded as a draft; to publish: gh release edit $TAG --repo $REPO --draft=false"
 else
-  echo "to publish: (cd $OUT && ${cmd[*]} ./*)   -- or rerun with -p"
+  echo "to upload as a draft: (cd $OUT && ${cmd[*]} ./*)   -- or rerun with -p"
 fi
