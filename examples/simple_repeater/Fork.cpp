@@ -57,7 +57,7 @@ bool Fork::handleCommand(uint32_t sender_timestamp, char* command, char* reply) 
   if (handleMqttCommand(sender_timestamp, command, reply)) return true;
 #endif
 #ifdef WITH_AUTO_REPLY
-  if (handleAutoReplyCommand(command, reply)) return true;
+  if (handleAutoReplyCommand(sender_timestamp, command, reply)) return true;
 #endif
   return false;
 }

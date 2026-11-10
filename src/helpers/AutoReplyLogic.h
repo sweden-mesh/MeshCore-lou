@@ -129,15 +129,36 @@ static inline auto autoReplyFindRegion(const Map& map, const char* name)
   return NULL;
 }
 
+// The node's default scope as auto-reply reads it: the name `region default` set, without
+// the '#' a table name may carry, or empty for none and for the wildcard -- a node that
+// floods unscoped has no region of its own to answer for. The name keeps the table's
+// spelling: it is also the scope a reply floods in, and repeaters forward only the exact
+// name; the channel is folded from it separately (autoReplyRegionChannel).
+static inline void autoReplyDefaultScope(const char* name, char* out, size_t out_size) {
+  if (out == NULL || out_size == 0) return;
+  out[0] = 0;
+  if (name == NULL) return;
+  if (name[0] == '#') name++;
+  if (strcmp(name, "*") == 0 || strlen(name) >= out_size) return;
+  strcpy(out, name);
+}
+
+// The region behind the test channel and the reply's scope: `autoreply.region` when it is
+// set, otherwise the node's default scope (autoReplyDefaultScope), which the setup wizards
+// set to the county. Empty when neither is set.
+static inline const char* autoReplyEffectiveRegion(const char* own, const char* default_scope) {
+  if (own != NULL && own[0]) return own;
+  return default_scope != NULL ? default_scope : "";
+}
+
 // The two channels a node answers on, each empty when it answers nothing there:
-// '#test-<region>', and while `legacy` is on '#test-<iata>' beside it -- with or
-// without a region, so an upgrade never silences a node. A region spelled like the
-// IATA code names the legacy channel itself; it is then answered once, as the region's.
+// '#test-<region>', and while `legacy` is on '#test-<iata>' -- but only when there is no
+// region channel, so a node answers a probe on one channel, never two. The legacy channel
+// keeps a node with no region reachable where probes still use the IATA code.
 static inline void autoReplyChannelNames(const char* region, const char* iata, bool legacy,
                                          char* region_out, char* legacy_out, size_t out_size) {
   autoReplyRegionChannel(region, region_out, out_size);
-  if (!legacy || !autoReplyDeriveChannel(iata, legacy_out, out_size)
-      || strcmp(legacy_out, region_out) == 0) {
+  if (!legacy || region_out[0] || !autoReplyDeriveChannel(iata, legacy_out, out_size)) {
     legacy_out[0] = 0;
   }
 }

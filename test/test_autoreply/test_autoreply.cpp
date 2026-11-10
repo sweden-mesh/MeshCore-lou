@@ -1810,16 +1810,20 @@ TEST(RegionVerdict, ABadNameNeverReachesTheTableAndEmptyClears) {
 
 struct Channels { char region[REGION_CHANNEL_BUF]; char legacy[REGION_CHANNEL_BUF]; };
 
+// AutoReply.h's AUTOREPLY_MAX_REGION + 1; that header needs Arduino, this suite does not.
+#define AUTOREPLY_MAX_REGION_TEST 32
+
 static Channels channelsFor(const char* region, const char* iata, bool legacy) {
   Channels c;
   autoReplyChannelNames(region, iata, legacy, c.region, c.legacy, REGION_CHANNEL_BUF);
   return c;
 }
 
-TEST(ChannelNames, LegacyOnAnswersBothWithARegion) {
+TEST(ChannelNames, ARegionChannelReplacesTheLegacyOne) {
+  // One channel per node: a probe sent on both channels gets one answer, not two.
   Channels c = channelsFor("se-jkp", "JKG", true);
   EXPECT_STREQ("#test-se-jkp", c.region);
-  EXPECT_STREQ("#test-jkg", c.legacy);
+  EXPECT_STREQ("", c.legacy);
 }
 
 TEST(ChannelNames, LegacyOnWithoutARegionStillAnswersTheOldChannel) {
@@ -1862,6 +1866,60 @@ TEST(ChannelNames, AStoredRegionOfTheOldShapeNamesNoChannel) {
   // An older release stored any string as the scope; one that is not a valid name now
   // gets no region channel rather than one nobody could add -- and legacy still answers.
   Channels c = channelsFor("$private scope", "JKG", true);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("#test-jkg", c.legacy);
+}
+
+// With `autoreply.region` unset, the channel comes from the node's default scope, the
+// name `region default` set -- which the setup wizards make the county.
+TEST(DefaultScope, TheWildcardAndNoneGiveNoRegion) {
+  char out[AUTOREPLY_MAX_REGION_TEST];
+  autoReplyDefaultScope(NULL, out, sizeof(out));
+  EXPECT_STREQ("", out);
+  autoReplyDefaultScope("*", out, sizeof(out));
+  EXPECT_STREQ("", out);
+  autoReplyDefaultScope("#*", out, sizeof(out));
+  EXPECT_STREQ("", out);
+}
+
+TEST(DefaultScope, KeepsTheTablesSpellingWithoutTheHash) {
+  // The scope must stay exact, since repeaters forward only the name they carry.
+  char out[AUTOREPLY_MAX_REGION_TEST];
+  autoReplyDefaultScope("SE06", out, sizeof(out));
+  EXPECT_STREQ("SE06", out);
+  autoReplyDefaultScope("#se-jkp", out, sizeof(out));
+  EXPECT_STREQ("se-jkp", out);
+}
+
+TEST(DefaultScope, ANameTooLongForTheBufferIsNone) {
+  char out[8];
+  autoReplyDefaultScope("se-vastra-gotaland", out, sizeof(out));
+  EXPECT_STREQ("", out);
+}
+
+TEST(EffectiveRegion, AutoreplyRegionWinsThenTheDefaultScope) {
+  EXPECT_STREQ("se-jkp", autoReplyEffectiveRegion("se-jkp", "se"));
+  EXPECT_STREQ("se06", autoReplyEffectiveRegion("", "se06"));
+  EXPECT_STREQ("se06", autoReplyEffectiveRegion(NULL, "se06"));
+  EXPECT_STREQ("", autoReplyEffectiveRegion("", ""));
+  EXPECT_STREQ("", autoReplyEffectiveRegion(NULL, NULL));
+}
+
+TEST(EffectiveRegion, TheChannelIsFoldedFromTheDefaultScope) {
+  // `SE06` answers on '#test-se06'; its replies keep the scope `SE06`.
+  char scope[AUTOREPLY_MAX_REGION_TEST];
+  autoReplyDefaultScope("SE06", scope, sizeof(scope));
+  Channels c = channelsFor(autoReplyEffectiveRegion("", scope), "JKG", true);
+  EXPECT_STREQ("#test-se06", c.region);
+  EXPECT_STREQ("", c.legacy);
+  EXPECT_STREQ("SE06", scope);
+}
+
+TEST(EffectiveRegion, ADefaultScopeThatNamesNoChannelFallsBackToLegacy) {
+  // 26 characters: a scope, but too long for a channel a companion can add.
+  char scope[AUTOREPLY_MAX_REGION_TEST];
+  autoReplyDefaultScope("se-vastra-gotalands-lan-xx", scope, sizeof(scope));
+  Channels c = channelsFor(autoReplyEffectiveRegion("", scope), "JKG", true);
   EXPECT_STREQ("", c.region);
   EXPECT_STREQ("#test-jkg", c.legacy);
 }
@@ -1909,15 +1967,15 @@ TEST(AutoReplyConfig, LegacyOffRoundTrips) {
 }
 
 TEST(AutoReplyConfig, APreAr12RegionLoadsIntoItsNewMeaning) {
-  // ar-11 stored `autoreply.region` as the reply's scope alone; read by ar-12 it also
-  // names the channel, and legacy keeps the IATA channel answered beside it.
+  // ar-11 stored `autoreply.region` as the reply's scope alone; read now it also names the
+  // channel, and the IATA channel, a fallback for nodes with no region, is not answered.
   std::vector<uint8_t> b = v4Prefix(7, "se-jkp");
   b.insert(b.end(), {AUTOREPLY_MODE_FLOOD, 1, 0, 10, 0, 120, 0, 16});
   AutoReplyStoredConfig c = decodeFrom(b);
   EXPECT_STREQ("se-jkp", c.region);
   Channels ch = channelsFor(c.region, "JKG", c.legacy);
   EXPECT_STREQ("#test-se-jkp", ch.region);
-  EXPECT_STREQ("#test-jkg", ch.legacy);
+  EXPECT_STREQ("", ch.legacy);
 }
 
 // The channel hash the mesh matches on is the first byte of sha256 of the 16-byte key, whose

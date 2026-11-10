@@ -48,12 +48,13 @@ struct AutoReplyLane {
  * \brief  Replies to a keyword on the node's regional test channel, with a signal
  *         + path report.
  *
- * The channel is '#test-<region>', named by 'set autoreply.region' -- the same name
- * that bounds how far a reply floods -- and its key is the first 16 bytes of sha256
- * of that name, so there is no PSK to configure or share, and any client that adds a
- * channel of the same name can use it. While 'autoreply.legacy' is on (the default)
- * the node also answers on '#test-<iata>', the channel releases before ar-12 derived
- * from 'set mqtt.iata', so an upgrade never silences a node. Switched on with
+ * The channel is '#test-<region>', where the region is 'autoreply.region' when set and
+ * otherwise the node's default scope ('region default', which the setup wizards make the
+ * county) -- the same name that bounds how far a reply floods -- and its key is the
+ * first 16 bytes of sha256 of that name, so there is no PSK to configure or share, and
+ * any client that adds a channel of the same name can use it. A node with no region
+ * answers on '#test-<iata>' instead while 'autoreply.legacy' is on (the default), the
+ * channel releases before ar-12 derived from 'set mqtt.iata'. Switched on with
  * 'set autoreply on'; a node with neither channel stays silent either way.
  *
  * Every repeater in range answers the same trigger, so requests from further away than
@@ -74,15 +75,15 @@ class AutoReply {
   uint16_t _window_start;       // seconds after the request that the window opens
   uint16_t _window_end;         // and closes; every reply lands between them
   uint8_t _slots;               // how many slots the window is cut into
-  char _region[AUTOREPLY_MAX_REGION + 1];   // scope for the reply, empty = mirror the request
+  char _region[AUTOREPLY_MAX_REGION + 1];   // 'autoreply.region', empty = the default scope
+  char _default_scope[AUTOREPLY_MAX_REGION + 1];   // the node's, as of the last refresh
   uint8_t _mode;                // how a request that names no mode is answered
   uint8_t _slot;                // assigned reply slot, 0 = derive one from our key
   bool _private;                // answer a private test request sent to this node directly
 
   void toStored(AutoReplyStoredConfig* c) const;
   void fromStored(const AutoReplyStoredConfig& c);
-  // The region's own channel and the legacy one. When both name one channel
-  // (a region spelled like the IATA code) only the first is kept.
+  // The region's own channel and the legacy one; at most one is ever ready.
   AutoReplyLane _lanes[2];
   // The private path keeps its own budget: a burst of private requests must not be
   // able to spend the channel's replies, nor the other way round.
@@ -90,7 +91,8 @@ class AutoReply {
   AutoReplySender _private_senders[AUTOREPLY_MAX_SENDERS];
   uint8_t _next_private;
 
-  void refreshChannels(const char* iata);
+  void refreshChannels(const char* iata, const char* default_scope);
+  const char* region() const { return autoReplyEffectiveRegion(_region, _default_scope); }
   static void deriveLane(AutoReplyLane& lane, const char* name);
   bool anyChannel() const { return _lanes[0].ready() || _lanes[1].ready(); }
   void describeChannels(char* out, size_t size) const;
@@ -114,15 +116,25 @@ public:
   bool handleCommand(const char* iata, RegionMap& regions, const char* command, char* reply);
 
   /**
+   * \brief  Where this node answers, for the reply to a command that changed its default
+   *         scope: "#test-se-jkp", "legacy #test-jkg", or why it is silent.
+   */
+  void describeAfterScopeChange(const char* iata, const char* default_scope, char* out,
+                                size_t size);
+
+  /**
    * \brief  Whether a request that arrived direct is answered with a flood.
    */
   bool directFlood() const { return _direct_flood; }
+  bool enabled() const { return _enabled; }
   uint16_t windowStart() const { return _window_start; }
   uint16_t windowEnd() const { return _window_end; }
   uint8_t slots() const { return _slots; }
   // 0 means unassigned; the caller derives a slot from the node's key instead.
   uint8_t slot() const { return _slot; }
-  const char* replyRegion() const { return _region; }
+  // The scope a reply floods in: the region behind the channel, or empty to mirror the
+  // request's. Current as of the last refresh, which every incoming request makes.
+  const char* replyRegion() const { return region(); }
   /**
    * \brief  The standing reply mode, for a request that names none (AUTOREPLY_MODE_*).
    */
@@ -150,9 +162,7 @@ public:
   /**
    * \brief  The channel to originate a probe on.
    *
-   * The legacy '#test-<iata>' while that is answered, the region's channel after: the
-   * measurement moves channel once, when a region switches legacy off, and until
-   * then a probe must reach the nodes that answer only the old one.
+   * The channel this node answers on: the region's, or '#test-<iata>' when it has none.
    *
    * Readiness is only that a channel is derived. It is
    * deliberately independent of 'autoreply on', which governs whether this node
@@ -161,10 +171,11 @@ public:
    * vantage point depend on a setting that has nothing to do with it.
    *
    * \param  iata  the node's region code, re-derives the channel when it changes
+   * \param  default_scope  the name 'region default' set, or NULL
    * \returns  true and fills 'out' when a channel exists
    */
-  bool probeChannel(const char* iata, mesh::GroupChannel* out) {
-    refreshChannels(iata);
+  bool probeChannel(const char* iata, const char* default_scope, mesh::GroupChannel* out) {
+    refreshChannels(iata, default_scope);
     const AutoReplyLane& lane = _lanes[1].ready() ? _lanes[1] : _lanes[0];
     if (!lane.ready() || out == NULL) return false;
     *out = lane.channel;
@@ -174,9 +185,10 @@ public:
   /**
    * \brief  Match our channels, for Mesh::searchChannelsByHash()
    * \param  iata  the node's region code, re-derives the channel when it changes
+   * \param  default_scope  the name 'region default' set, or NULL
    */
-  int searchChannelsByHash(const char* iata, const uint8_t* hash, mesh::GroupChannel channels[],
-                           int max_matches);
+  int searchChannelsByHash(const char* iata, const char* default_scope, const uint8_t* hash,
+                           mesh::GroupChannel channels[], int max_matches);
 
   /**
    * \brief  Test an incoming group text for the trigger, and build the reply payload.
