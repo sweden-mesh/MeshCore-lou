@@ -34,6 +34,7 @@ while getopts "c:t:k:r:o:p" opt; do
   esac
 done
 [ -n "$CAND" ] && [ -n "$TAG" ] || { sed -n '2,/^set /p' "$0" | sed '$d' >&2; exit 2; }
+CAND="$(cd "$CAND" && pwd)"   # the script works inside it, so a relative path would move
 REV=$(echo "$TAG" | grep -oE 'lou-[0-9]+$' || true)
 [ -n "$REV" ] || { echo "the tag must end in lou-<nn>: $TAG" >&2; exit 2; }
 [ -f "$KEY" ] || { echo "no release key at $KEY" >&2; exit 2; }
