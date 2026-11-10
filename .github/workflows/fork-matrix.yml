@@ -24,6 +24,9 @@ on:
       release_pubkey:
         description: "the release key's public half (64 hex), baked into every image"
         default: 38A263C44AF0E60E766AEF4A2D985ECE2FC16FFC533BF453A37FF4CF15A9325C
+      boards:
+        description: "empty: the curated boards; all: every repeater board of both bases, to see which fit"
+        default: ""
       build_number:
         description: "FIRMWARE_BUILD_NUMBER; leave empty, a number becomes .<n> in the version, which the lou-<nn>-<features>-<hash> name has no place for"
         default: ""
@@ -54,7 +57,7 @@ jobs:
           (cd observer && bash scripts/check-build-matrix.sh)
           (cd core && bash scripts/check-build-matrix.sh)
       - id: plan
-        run: echo "matrix=$(REVISION='${{ inputs.revision }}' bash observer/scripts/ci-plan.sh observer core)" >> "$GITHUB_OUTPUT"
+        run: echo "matrix=$(REVISION='${{ inputs.revision }}' BOARDS='${{ inputs.boards }}' bash observer/scripts/ci-plan.sh observer core)" >> "$GITHUB_OUTPUT"
 
   host-tests:
     runs-on: ubuntu-latest
@@ -110,6 +113,46 @@ jobs:
         with:
           name: log-${{ matrix.base }}-${{ matrix.env }}-${{ matrix.combo }}
           path: dist/logs
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: size-${{ matrix.base }}-${{ matrix.env }}-${{ matrix.combo }}
+          path: dist/logs/*.size
+
+  # Which boards built and how much RAM and flash each image uses, whether or not every
+  # build succeeded: a sweep (boards: all) expects some boards not to fit.
+  report:
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: "size-*", merge-multiple: true, path: sizes }
+      - name: Report
+        env:
+          PLAN: ${{ needs.plan.outputs.matrix }}
+        run: |
+          python3 - > report.md <<'EOF'
+          import json, os
+          rows = json.loads(os.environ["PLAN"])
+          print("| base | board | features | built | RAM used / of | flash used / of |")
+          print("|---|---|---|---|---|---|")
+          built = 0
+          for r in sorted(rows, key=lambda r: (r["base"], r["env"], r["combo"])):
+              f = os.path.join("sizes", f'{r["env"]}-{r["combo"]}.size')
+              n = open(f).read().split() if os.path.exists(f) else []
+              ok = len(n) == 4
+              built += ok
+              ram = f"{n[0]} / {n[1]}" if ok else ""
+              flash = f"{n[2]} / {n[3]}" if ok else ""
+              print(f'| {r["base"]} | {r["env"]} | {r["combo"]} | {"yes" if ok else "**no**"} | {ram} | {flash} |')
+          print(f"\n{built} of {len(rows)} images built.")
+          EOF
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: report.md
 
   collect:
     needs: build

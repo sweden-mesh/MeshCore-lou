@@ -7,7 +7,8 @@
 #   -c  combinations, the codes as/ar/rc run together in that order. Default: ar rc arrc on
 #       fork/observer, ar on fork/core.
 #   -b  boards (env names). Default: every *_repeater_observer_mqtt env on fork/observer,
-#       scripts/boards-core.txt on fork/core.
+#       scripts/boards-core.txt on fork/core. "all": every *_repeater_observer_mqtt env on
+#       fork/observer, every *_repeater env on fork/core -- the sweep for which boards fit.
 #   -r  the revision, lou-<nn> (default: $REVISION, else lou-14).
 #   -o  where the images go (default: .pio/matrix/, which git ignores).
 #   -n  dry run: print what each build would be given, one line per build, and build nothing.
@@ -50,6 +51,10 @@ if [ -z "$BOARDS" ]; then
   else
     BOARDS=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' scripts/boards-core.txt | grep -v '^$')
   fi
+fi
+if [ "$BOARDS" = all ]; then
+  [ "$BASE" = observer ] && pattern='_repeater_observer_mqtt$' || pattern='_repeater$'
+  BOARDS=$(bash build.sh list | awk '{print $1}' | grep "$pattern" | LC_ALL=C sort)
 fi
 case "$REV" in lou-[0-9]*) ;; *) echo "revision must be lou-<nn>, not '$REV'" >&2; exit 2 ;; esac
 BASE_VERSION=$(grep -m1 -oE 'FIRMWARE_VERSION +"v[0-9.]+"' examples/simple_repeater/MyMesh.h | grep -oE 'v[0-9.]+')
@@ -121,6 +126,9 @@ for combo in $COMBOS; do
       failed="$failed $variant"
       continue
     fi
+    # RAM and flash as PlatformIO reports them: "<used> <of>" bytes each, for the sweep.
+    sed -nE 's/^(RAM|Flash):.*used ([0-9]+) bytes from ([0-9]+) bytes.*/\2 \3/p' "$LOGS/$variant.log" \
+      | tr '\n' ' ' > "$LOGS/$variant.size"
     cp out/"$env"-*.bin out/"$env"-*.uf2 out/"$env"-*.zip out/"$env"-*.hex "$OUT"/ 2>/dev/null || true
     # The manifest the image will ask for, unsigned: the signatures are added on the
     # release host and nowhere else (scripts/manifest.py, docs/ota.md).
