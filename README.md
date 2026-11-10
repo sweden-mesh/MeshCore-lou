@@ -1,6 +1,14 @@
 # MeshCore Observer, with the fork's features
 
-**This branch is a fork.** It adds auto-reply, signed remote control over MQTT and signed pull
+**This repository is a fork**, kept by sweden-mesh, of [MeshCore](https://github.com/meshcore-dev/MeshCore)
+and [agessaman's MeshCore Observer](https://github.com/agessaman/MeshCore). It is not the official
+MeshCore. Two branches carry the fork: `fork/observer` (this one, on the Observer) and
+[`fork/core`](https://github.com/sweden-mesh/MeshCore-lou/tree/fork/core) (on stock MeshCore).
+**To flash a node, use the [firmware page](https://sweden-mesh.github.io/firmware/)**: pick the
+features and the board and get one file. Every file is also in the
+[latest release](https://github.com/sweden-mesh/MeshCore-lou/releases/latest).
+
+This branch adds auto-reply, signed remote control over MQTT and signed pull
 OTA to the MeshCore Observer firmware, built in any combination (`ar`, `rc`, `arrc`):
 [`docs/fork.md`](docs/fork.md) for the combinations and how they are built,
 [`docs/fork-overview.md`](docs/fork-overview.md) for what they do,
