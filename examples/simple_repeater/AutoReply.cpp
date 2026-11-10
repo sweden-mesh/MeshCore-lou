@@ -34,6 +34,7 @@ AutoReply::AutoReply()
     _private_limiter(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS)
 {
   _region[0] = 0;
+  _default_scope[0] = 0;
   memset(_private_senders, 0, sizeof(_private_senders));
   _next_private = 0;
 }
@@ -73,27 +74,37 @@ void AutoReply::deriveLane(AutoReplyLane& lane, const char* name) {
   MESH_DEBUG_PRINTLN("AutoReply: channel '%s' (hash %02X)", name, (uint32_t)lane.channel.hash[0]);
 }
 
-// The region is ours, but the IATA code behind the legacy channel is owned by the
-// observer config and can change at any time, so both are re-derived on every use.
-void AutoReply::refreshChannels(const char* iata) {
+// 'autoreply.region' is ours, but the default scope belongs to the region table and the IATA
+// code behind the legacy channel to the observer config; either can change at any time, so
+// the channels are re-derived on every use.
+void AutoReply::refreshChannels(const char* iata, const char* default_scope) {
+  autoReplyDefaultScope(default_scope, _default_scope, sizeof(_default_scope));
   char region_name[AUTOREPLY_MAX_CHANNEL];
   char legacy_name[AUTOREPLY_MAX_CHANNEL];
-  autoReplyChannelNames(_region, iata, _legacy, region_name, legacy_name, sizeof(region_name));
+  autoReplyChannelNames(region(), iata, _legacy, region_name, legacy_name, sizeof(region_name));
   deriveLane(_lanes[0], region_name);
   deriveLane(_lanes[1], legacy_name);
 }
 
-// "#test-se-jkp + legacy #test-jkg", for the replies that say where the node answers.
+// "#test-se-jkp (region default)" or "legacy #test-jkg", for the replies that say where the
+// node answers. A region that names no channel (too long for one) is said so, not hidden.
 void AutoReply::describeChannels(char* out, size_t size) const {
-  if (_lanes[0].ready() && _lanes[1].ready()) {
-    snprintf(out, size, "%s + legacy %s", _lanes[0].name, _lanes[1].name);
-  } else if (_lanes[0].ready()) {
-    snprintf(out, size, "%s", _lanes[0].name);
+  if (_lanes[0].ready()) {
+    snprintf(out, size, "%s (%s)", _lanes[0].name,
+             _region[0] ? "autoreply.region" : "region default");
   } else if (_lanes[1].ready()) {
     snprintf(out, size, "legacy %s", _lanes[1].name);
+  } else if (region()[0]) {
+    snprintf(out, size, "no channel - %s names none", region());
   } else {
-    snprintf(out, size, "no channel - set autoreply.region");
+    snprintf(out, size, "no channel - set region default");
   }
+}
+
+void AutoReply::describeAfterScopeChange(const char* iata, const char* default_scope,
+                                         char* out, size_t size) {
+  refreshChannels(iata, default_scope);
+  describeChannels(out, size);
 }
 
 void AutoReply::load() {
@@ -157,9 +168,10 @@ void AutoReply::fromStored(const AutoReplyStoredConfig& c) {
   _legacy = c.legacy;
 }
 
-int AutoReply::searchChannelsByHash(const char* iata, const uint8_t* hash,
-                                    mesh::GroupChannel channels[], int max_matches) {
-  refreshChannels(iata);
+int AutoReply::searchChannelsByHash(const char* iata, const char* default_scope,
+                                    const uint8_t* hash, mesh::GroupChannel channels[],
+                                    int max_matches) {
+  refreshChannels(iata, default_scope);
   if (!_enabled) return 0;
   const uint8_t hashes[2] = { _lanes[0].channel.hash[0], _lanes[1].channel.hash[0] };
   const bool ready[2] = { _lanes[0].ready(), _lanes[1].ready() };
@@ -174,7 +186,9 @@ int AutoReply::searchChannelsByHash(const char* iata, const uint8_t* hash,
 
 bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* command,
                               char* reply) {
-  refreshChannels(iata);
+  const RegionEntry* def = regions.getDefaultRegion();
+  const char* default_scope = def ? def->name : NULL;
+  refreshChannels(iata, default_scope);
 
   char where[2 * AUTOREPLY_MAX_CHANNEL + 12];
   describeChannels(where, sizeof(where));
@@ -186,7 +200,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
     }
     save();
     if (_enabled && !anyChannel()) {
-      strcpy(reply, "OK - on, but no channel yet: set autoreply.region <name>");
+      strcpy(reply, "OK - on, but no channel: set region default <county> (or autoreply.region)");
     } else {
       sprintf(reply, "OK - %s", _enabled ? where : "off");
     }
@@ -204,7 +218,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
       return true;
     }
     save();
-    refreshChannels(iata);
+    refreshChannels(iata, default_scope);
     describeChannels(where, sizeof(where));
     sprintf(reply, "OK - %s", where);
     return true;
@@ -309,9 +323,8 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
   }
 
   if (memcmp(command, "set autoreply.region ", 21) == 0) {
-    // Empty clears it: no region channel, and a reply mirrors whatever scope the
-    // request arrived under. A name must already be a region of this node's, since
-    // it is also the scope every reply floods in.
+    // Empty clears it: the channel follows the default scope again. A name must already
+    // be a region of this node's, since it is also the scope every reply floods in.
     char name[AUTOREPLY_REGION_NAME_MAX + 1];
     int verdict = autoReplyRegionVerdict(&command[21], name, sizeof(name),
         [&regions](const char* n) { return autoReplyFindRegion(regions, n) != NULL; });
@@ -326,14 +339,20 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
     }
     StrHelper::strncpy(_region, name, sizeof(_region));
     save();
-    refreshChannels(iata);
+    refreshChannels(iata, default_scope);
     describeChannels(where, sizeof(where));
     sprintf(reply, "OK - %s", where);
     return true;
   }
 
   if (strcmp(command, "get autoreply.region") == 0) {
-    sprintf(reply, "> %s", _region[0] ? _region : "(none: request scope, no region channel)");
+    if (_region[0]) {
+      sprintf(reply, "> %s", _region);
+    } else if (_default_scope[0]) {
+      sprintf(reply, "> (none: region default %s)", _default_scope);
+    } else {
+      strcpy(reply, "> (none: no region default either, request scope)");
+    }
     return true;
   }
 
@@ -387,14 +406,17 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
     // scope is the region only when the table has it; otherwise replies take the
     // request's, and the line says so. Channels last: they are what can be long, and
     // 160 characters hold the longest region and IATA code.
-    const char* scope = !_region[0] ? "request scope"
+    // The default scope is in the table by definition; only 'autoreply.region' can name a
+    // region since removed from it.
+    const char* scope = !region()[0] ? "request scope"
+                      : !_region[0] ? "region default"
                       : autoReplyFindRegion(regions, _region) || regions.findByNamePrefix(_region)
-                        ? "scope"
+                        ? "autoreply.region"
                       : "not in table: request scope";
     snprintf(reply, 160, "> %s, mode %s, private %s, direct %s, %d hops, region %s (%s), "
                          "legacy %s: %s",
              _enabled ? "on" : "off", autoReplyModeName(_mode), _private ? "on" : "off",
-             _direct_flood ? "flood" : "0-hop", _hops, _region[0] ? _region : "-", scope,
+             _direct_flood ? "flood" : "0-hop", _hops, region()[0] ? region() : "-", scope,
              autoReplyLegacyState(_legacy, iata != NULL), where);
     return true;
   }
