@@ -1,7 +1,15 @@
 # MeshCore, with the fork's auto-reply
 
-**This branch is a fork.** It adds repeater auto-reply to upstream MeshCore's release
-`repeater-v1.17.1` (the `ar` image; the fork's MQTT features need the Observer and live on
+**This repository is a fork**, kept by sweden-mesh, of [MeshCore](https://github.com/meshcore-dev/MeshCore)
+and [agessaman's MeshCore Observer](https://github.com/agessaman/MeshCore). It is not the official
+MeshCore. Two branches carry the fork: `fork/core` (this one, on stock MeshCore) and
+[`fork/observer`](https://github.com/sweden-mesh/MeshCore-lou/tree/fork/observer) (on the Observer).
+**To flash a node, use the [firmware page](https://sweden-mesh.github.io/firmware/)**: pick the
+features and the board and get one file. Every file is also in the
+[latest release](https://github.com/sweden-mesh/MeshCore-lou/releases/latest).
+
+This branch adds repeater auto-reply to upstream MeshCore's release
+`repeater-v1.18.0` (the `ar` image; the fork's MQTT features need the Observer and live on
 `fork/observer`): [`docs/fork.md`](docs/fork.md) for the combinations and how they are built,
 [`docs/fork-overview.md`](docs/fork-overview.md) and [`docs/autoreply.md`](docs/autoreply.md)
 for what it does, [`docs/quick-check-guide.md`](docs/quick-check-guide.md) for setting up a
