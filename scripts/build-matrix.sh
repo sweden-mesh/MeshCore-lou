@@ -126,9 +126,10 @@ for combo in $COMBOS; do
       failed="$failed $variant"
       continue
     fi
-    # RAM and flash as PlatformIO reports them: "<used> <of>" bytes each, for the sweep.
+    # RAM and flash as PlatformIO reports them: "<used> <of>" bytes each, for the sweep. An
+    # ESP32 build reports twice (build.sh builds the merged image too); the first is the image.
     sed -nE 's/^(RAM|Flash):.*used ([0-9]+) bytes from ([0-9]+) bytes.*/\2 \3/p' "$LOGS/$variant.log" \
-      | tr '\n' ' ' > "$LOGS/$variant.size"
+      | head -2 | tr '\n' ' ' > "$LOGS/$variant.size"
     cp out/"$env"-*.bin out/"$env"-*.uf2 out/"$env"-*.zip out/"$env"-*.hex "$OUT"/ 2>/dev/null || true
     # The manifest the image will ask for, unsigned: the signatures are added on the
     # release host and nowhere else (scripts/manifest.py, docs/ota.md).
