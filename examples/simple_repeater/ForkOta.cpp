@@ -7,6 +7,7 @@
 #ifdef WITH_MQTT_BRIDGE
 
 #include <helpers/ForkText.h>
+#include <helpers/OtaChannel.h>
 
 #define OTA_SETTINGS_FILE        "/ota"
 #define OTA_LEGACY_SETTINGS_FILE "/mqttcontrol"
@@ -187,7 +188,8 @@ void Fork::autoOtaTick() {
   if (!otaAutoCheckDue(now, _ota_last_check, _ota_check_hours)) return;
   _ota_last_check = now;
   char reply[160];
-  bool available = _mesh._cli.getBoard()->otaFromManifest(_mesh.getFirmwareVer(), true, reply);
+  bool available = _mesh._cli.getBoard()->otaFromManifest(ota_resolve_base(_mesh._prefs.ota_channel),
+                                                          _mesh.getFirmwareVer(), true, reply);
   StrHelper::strncpy(_ota_last_result, reply, sizeof(_ota_last_result));
   Serial.print("OTA: automatic check: "); Serial.println(reply);
   if (!available) return;
