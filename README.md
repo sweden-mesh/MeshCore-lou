@@ -1,12 +1,54 @@
 # MeshCore, with the fork's auto-reply
 
+> ## ⬇️ Get the firmware: [sweden-mesh.github.io/firmware](https://sweden-mesh.github.io/firmware/)
+>
+> **Flash a node from the [firmware page](https://sweden-mesh.github.io/firmware/)**, not from
+> this repository. Pick the node type, the features and the board: it gives you one file, how to
+> flash it, and the console commands to set it up. Every file is also in the
+> [latest release](https://github.com/sweden-mesh/MeshCore-lou/releases/latest).
+
 **This repository is a fork**, kept by sweden-mesh, of [MeshCore](https://github.com/meshcore-dev/MeshCore)
 and [agessaman's MeshCore Observer](https://github.com/agessaman/MeshCore). It is not the official
 MeshCore. Two branches carry the fork: `fork/core` (this one, on stock MeshCore) and
 [`fork/observer`](https://github.com/sweden-mesh/MeshCore-lou/tree/fork/observer) (on the Observer).
-**To flash a node, use the [firmware page](https://sweden-mesh.github.io/firmware/)**: pick the
-features and the board and get one file. Every file is also in the
-[latest release](https://github.com/sweden-mesh/MeshCore-lou/releases/latest).
+
+## Flavours
+
+Each release is built in four flavours, all repeaters. The
+[firmware page](https://sweden-mesh.github.io/firmware/) picks the right one for you.
+
+| flavour | built from | boards | for |
+|---|---|---|---|
+| **Auto-reply** (`ar`) | stock MeshCore, `fork/core` | 93: ESP32, nRF52, RP2040, STM32 | a repeater that answers `test` on its county's test channel, no Wi-Fi needed |
+| **Observer + auto-reply** (`ar`) | the Observer, `fork/observer` | 33 ESP32 | the same, plus reporting what it hears to MQTT and updating itself over Wi-Fi |
+| **Observer + remote control** (`rc`) | the Observer, `fork/observer` | 33 ESP32 | an owner with several repeaters far apart, who wants to change their settings without a visit |
+| **Observer + both** (`arrc`) | the Observer, `fork/observer` | 33 ESP32 | both of the above |
+
+What the features do:
+
+- **Auto-reply** ([docs/autoreply.md](docs/autoreply.md)): the repeater answers `test` on
+  `#test-<region>`, where the region is its `region default` (for example `#test-se-jkp`), so
+  anyone can see which repeaters hear them. Replies wait 10 to 120 seconds in a slot of their
+  own so they don't collide, and are rate limited. An Observer node with no region falls back to
+  `#test-<iata>`.
+- **Remote control** ([docs/mqtt-control.md](docs/mqtt-control.md)): console commands sent over
+  MQTT, signed with the owner's Ed25519 key and checked on the node. The key is set by cable
+  only, and identity, radio and destructive commands are refused. Sent with
+  [mccontrol](https://github.com/sweden-mesh/mccontrol). Needs the Observer's MQTT link, so there
+  is no stock flavour.
+- **Signed OTA** ([docs/ota.md](docs/ota.md)): every Observer flavour. `ota update` fetches the
+  latest release of its own flavour over Wi-Fi and installs it only if the signature checks out.
+  The stock flavour has none.
+- **Auto-scope** (`as`): reserved, not built yet.
+
+Not here: with no features, use [MeshCore's own flasher](https://meshcore.io/flasher); for the
+Observer alone, [agessaman's Observer firmware](https://observer.gessaman.com/).
+
+An image names its flavour in the file and in `ver`:
+`<board>-<mcu>-v<MeshCore version>-lou-<nn>-<features>-<hash>`, for example
+`Heltec_v3_repeater_observer_mqtt-esp32s3-v1.18.0-lou-15-ar-0ce69e4.bin`.
+
+## For developers
 
 This branch adds repeater auto-reply to upstream MeshCore's release
 `repeater-v1.18.0` (the `ar` image; the fork's MQTT features need the Observer and live on

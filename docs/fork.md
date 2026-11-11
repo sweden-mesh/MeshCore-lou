@@ -11,15 +11,15 @@ built, and any combination of them builds from the same tree:
 
 | base | `ar` | `rc` | `arrc` | with `as` (reserved) |
 |---|---|---|---|---|
-| Observer (`fork/observer`), 17 repeater boards | built | built | built | `as`, `asar`, `asrc`, `asarrc`: not yet |
-| core MeshCore (`fork/core`), 14 curated boards (`scripts/boards-core.txt`) | built | -- (needs the Observer bridge) | -- | `as`, `asar`: not yet |
+| Observer (`fork/observer`), 33 repeater boards | built | built | built | `as`, `asar`, `asrc`, `asarrc`: not yet |
+| core MeshCore (`fork/core`), 93 boards (`scripts/boards-core.txt`) | built | -- (needs the Observer bridge) | -- | `as`, `asar`: not yet |
 
 Every Observer image also carries signed pull OTA; a core image has none. Room-server and
 companion images are not built (TODO 22a rulings 14, 23).
 
 An image says which combination it is in its version, which `ver` reports and every status
-publish carries: `<mcu>-v1.17.1-lou-<nn>-<features>-<hash>`, for example
-`esp32s3-v1.17.1-lou-14-arrc-1a2b3c4d` -- the image file's name; inside an Observer image
+publish carries: `<mcu>-v1.18.0-lou-<nn>-<features>-<hash>`, for example
+`esp32s3-v1.18.0-lou-15-arrc-1a2b3c4d` -- the image file's name; inside an Observer image
 `build.sh` adds the base's own `-observer` before the hash (`forkFeaturesOfVersion` reads
 either). The revision
 `lou-<nn>` continues the `ar-<nn>` counter of the releases before the split.
@@ -37,7 +37,7 @@ that has none of its features.
 The switches are passed by the build script, never written into a variant's
 `platformio.ini`, so every board builds every combination unchanged.
 `scripts/build-matrix.sh` builds every combination for every board of the base it runs on
-(`ar rc arrc` × the 17 Observer boards on `fork/observer`, `ar` × `scripts/boards-core.txt` on
+(`ar rc arrc` × the 33 Observer boards on `fork/observer`, `ar` × `scripts/boards-core.txt` on
 `fork/core`), or the ones named with `-c` and `-b`:
 
 ```sh
@@ -45,12 +45,12 @@ scripts/build-matrix.sh -c arrc -b Heltec_v3_repeater_observer_mqtt    # one ima
 scripts/build-matrix.sh -n                                             # the plan, nothing built
 ```
 
-Each image is `<env>-<mcu>-v1.17.1-lou-<nn>-<features>-<hash>.bin` and asks its channel for the
+Each image is `<env>-<mcu>-v1.18.0-lou-<nn>-<features>-<hash>.bin` and asks its channel for the
 manifest `<env>-<features>.json` (`OTA_VARIANT`), so it can only be offered its own combination.
 `scripts/check-build-matrix.sh` compares the plan with `test/data/build-matrix-<base>.txt`.
 The whole matrix runs in GitHub Actions, `.github/workflows/fork-matrix.yml`, started by hand
 with the two refs and the revision: the host suites per combination, then one job per image
-(65 at lou-14), then one artifact, `candidate-<revision>`, with every image, every Observer
+(192 at lou-15), then one artifact, `candidate-<revision>`, with every image, every Observer
 image's unsigned manifest and `SHA256SUMS`. It signs nothing and publishes nothing; the
 release step on the release host does both. Every pull request and push to either branch runs
 `.github/workflows/fork-pr.yml`: each combination of the base on one ESP32 and one nRF52 board
@@ -110,7 +110,7 @@ without auto-reply -- and its code in `AutoScopeHooks.cpp`; its declaration in i
 ## Two bases, one copy of the feature code
 
 The Observer images build from `fork/observer` (the Observer's `observer-firmware` plus the
-fork) and the core images from `fork/core` (upstream's release tag `repeater-v1.17.1` plus the
+fork) and the core images from `fork/core` (upstream's release tag `repeater-v1.18.0` plus the
 fork). Every file the fork owns -- listed in `scripts/fork-files.txt` -- is identical on both;
 only the hook lines in each base's own files differ. Develop on `fork/observer`, then
 `git checkout fork/core && scripts/fork-sync.sh fork/observer`, commit, and
@@ -121,7 +121,7 @@ are ignored: they need Observer headers that base does not have.
 ### Auto-reply on core
 
 A core image has no MQTT and so no `mqtt.iata`: no legacy `#test-<iata>` channel, and the node
-stays silent until `autoreply.region` is set; `get autoreply` shows `legacy on, inert: no MQTT`.
+answers on `#test-<region default>` (or `autoreply.region`) and stays silent until one is set; `get autoreply` shows `legacy on, inert: no MQTT`.
 Its replies are measured by the Observer nodes that hear them. Cost, measured on `fork/core`
 (static RAM / flash, `ar` against the same board with no feature):
 
