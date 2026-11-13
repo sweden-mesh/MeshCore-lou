@@ -27,7 +27,7 @@ Each release is built in four flavours, all repeaters. The
 What the features do:
 
 - **Auto-reply** ([docs/autoreply.md](docs/autoreply.md)): the repeater answers `test` on
-  `#test-<region>`, where the region is its `region default` (for example `#test-se-jkp`), so
+  `#test-<region>`, where the region is its `region home` (for example `#test-se-jkp`), so
   anyone can see which repeaters hear them. Replies wait 10 to 120 seconds in a slot of their
   own so they don't collide, and are rate limited. An Observer node with no region falls back to
   `#test-<iata>`.
