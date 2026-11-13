@@ -49,10 +49,11 @@ struct AutoReplyLane {
  *         + path report.
  *
  * The channel is '#test-<region>', where the region is 'autoreply.region' when set and
- * otherwise the node's default scope ('region default', which the setup wizards make the
- * county) -- the same name that bounds how far a reply floods -- and its key is the
- * first 16 bytes of sha256 of that name, so there is no PSK to configure or share, and
- * any client that adds a channel of the same name can use it. A node with no region
+ * otherwise the node's own region ('region home', which the setup wizards make the county,
+ * else a 'region default' narrower than a country) -- the same name that bounds how far a
+ * reply floods -- and its key is the first 16 bytes of sha256 of that name, so there is
+ * no PSK to configure or share, and any client that adds a channel of the same name can
+ * use it. A node with no region
  * answers on '#test-<iata>' instead while 'autoreply.legacy' is on (the default), the
  * channel releases before ar-12 derived from 'set mqtt.iata'. Switched on with
  * 'set autoreply on'; a node with neither channel stays silent either way.
@@ -76,7 +77,8 @@ class AutoReply {
   uint16_t _window_end;         // and closes; every reply lands between them
   uint8_t _slots;               // how many slots the window is cut into
   char _region[AUTOREPLY_MAX_REGION + 1];   // 'autoreply.region', empty = the default scope
-  char _default_scope[AUTOREPLY_MAX_REGION + 1];   // the node's, as of the last refresh
+  char _default_scope[AUTOREPLY_MAX_REGION + 1];   // the node's region, as of the last refresh
+  bool _from_home;              // ... and it came from 'region home', not 'region default'
   uint8_t _mode;                // how a request that names no mode is answered
   uint8_t _slot;                // assigned reply slot, 0 = derive one from our key
   bool _private;                // answer a private test request sent to this node directly
@@ -92,6 +94,7 @@ class AutoReply {
   uint8_t _next_private;
 
   void refreshChannels(const char* iata, const char* default_scope);
+  const char* regionSource() const { return _from_home ? "region home" : "region default"; }
   const char* region() const { return autoReplyEffectiveRegion(_region, _default_scope); }
   static void deriveLane(AutoReplyLane& lane, const char* name);
   bool anyChannel() const { return _lanes[0].ready() || _lanes[1].ready(); }
@@ -159,6 +162,16 @@ public:
   bool privateAllowed(const uint8_t* pubkey, const char* id, size_t id_len,
                       uint32_t timestamp);
 
+  // The node's region from its table (autoReplyNodeRegion), remembering whether it is the
+  // home, for the replies that say where the channel comes from.
+  const char* noteNodeRegion(RegionMap& regions) {
+    const RegionEntry* home = regions.getHomeRegion();
+    const RegionEntry* def = regions.getDefaultRegion();
+    const char* name = autoReplyNodeRegion(home ? home->name : NULL, def ? def->name : NULL);
+    _from_home = name != NULL && home != NULL && name == home->name;
+    return name;
+  }
+
   /**
    * \brief  The channel to originate a probe on.
    *
@@ -171,7 +184,7 @@ public:
    * vantage point depend on a setting that has nothing to do with it.
    *
    * \param  iata  the node's region code, re-derives the channel when it changes
-   * \param  default_scope  the name 'region default' set, or NULL
+   * \param  default_scope  the node's region (noteNodeRegion), or NULL
    * \returns  true and fills 'out' when a channel exists
    */
   bool probeChannel(const char* iata, const char* default_scope, mesh::GroupChannel* out) {
@@ -185,7 +198,7 @@ public:
   /**
    * \brief  Match our channels, for Mesh::searchChannelsByHash()
    * \param  iata  the node's region code, re-derives the channel when it changes
-   * \param  default_scope  the name 'region default' set, or NULL
+   * \param  default_scope  the node's region (noteNodeRegion), or NULL
    */
   int searchChannelsByHash(const char* iata, const char* default_scope, const uint8_t* hash,
                            mesh::GroupChannel channels[], int max_matches);
