@@ -23,39 +23,44 @@ the requester's name in brackets so several arriving together can be told apart.
 
 ## Setup
 
-The channel is `#test-<region>`, and the region is the node's **default scope** — the name
-set with `region default`, usually the county (`se-jkp`, `se06`). The meshat.se setup wizards
-set it, so on most nodes there is nothing more to do than:
+The channel is `#test-<region>`, and the region is the node's **home region** — the name set
+with `region home`, usually the county (`se-jkp`, `se06`). Without one it is the **default
+scope** (`region default`), unless that is two letters: a country such as `se`, or `eu`, which
+repeaters may use so their adverts reach the whole country, and which is too wide for a test.
+The setup wizards set the county as home, so on most nodes there is nothing more to do than:
 
 ```
 set autoreply on
 ```
 
-which answers `OK - #test-se-jkp (region default)`. Add the channel in your client and send
+which answers `OK - #test-se-jkp (region home)`. Add the channel in your client and send
 `test` to it. Every repeater in direct range answers. Nothing else is needed for a range check.
 
-A node without a default scope gets one, or a region for auto-reply alone (see
+A node without a home region gets one, or a region for auto-reply alone (see
 `autoreply.region` below), the region first being in its table:
 
 ```
 region put se-jkp
-region default se-jkp
+region home se-jkp
 region save
 ```
 
-The same name is the scope the reply floods in. A default scope in capitals, such as `SE06`,
+`region home` is upstream's: the firmware only stores and shows it (`^` in `region`), so it
+changes nothing about what the repeater forwards.
+
+The same name is the scope the reply floods in. A region in capitals, such as `SE06`,
 answers on `#test-se06` — channel names are lower case — while its replies keep the scope
 `SE06`, the name the repeaters around it carry. With auto-reply on, the reply to
-`region default <name>` also says where the node answers from then on.
+`region home <name>` and `region default <name>` also says where the node answers from then on.
 
 **The legacy channel.** Releases before ar-12 answered on `#test-<iata>`, derived from
 `set mqtt.iata`. A node with no region answers there instead, while `autoreply.legacy` is on
-(the default), so a node whose default scope is not set stays reachable where probes still use
+(the default), so a node with no region stays reachable where probes still use
 the IATA code. A node with a region answers on its region's channel only: one answer to a
 probe, never two.
 
 A build without the Observer's MQTT bridge has no `mqtt.iata`, so it has no legacy channel at
-all: it answers on its region's channel only, and stays silent until a default scope (or
+all: it answers on its region's channel only, and stays silent until a home region (or
 `autoreply.region`) is set. `set autoreply on` says so.
 `autoreply.legacy` is still stored, so a node flashed back to an Observer build finds it as it
 was, and `get autoreply` shows it as `legacy on, inert: no MQTT`.
@@ -69,9 +74,10 @@ To turn it back off:
 set autoreply off
 ```
 
-A node with neither channel — no region (neither `autoreply.region` nor a default scope), and
-legacy off or no `mqtt.iata` (or the `XXX` placeholder) — has nothing to listen on and stays
-silent even with `set autoreply on`. Both that reply and `get autoreply` say so.
+A node with neither channel — no region (none of `autoreply.region`, a home region or a county
+default scope), and legacy off or no `mqtt.iata` (or the `XXX` placeholder) — has nothing to
+listen on and stays silent even with `set autoreply on`. Both that reply and `get autoreply`
+say so.
 
 **Rolling firmware back.** The settings live in the node's own `/autoreply` file, and every
 release reads the files all earlier releases wrote, so upgrading keeps them. Downgrading does
@@ -98,11 +104,12 @@ release before ar-12 keeps `autoreply.region` as the reply's scope alone and ans
 - `get autoreply.channel`
 
 **Read-only.** The channel is `#test-` plus the region — `autoreply.region` when set, otherwise
-the default scope — folded to lower case; with no region, and legacy on, it is `#test-` plus
-the node's `mqtt.iata` code. Change them with `region default`, `set autoreply.region` and
-`set autoreply.legacy`. Building the name rather than accepting
-one is what keeps every repeater off the mesh-wide `#test`, where a reply from each of them
-would be spam — a name that starts `#test-` can never be one of the shared channel names.
+the home region, else a default scope narrower than a country — folded to lower case; with no
+region, and legacy on, it is `#test-` plus the node's `mqtt.iata` code. Change them with
+`region home`, `set autoreply.region` and `set autoreply.legacy`. Building the name rather than
+accepting one is what keeps every repeater off the mesh-wide `#test`, where a reply from each
+of them would be spam — a name that starts `#test-` can never be one of the shared channel
+names.
 
 #### Keep answering on the legacy channel
 
@@ -214,13 +221,14 @@ is settable at runtime rather than compiled in.
   folded to lower. 25 is what a companion can add: `#test-` plus 25 fills its 32-byte
   channel name. A name not in the table is refused with the `region put` that fixes it.
 
-**Default:** empty — the node's default scope (`region default`) is used instead; with neither,
+**Default:** empty — the node's home region (`region home`) is used instead, else its default
+scope unless that is a country; with none,
 there is no region channel and the reply mirrors whatever scope the request arrived under.
 
-Set it only when auto-reply must answer for another region than the node's own floods use —
-for instance a border repeater whose default scope is `se` but whose test channel is the
-county's. Set, it wins over the default scope; cleared, the channel follows the default scope
-again. `get autoreply` shows which one is in effect.
+Set it only when auto-reply must answer for another region than the node's own floods use — for
+instance a border repeater that should answer for the neighbouring county. Set, it wins over
+the home region; cleared, the channel follows the home region again. `get autoreply` shows
+which one is in effect.
 
 The same name is the test channel (`#test-<name>`, see above). With a region set, every
 auto-reply -- on the channel, private, or to a private request -- and every probe this node
@@ -327,14 +335,14 @@ travels and what it costs is under [A private request](#a-private-request).
 - `get autoreply`
 
 ```
-> on, mode flood, private on, direct flood, 8 hops, region se-jkp (region default), legacy on: #test-se-jkp (region default)
+> on, mode flood, private on, direct flood, 8 hops, region se-jkp (region home), legacy on: #test-se-jkp (region home)
 ```
 
 The region and where it comes from, legacy, and the channel the node answers on, so a site
-check sees all of them on one line. `(region default)` means the region is the node's default
-scope; `(autoreply.region)` that it was set for auto-reply; `(not in table: request scope)`
-that `autoreply.region` names a region no longer in the table, and replies take the request's
-scope until `region put` adds it.
+check sees all of them on one line. `(region home)` means the region is the node's home region,
+`(region default)` its default scope; `(autoreply.region)` that it was set for auto-reply;
+`(not in table: request scope)` that `autoreply.region` names a region no longer in the table,
+and replies take the request's scope until `region put` adds it.
 
 ## How far the reply travels
 
