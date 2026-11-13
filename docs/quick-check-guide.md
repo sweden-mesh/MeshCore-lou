@@ -286,8 +286,8 @@ get autoreply                  -> > on, mode flood, private on, direct flood, 8 
 `autoreply.private on` is the firmware default: a `test` sent privately to this repeater gets
 a private answer.
 
-**Leave `autoreply.region` unset.** The test channel follows the node's default scope
-(`region default`), the county name the setup wizards set; `autoreply.region` is only for a
+**Leave `autoreply.region` unset.** The test channel follows the node's home region
+(`region home`), the county name the setup wizards set; `autoreply.region` is only for a
 node that must answer for another region than its own floods use. Either way the name also
 scopes every reply, so on a mesh where few repeaters forward that scope, replies stop
 crossing the mesh.
@@ -295,13 +295,13 @@ crossing the mesh.
 Read the region without changing it:
 
 ```
-get autoreply.region           -> > (none: region default se-jkp)
+get autoreply.region           -> > (none: region home se-jkp)
 ```
 
 The `set autoreply on` reply names the channel and where it comes from:
-`OK - #test-se-jkp (region default)`. On a node that already had `autoreply.region`, both show
+`OK - #test-se-jkp (region home)`. On a node that already had `autoreply.region`, both show
 that name and `(autoreply.region)`; on one with no region at all, `get autoreply.region` reads
-`(none: no region default either, request scope)`, and an Observer node answers on
+`(none: no region home or default either, request scope)`, and an Observer node answers on
 `legacy #test-<iata>` instead. Leave what you find, and write it down.
 
 Read back the reply timing. These are the defaults; leave them as they are:

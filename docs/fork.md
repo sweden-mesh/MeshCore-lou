@@ -121,7 +121,7 @@ are ignored: they need Observer headers that base does not have.
 ### Auto-reply on core
 
 A core image has no MQTT and so no `mqtt.iata`: no legacy `#test-<iata>` channel, and the node
-answers on `#test-<region default>` (or `autoreply.region`) and stays silent until one is set; `get autoreply` shows `legacy on, inert: no MQTT`.
+answers on `#test-<region home>` (or `autoreply.region`) and stays silent until one is set; `get autoreply` shows `legacy on, inert: no MQTT`.
 Its replies are measured by the Observer nodes that hear them. Cost, measured on `fork/core`
 (static RAM / flash, `ar` against the same board with no feature):
 
