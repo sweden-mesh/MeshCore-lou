@@ -1,0 +1,76 @@
+# New upstream versions into the fork, up to a pull request (UPSTREAM-1). Every morning, for each
+# base, scripts/upstream-check.sh asks whether there is a newer upstream than the fork carries:
+# the newest repeater-v* tag of meshcore-dev/MeshCore for fork/core, the head of agessaman's
+# observer-firmware for fork/observer. A clean merge becomes a branch upstream/<kind>-<name> and a
+# pull request into the base, with the build check and the unit tests started on it; a conflict
+# becomes an issue listing the files. It never merges into a fork branch and never releases: a
+# release stays the operator's deliberate, monthly step.
+name: Upstream versions
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write        # push the upstream/* branch
+  pull-requests: write   # open the pull request
+  issues: write          # report a conflict
+  actions: write         # start the checks: a pull request opened with this token starts none
+
+jobs:
+  upstream:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { kind: core, base: fork/core, other: fork/observer }
+          - { kind: observer, base: fork/observer, other: fork/core }
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.base }}
+          fetch-depth: 0
+
+      - name: Is there a newer upstream, and does it merge?
+        id: check
+        run: |
+          git fetch --no-tags origin fork/observer fork/core
+          bash scripts/upstream-check.sh ${{ matrix.kind }} origin/${{ matrix.base }} | tee -a "$GITHUB_OUTPUT"
+
+      - name: Already open?
+        id: open
+        if: steps.check.outputs.status != 'up-to-date'
+        run: |
+          pr=$(gh pr list --head "${{ steps.check.outputs.branch }}" --state open --json number --jq 'length')
+          issue=$(gh issue list --state open --search "in:title \"${{ steps.check.outputs.upstream }}\" \"${{ matrix.base }}\"" --json number --jq 'length')
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          echo "issue=$issue" >> "$GITHUB_OUTPUT"
+
+      - name: Merged cleanly - push, check the fork files, open a pull request, start the checks
+        if: steps.check.outputs.status == 'merged' && steps.open.outputs.pr == '0'
+        run: |
+          branch="${{ steps.check.outputs.branch }}"
+          bash scripts/fork-check.sh "$branch" origin/${{ matrix.other }}
+          git push -f origin "$branch"
+          gh pr create --base ${{ matrix.base }} --head "$branch" \
+            --title "Merge upstream ${{ steps.check.outputs.upstream }} into ${{ matrix.base }}" \
+            --body "Opened by the Upstream versions workflow. \`${{ steps.check.outputs.upstream }}\` merged into \`${{ matrix.base }}\` without conflicts, and the fork's own files are still identical on both branches.
+
+          Before merging: the build check and the unit tests started on this branch must be green, run \`fork-matrix.yml\` with \`boards: all\` for the board sweep, and read upstream's changes for anything that touches the fork's hooks. Merging this is not a release; a release stays a deliberate, monthly step."
+          gh workflow run fork-pr.yml --ref "$branch"
+          gh workflow run run-unit-tests.yml --ref "$branch"
+
+      - name: Conflict - open an issue listing the files
+        if: steps.check.outputs.status == 'conflict' && steps.open.outputs.issue == '0'
+        run: |
+          gh issue create \
+            --title "Upstream ${{ steps.check.outputs.upstream }} does not merge into ${{ matrix.base }}" \
+            --body "Opened by the Upstream versions workflow. Merging \`${{ steps.check.outputs.upstream }}\` into \`${{ matrix.base }}\` conflicts in:
+
+          $(for f in ${{ steps.check.outputs.files }}; do echo "- \`$f\`"; done)
+
+          To merge by hand: \`bash scripts/upstream-check.sh ${{ matrix.kind }}\` reproduces it; resolve on that branch, run \`scripts/fork-check.sh\` and the host suites, and open the pull request. The workflow does not open another issue for this version while this one is open."

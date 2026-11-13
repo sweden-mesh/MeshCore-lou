@@ -54,3 +54,5 @@ scripts/ci-pr-plan.sh
 test/test_fork_settings/test_fork_settings.cpp
 docs/fork-contributing.md
 docs/fork-overview.md
+.github/workflows/upstream.yml
+scripts/upstream-check.sh
