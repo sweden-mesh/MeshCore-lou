@@ -143,9 +143,21 @@ static inline void autoReplyDefaultScope(const char* name, char* out, size_t out
   strcpy(out, name);
 }
 
+// The region a node answers for when `autoreply.region` is not set: its `region home`, which
+// the setup wizards set to the county, otherwise its default scope. A default of two letters
+// is a country (`se`) or `eu`: repeaters flood their adverts in it so the whole country hears
+// them, and a test channel that wide is no one's, so it names none. NULL when there is none.
+static inline const char* autoReplyNodeRegion(const char* home, const char* default_scope) {
+  if (home != NULL && home[0] == '#') home++;
+  if (home != NULL && home[0] && strcmp(home, "*") != 0) return home;
+  if (default_scope == NULL) return NULL;
+  const char* name = default_scope[0] == '#' ? default_scope + 1 : default_scope;
+  return strlen(name) > 2 ? default_scope : NULL;
+}
+
 // The region behind the test channel and the reply's scope: `autoreply.region` when it is
-// set, otherwise the node's default scope (autoReplyDefaultScope), which the setup wizards
-// set to the county. Empty when neither is set.
+// set, otherwise the node's own region (autoReplyNodeRegion, through autoReplyDefaultScope).
+// Empty when neither is set.
 static inline const char* autoReplyEffectiveRegion(const char* own, const char* default_scope) {
   if (own != NULL && own[0]) return own;
   return default_scope != NULL ? default_scope : "";

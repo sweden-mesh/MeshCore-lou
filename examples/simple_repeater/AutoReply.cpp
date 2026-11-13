@@ -35,6 +35,7 @@ AutoReply::AutoReply()
 {
   _region[0] = 0;
   _default_scope[0] = 0;
+  _from_home = false;
   memset(_private_senders, 0, sizeof(_private_senders));
   _next_private = 0;
 }
@@ -91,13 +92,13 @@ void AutoReply::refreshChannels(const char* iata, const char* default_scope) {
 void AutoReply::describeChannels(char* out, size_t size) const {
   if (_lanes[0].ready()) {
     snprintf(out, size, "%s (%s)", _lanes[0].name,
-             _region[0] ? "autoreply.region" : "region default");
+             _region[0] ? "autoreply.region" : regionSource());
   } else if (_lanes[1].ready()) {
     snprintf(out, size, "legacy %s", _lanes[1].name);
   } else if (region()[0]) {
     snprintf(out, size, "no channel - %s names none", region());
   } else {
-    snprintf(out, size, "no channel - set region default");
+    snprintf(out, size, "no channel - set region home");
   }
 }
 
@@ -186,8 +187,7 @@ int AutoReply::searchChannelsByHash(const char* iata, const char* default_scope,
 
 bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* command,
                               char* reply) {
-  const RegionEntry* def = regions.getDefaultRegion();
-  const char* default_scope = def ? def->name : NULL;
+  const char* default_scope = noteNodeRegion(regions);
   refreshChannels(iata, default_scope);
 
   char where[2 * AUTOREPLY_MAX_CHANNEL + 12];
@@ -200,7 +200,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
     }
     save();
     if (_enabled && !anyChannel()) {
-      strcpy(reply, "OK - on, but no channel: set region default <county> (or autoreply.region)");
+      strcpy(reply, "OK - on, but no channel: set region home <county> (or autoreply.region)");
     } else {
       sprintf(reply, "OK - %s", _enabled ? where : "off");
     }
@@ -349,9 +349,9 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
     if (_region[0]) {
       sprintf(reply, "> %s", _region);
     } else if (_default_scope[0]) {
-      sprintf(reply, "> (none: region default %s)", _default_scope);
+      sprintf(reply, "> (none: %s %s)", regionSource(), _default_scope);
     } else {
-      strcpy(reply, "> (none: no region default either, request scope)");
+      strcpy(reply, "> (none: no region home or default either, request scope)");
     }
     return true;
   }
@@ -409,7 +409,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
     // The default scope is in the table by definition; only 'autoreply.region' can name a
     // region since removed from it.
     const char* scope = !region()[0] ? "request scope"
-                      : !_region[0] ? "region default"
+                      : !_region[0] ? regionSource()
                       : autoReplyFindRegion(regions, _region) || regions.findByNamePrefix(_region)
                         ? "autoreply.region"
                       : "not in table: request scope";

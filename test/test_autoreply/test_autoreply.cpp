@@ -1905,6 +1905,44 @@ TEST(EffectiveRegion, AutoreplyRegionWinsThenTheDefaultScope) {
   EXPECT_STREQ("", autoReplyEffectiveRegion(NULL, NULL));
 }
 
+TEST(NodeRegion, HomeWinsOverTheDefault) {
+  EXPECT_STREQ("se-jkp", autoReplyNodeRegion("se-jkp", "se"));
+  EXPECT_STREQ("se-jkp", autoReplyNodeRegion("#se-jkp", "se06"));
+}
+
+TEST(NodeRegion, NoHomeFallsBackToTheDefault) {
+  EXPECT_STREQ("se06", autoReplyNodeRegion(NULL, "se06"));
+  EXPECT_STREQ("se06", autoReplyNodeRegion("", "se06"));
+  EXPECT_STREQ("se-jkp", autoReplyNodeRegion("*", "se-jkp"));
+}
+
+TEST(NodeRegion, ACountryWideDefaultNamesNoRegion) {
+  // `region default se` lets a repeater's adverts reach the whole country; the node still
+  // answers for its home, and with none it has no region rather than '#test-se'.
+  EXPECT_STREQ("se-ska", autoReplyNodeRegion("se-ska", "se"));
+  EXPECT_EQ(NULL, autoReplyNodeRegion(NULL, "se"));
+  EXPECT_EQ(NULL, autoReplyNodeRegion(NULL, "#eu"));
+  EXPECT_EQ(NULL, autoReplyNodeRegion(NULL, "*"));
+  EXPECT_EQ(NULL, autoReplyNodeRegion(NULL, NULL));
+}
+
+TEST(NodeRegion, ACountryWideDefaultWithNoHomeFallsBackToLegacy) {
+  char scope[AUTOREPLY_MAX_REGION_TEST];
+  autoReplyDefaultScope(autoReplyNodeRegion(NULL, "se"), scope, sizeof(scope));
+  Channels c = channelsFor(autoReplyEffectiveRegion("", scope), "JKG", true);
+  EXPECT_STREQ("", c.region);
+  EXPECT_STREQ("#test-jkg", c.legacy);
+}
+
+TEST(NodeRegion, TheHomeNamesTheChannelUnderACountryWideDefault) {
+  char scope[AUTOREPLY_MAX_REGION_TEST];
+  autoReplyDefaultScope(autoReplyNodeRegion("se-jkp", "se"), scope, sizeof(scope));
+  Channels c = channelsFor(autoReplyEffectiveRegion("", scope), "JKG", true);
+  EXPECT_STREQ("#test-se-jkp", c.region);
+  EXPECT_STREQ("", c.legacy);
+  EXPECT_STREQ("se-ost", autoReplyEffectiveRegion("se-ost", scope));   // autoreply.region first
+}
+
 TEST(EffectiveRegion, TheChannelIsFoldedFromTheDefaultScope) {
   // `SE06` answers on '#test-se06'; its replies keep the scope `SE06`.
   char scope[AUTOREPLY_MAX_REGION_TEST];

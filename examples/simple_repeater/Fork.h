@@ -54,9 +54,9 @@ class Fork {
   AutoReply _auto_reply;
 
   bool handleAutoReplyCommand(uint32_t sender_timestamp, char* command, char* reply);
-  // The name `region default` set, or NULL: what auto-reply's channel follows when
-  // 'autoreply.region' is unset.
-  const char* defaultScope();
+  // The node's region, or NULL: `region home`, else `region default` unless country-wide
+  // (autoReplyNodeRegion). What auto-reply's channel follows when 'autoreply.region' is unset.
+  const char* nodeRegion();
   bool autoReplyScope(TransportKey* scope);
   void sendAutoReplyFlood(mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
   uint32_t slottedReplyDelay();
