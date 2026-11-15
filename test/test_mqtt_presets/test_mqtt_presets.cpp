@@ -169,6 +169,17 @@ TEST(MQTTPresets, MeshcoreAnalyzerEuIsJwtWithGtsRootR4) {
   EXPECT_FALSE(mqttPresetUsesDevicePubkeyUsername(p));
 }
 
+TEST(MQTTPresets, MccontrolIsTheCommandBroker) {
+  const MQTTPresetDef* p = findMQTTPreset("mccontrol");
+  ASSERT_NE(nullptr, p);
+  EXPECT_EQ(MQTT_AUTH_JWT, p->auth_type);
+  EXPECT_EQ(MQTT_TOPIC_MESHCORE, p->topic_style);
+  EXPECT_STREQ("mqtts://mqtt-meshcore.louie.se:8883", p->server_url);
+  EXPECT_STREQ("mqtt-meshcore.louie.se", p->jwt_audience);
+  EXPECT_EQ(ISRG_ROOT_X1, p->ca_cert);
+  EXPECT_FALSE(p->allow_retain);
+}
+
 // ---- slot count constants -------------------------------------------------
 
 TEST(MQTTPresets, SlotCountsAreSane) {
