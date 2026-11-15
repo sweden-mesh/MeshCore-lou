@@ -27,10 +27,10 @@ mqtt.cmd ping                             # the whole plane, end to end, on the 
 
 **`set mqtt.cmd on` with no slot configured sets the node up by itself** (2026-10-08): it
 takes a free slot, gives it the built-in `mccontrol` preset -- the default command broker,
-`mqtts://mqtt.louie.se:8883`, token login like the collectors -- with packets filtered off
-(status and neighbours still publish there, which the plane's statistics use), points the
+`mqtts://mqtt-meshcore.louie.se:8883`, token login like the collectors -- with every packet type on
+(so the broker collects the region's packets beside the status and neighbours the plane's statistics use), points the
 control plane at that slot, enables it, and answers
-`OK - slot 3, mccontrol (mqtts://mqtt.louie.se:8883), packets off; reboot to apply`.
+`OK - slot 3, mccontrol (mqtts://mqtt-meshcore.louie.se:8883), packets on; reboot to apply`.
 
 Which slot (operator 2026-10-10, from ar-12):
 
@@ -38,7 +38,7 @@ Which slot (operator 2026-10-10, from ar-12):
 - **On a board without PSRAM**, which runs two slots at once, slot 2 is the plane's and is
   taken first when it holds `none` or the Observer's default `analyzer-eu`. Taking
   `analyzer-eu` turns that uplink off, and the reply says so:
-  `OK - slot 2 (was analyzer-eu, now off), mccontrol (...), packets off; reboot to apply`.
+  `OK - slot 2 (was analyzer-eu, now off), mccontrol (...), packets on; reboot to apply`.
   Any other preset in slot 2 is a collector the owner chose and is left alone; the pick moves
   on to 3-6.
 - **With PSRAM** the pick is the first of slots 3-6 whose preset is `none`; slot 2 is never

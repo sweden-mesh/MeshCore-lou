@@ -203,14 +203,41 @@ static inline bool mqttCtrlParseSlot(const char* text, int slot_count, uint8_t* 
   return true;
 }
 
-// A command may hold only printable ASCII, and never the field separator, so the
-// split that found the signature cannot be steered by the command itself.
+// The length of the well-formed UTF-8 sequence starting at s[0] (2 to 4 bytes), or 0 when it
+// is not one: a stray continuation byte, a truncated sequence, an overlong form, a UTF-16
+// surrogate or a code point above U+10FFFF.
+static inline size_t mqttCtrlUtf8SeqLen(const unsigned char* s, size_t avail) {
+  unsigned char c = s[0];
+  size_t n;
+  unsigned char lo = 0x80, hi = 0xBF;              // the allowed range of the second byte
+  if (c >= 0xC2 && c <= 0xDF) n = 2;
+  else if (c >= 0xE0 && c <= 0xEF) { n = 3; if (c == 0xE0) lo = 0xA0; if (c == 0xED) hi = 0x9F; }
+  else if (c >= 0xF0 && c <= 0xF4) { n = 4; if (c == 0xF0) lo = 0x90; if (c == 0xF4) hi = 0x8F; }
+  else return 0;
+  if (avail < n) return 0;
+  if (s[1] < lo || s[1] > hi) return 0;
+  for (size_t i = 2; i < n; i++) if ((s[i] & 0xC0) != 0x80) return 0;
+  return n;
+}
+
+// A command may hold printable ASCII and well-formed UTF-8 (so a name can be "Väster"), but
+// no control character, no DEL and never the field separator. Every byte of a multi-byte
+// UTF-8 sequence is 0x80 or above, so the separator can only appear as itself, and the
+// split that found the signature cannot be steered by the command.
 static inline bool mqttCtrlCommandCharsOk(const char* cmd, size_t len) {
   if (len == 0 || len > MQTTCTRL_MAX_COMMAND) return false;
-  for (size_t i = 0; i < len; i++) {
-    unsigned char c = (unsigned char)cmd[i];
-    if (c < 0x20 || c > 0x7E) return false;      // control chars, NUL, high bytes
-    if (c == MQTTCTRL_FIELD_SEP) return false;
+  const unsigned char* s = (const unsigned char*)cmd;
+  for (size_t i = 0; i < len; ) {
+    unsigned char c = s[i];
+    if (c < 0x80) {
+      if (c < 0x20 || c == 0x7F) return false;    // control chars, NUL, DEL
+      if (c == MQTTCTRL_FIELD_SEP) return false;
+      i++;
+      continue;
+    }
+    size_t n = mqttCtrlUtf8SeqLen(s + i, len - i);
+    if (n == 0) return false;
+    i += n;
   }
   return true;
 }

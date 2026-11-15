@@ -152,6 +152,35 @@ TEST(ParseEnvelope, RejectsControlCharactersInCommand) {
   EXPECT_EQ(MQTTCTRL_ERR_COMMAND_CHARS, parse(with_nul + "|" + sig(), &e));
 }
 
+TEST(CommandChars, AdmitsWellFormedUtf8SoANameCanHoldSwedishLetters) {
+  const char* name = "set name SE-JKP-V\xC3\xA4ster-6F8C";   // "Väster"
+  EXPECT_TRUE(mqttCtrlCommandCharsOk(name, strlen(name)));
+  const char* aao = "set name \xC3\xA5\xC3\xA4\xC3\xB6\xC3\x85\xC3\x84\xC3\x96";   // åäöÅÄÖ
+  EXPECT_TRUE(mqttCtrlCommandCharsOk(aao, strlen(aao)));
+  const char* emoji = "set name \xF0\x9F\x93\xA1";          // U+1F4E1, four bytes
+  EXPECT_TRUE(mqttCtrlCommandCharsOk(emoji, strlen(emoji)));
+}
+
+TEST(CommandChars, RefusesBytesThatAreNotWellFormedUtf8) {
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("set name \x80", 10));            // stray continuation
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("set name \xC3", 10));            // truncated at the end
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("set name \xC3x", 11));           // truncated mid-command
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("set name \xC0\xBC", 11));       // overlong '<'
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("set name \xE0\x80\xBC", 12));  // overlong, three bytes
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("set name \xED\xA0\x80", 12));  // UTF-16 surrogate
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("set name \xF4\x90\x80\x80", 13));  // above U+10FFFF
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("set name \xF5\x80\x80\x80", 13));
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("set name \xFF", 10));
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("get radio\x7F", 10));            // DEL
+  // An overlong encoding of the separator must not slip one past the split.
+  EXPECT_FALSE(mqttCtrlCommandCharsOk("get a\xC1\xBC", 7));
+}
+
+TEST(ParseEnvelope, AdmitsAUtf8Command) {
+  MqttCtrlEnvelope e;
+  EXPECT_EQ(MQTTCTRL_OK, parse(envelope("v1|1|1788200000|set name V\xC3\xA4ster"), &e));
+}
+
 // ---- the bytes the signature covers ----------------------------------------
 
 TEST(SignedMessage, BindsTheTopicSoOneSignatureFitsOneDestination) {
