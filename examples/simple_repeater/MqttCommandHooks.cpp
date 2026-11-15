@@ -8,8 +8,8 @@
 // `set mqtt.cmd on` with no slot configured, the one line a fresh node needs
 // (operator decision 2026-10-08): take a free slot (mqttCtrlPickSlot says which:
 // slot 2 first on a board that runs two at once, else 3 up), give it the
-// `mccontrol` preset with packets filtered off (status and neighbours still go,
-// which the plane's statistics use), point the control plane at it, enable, and
+// `mccontrol` preset with every packet type on (the broker collects the region's
+// packets as well as status and neighbours), point the control plane at it, enable, and
 // say what was done. Slot 1 and the active-slot cap are not touched: when the cap
 // is reached the reply names the cure and nothing is set.
 void Fork::autoSetupMqttControl(char* reply) {
@@ -33,10 +33,10 @@ void Fork::autoSetupMqttControl(char* reply) {
   const MQTTPresetDef* p = findMQTTPreset("mccontrol");
   if (p == NULL) { strcpy(reply, "Err - no mccontrol preset in this build"); return; }
   StrHelper::strncpy(obs->mqtt_slot_preset[idx], "mccontrol", sizeof(obs->mqtt_slot_preset[idx]));
-  obs->mqtt_slot_packet_filter[idx] = 0;        // packets off; status and neighbours still publish
+  obs->mqtt_slot_packet_filter[idx] = MQTTPacketFilter::kAllPacketTypes;
   _mesh._cli.savePrefs(_mesh._fs);
   _mqtt_control.setSlotAndEnable((uint8_t)(idx + 1));
-  sprintf(reply, "OK - slot %d%s, mccontrol (%s), packets off; reboot to apply", idx + 1,
+  sprintf(reply, "OK - slot %d%s, mccontrol (%s), packets on; reboot to apply", idx + 1,
           was_analyzer ? " (was analyzer-eu, now off)" : "", p->server_url);
 }
 

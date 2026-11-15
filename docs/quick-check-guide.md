@@ -362,7 +362,7 @@ This removes a plane slot an older release set up by hand (`custom`), and it fre
 `mccontrol` slot that an older release put on slot 3 or above, so step 3 picks again.
 
 **3. Turn the plane on.** With the slot at 0, `set mqtt.cmd on` chooses the slot, gives it the
-built-in `mccontrol` preset (`mqtts://mqtt.meshcore-jkp.se:8883`, token login, packets off), and
+built-in `mccontrol` preset (`mqtts://mqtt.meshcore-jkp.se:8883`, token login, packets on), and
 enables the plane:
 
 ```
@@ -374,10 +374,10 @@ The reply depends on the board and on slot 2:
 
 | board | slot 2 held | reply |
 |---|---|---|
-| no PSRAM | `analyzer-eu` | `OK - slot 2 (was analyzer-eu, now off), mccontrol (mqtts://mqtt.meshcore-jkp.se:8883), packets off; reboot to apply` |
-| no PSRAM | `none` | `OK - slot 2, mccontrol (mqtts://mqtt.meshcore-jkp.se:8883), packets off; reboot to apply` |
+| no PSRAM | `analyzer-eu` | `OK - slot 2 (was analyzer-eu, now off), mccontrol (mqtts://mqtt.meshcore-jkp.se:8883), packets on; reboot to apply` |
+| no PSRAM | `none` | `OK - slot 2, mccontrol (mqtts://mqtt.meshcore-jkp.se:8883), packets on; reboot to apply` |
 | no PSRAM | another collector | `Err - this board runs 2 slots at once and all are taken: turn one off (set mqtt2.preset none) and send 'set mqtt.cmd on' again` |
-| PSRAM | anything | `OK - slot 3, mccontrol (mqtts://mqtt.meshcore-jkp.se:8883), packets off; reboot to apply` (the first free slot of 3-6) |
+| PSRAM | anything | `OK - slot 3, mccontrol (mqtts://mqtt.meshcore-jkp.se:8883), packets on; reboot to apply` (the first free slot of 3-6) |
 | PSRAM, 3-6 all used | anything | `Err - no free slot 3-6: set mqttN.preset none on one, or set mqtt.cmd.slot <n>` |
 
 On a refusal, turn off the slot it names (with the owner's agreement if it is their
