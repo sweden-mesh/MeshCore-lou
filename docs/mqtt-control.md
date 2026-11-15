@@ -27,10 +27,10 @@ mqtt.cmd ping                             # the whole plane, end to end, on the 
 
 **`set mqtt.cmd on` with no slot configured sets the node up by itself** (2026-10-08): it
 takes a free slot, gives it the built-in `mccontrol` preset -- the default command broker,
-`mqtts://mqtt.louie.se:8883`, token login like the collectors -- with packets filtered off
+`mqtts://mqtt.meshcore-jkp.se:8883`, token login like the collectors -- with packets filtered off
 (status and neighbours still publish there, which the plane's statistics use), points the
 control plane at that slot, enables it, and answers
-`OK - slot 3, mccontrol (mqtts://mqtt.louie.se:8883), packets off; reboot to apply`.
+`OK - slot 3, mccontrol (mqtts://mqtt.meshcore-jkp.se:8883), packets off; reboot to apply`.
 
 Which slot (operator 2026-10-10, from ar-12):
 

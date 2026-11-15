@@ -193,7 +193,7 @@ static const MQTTPresetDef MQTT_PRESETS[MQTT_PRESET_COUNT] = {
     // The default command-plane broker (2026-10-08): the slot `set mqtt.cmd on` takes when
     // none is configured. Token auth like the collectors; the owner's command key, not
     // this login, is what authorises a command. Retain off: the plane keeps nothing.
-    { "mccontrol",     "mqtts://mqtt.louie.se:8883",              "mqtt.louie.se",                   ISRG_ROOT_X1,  MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE,  0,       false,  55,      nullptr,     nullptr     },
+    { "mccontrol",     "mqtts://mqtt.meshcore-jkp.se:8883",       "mqtt.meshcore-jkp.se",            ISRG_ROOT_X1,  MQTT_AUTH_JWT,      MQTT_TOPIC_MESHCORE,  0,       false,  55,      nullptr,     nullptr     },
 };
 
 // Find a preset by name, returns nullptr if not found
