@@ -2371,7 +2371,13 @@ bool MQTTBridge::recreateSlotClient(int index) {
   slot.allocated_buffer_size = 0;
   // The token buffer survives: the new client is configured from it below, and
   // its lifetime is the slot's, not the client's (see MQTTSlot::auth_token).
-  return ensureSlotClient(index);
+  if (!ensureSlotClient(index)) return false;
+#ifdef WITH_MQTT_COMMAND
+  // setupSlot() named the client this one replaces; unnamed, a recreated client (a preset
+  // change from a custom slot changes its trust) connected as the library's ESP32_<mac>.
+  if (slot.client_id[0]) slot.client->setClientId(slot.client_id);
+#endif
+  return true;
 }
 
 // Disconnect the slot's MQTT client and clear per-connection state, but leave
