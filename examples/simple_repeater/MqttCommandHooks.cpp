@@ -125,8 +125,8 @@ void Fork::loopMqttPing() {
 }
 
 // `get mqtt.cmd` on one line: on/off and the counter as before, then the slot's
-// connection, whether the broker acknowledged the /cmd subscription, and how long
-// ago the key last vouched for a command.
+// connection, whether the broker acknowledged the /cmd subscription, how long ago
+// the key last vouched for a command, and how many arrived that it did not.
 void Fork::describeMqttControl(char* reply) {
   char age[20];
   if (_ctrl_last_verified_ms == 0) {
@@ -156,6 +156,8 @@ void Fork::describeMqttControl(char* reply) {
           _mqtt_control.isEnabled() ? "on" : "off", (unsigned)_mqtt_control.counter(), slot,
           _mesh.bridge->controlSlotConnected() ? "connected" : "not connected",
           _mesh.bridge->controlSubscribed() ? "subscribed" : "not subscribed", age, ping);
+  size_t used = strlen(reply);
+  mqttCtrlRefusalNote(_ctrl_unverified, _ctrl_last_unverified, &reply[used], MQTTCTRL_MAX_REPLY - used);
 }
 
 // Drained on the loop task, never on the MQTT event task: verification wants more
@@ -173,6 +175,8 @@ void Fork::loopMqttControl() {
   MqttCtrlResult ready = mqttCtrlOwnerReady(owner_hex);
   if (ready != MQTTCTRL_OK) {
     _mqtt_control.discard();
+    _ctrl_unverified++;
+    _ctrl_last_unverified = ready;
     MESH_DEBUG_PRINTLN("MqttControl: no usable mqtt.cmd.pubkey, command discarded");
     return;
   }
@@ -180,6 +184,8 @@ void Fork::loopMqttControl() {
   mesh::Identity owner;
   if (!mesh::Utils::fromHex(owner.pub_key, PUB_KEY_SIZE, owner_hex)) {
     _mqtt_control.discard();
+    _ctrl_unverified++;
+    _ctrl_last_unverified = MQTTCTRL_ERR_NO_OWNER_KEY;
     MESH_DEBUG_PRINTLN("MqttControl: mqtt.cmd.pubkey unreadable, command discarded");
     return;
   }
@@ -205,6 +211,9 @@ void Fork::loopMqttControl() {
     } else {
       publishMqttControlResult(result, outcome, reply);
     }
+  } else if (result != MQTTCTRL_OK) {
+    _ctrl_unverified++;
+    _ctrl_last_unverified = result;
   }
 
   // Rollback (ar-11): a freshly flashed image is pending until it proves itself, and

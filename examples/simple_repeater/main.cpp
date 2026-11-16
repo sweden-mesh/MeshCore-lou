@@ -2,6 +2,7 @@
 #include <Mesh.h>
 
 #include "MyMesh.h"
+#include <helpers/ForkText.h>
 
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
@@ -23,6 +24,7 @@ void halt() {
 }
 
 static char command[160];
+static unsigned char command_esc;   // an escape sequence in progress (forkConsoleKey)
 #ifdef ETHERNET_ENABLED
 static char ethernet_command[160];
 #endif
@@ -134,11 +136,11 @@ void loop() {
   }
   while (Serial.available() && len < sizeof(command)-1) {
     char c = Serial.read();
-    if (c != '\n') {
-      command[len++] = c;
-      command[len] = 0;
-      Serial.print(c);
-    }
+    size_t n = len;
+    ForkConsoleKey key = forkConsoleKey(command, &n, &command_esc, c);
+    len = n;
+    if (key == FORK_KEY_KEEP) Serial.print(c);
+    else if (key == FORK_KEY_ERASE) Serial.print("\b \b");
     if (c == '\r') break;
   }
   if (len == sizeof(command)-1) {  // buffer full: treat as a completed line

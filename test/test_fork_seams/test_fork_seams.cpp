@@ -123,6 +123,43 @@ TEST(ForkFeatureToken, TheVersionNamesTheFeatures) {
   EXPECT_FALSE(forkFeaturesOfVersion(NULL, f, sizeof(f)));
 }
 
+// The serial console's line, as forkConsoleKey builds it from what a terminal sends.
+static std::string typed(const std::string& bytes, std::string* echo = NULL) {
+  char line[160] = {0};
+  size_t len = 0;
+  unsigned char esc = 0;
+  for (char c : bytes) {
+    ForkConsoleKey k = forkConsoleKey(line, &len, &esc, c);
+    if (echo != NULL) *echo += k == FORK_KEY_KEEP ? std::string(1, c) : k == FORK_KEY_ERASE ? "<" : "";
+  }
+  return std::string(line, len);
+}
+
+TEST(ForkConsole, ACorrectedLineIsTheLineThePersonSees) {
+  // Bench, LOUTEST 2026-11-16: `set mqtt.cmd.x` corrected to ` on` read as
+  // `unknown config: mqtt.cmd on`, the erased bytes still in it.
+  EXPECT_EQ("set mqtt.cmd on\r", typed("set mqtt.cmd.x\b\b on\r"));
+  EXPECT_EQ("get mqtt.cmd.slot\r", typed("get mqtt.cmd.slox\x7ft\r"));
+  std::string echo;
+  typed("ab\x7f" "c", &echo);
+  EXPECT_EQ("ab<c", echo);                                   // the erase is echoed as one
+  EXPECT_EQ("", typed("\b\x7f"));                            // nothing to erase is nothing
+}
+
+TEST(ForkConsole, AnArrowKeyLeavesNothingInTheLine) {
+  EXPECT_EQ("get mqtt.cmd.slot\r", typed("\x1b[Aget mqtt.cmd.slot\r"));
+  EXPECT_EQ("time\r", typed("ti\x1b[D\x1b[Cme\r"));
+  EXPECT_EQ("ver\r", typed("\x1bOAver\r"));                  // SS3, as some terminals send
+  EXPECT_EQ("ver\r", typed("\x1b[1;5Cver\r"));               // a sequence with parameters
+  EXPECT_EQ("ver\r", typed("\x1b[@ver\r"));                  // '@' is a final byte too
+}
+
+TEST(ForkConsole, OtherControlBytesAreDroppedAndUtf8IsKept) {
+  EXPECT_EQ("set name SE-JKP-V\xc3\xa4ster\r", typed("\nset name SE-JKP-V\xc3\xa4ster\r"));
+  EXPECT_EQ("ver\r", typed("v\te\x01r\r"));
+  EXPECT_EQ("set name V\r", typed("set name V\xc3\xa4\b\r"));  // erases the whole character
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
