@@ -130,6 +130,52 @@ TEST(OtaProof, APlaneThatIsOffOrSlotlessFallsBackToTheBridge) {
   EXPECT_FALSE(otaImageProven(false, false, 24UL * 3600UL * 1000UL, false));
 }
 
+TEST(OtaProof, TheRadioHasWorkedOnceItBeganAndAPacketWentEitherWay) {
+  EXPECT_FALSE(otaRadioWorked(true, 0, 0));
+  EXPECT_TRUE(otaRadioWorked(true, 1, 0));
+  EXPECT_TRUE(otaRadioWorked(true, 0, 1));
+  EXPECT_FALSE(otaRadioWorked(false, 5, 5));
+}
+
+TEST(OtaProof, TheNetworkThenTheRadioKeepTheImage) {
+  OtaImageProof p = {};
+  EXPECT_FALSE(otaImageProofNote(&p, true, false));
+  EXPECT_FALSE(otaImageProofNote(&p, false, false));
+  EXPECT_TRUE(otaImageProofNote(&p, false, true));
+}
+
+TEST(OtaProof, TheRadioThenTheNetworkKeepTheImage) {
+  OtaImageProof p = {};
+  EXPECT_FALSE(otaImageProofNote(&p, false, true));
+  EXPECT_FALSE(otaImageProofNote(&p, false, false));   // stats cleared: the radio proof holds
+  EXPECT_TRUE(otaImageProofNote(&p, true, false));
+}
+
+TEST(OtaProof, EitherProofAloneLeavesTheImagePending) {
+  OtaImageProof net = {}, radio = {};
+  for (int i = 0; i < 100; i++) {
+    EXPECT_FALSE(otaImageProofNote(&net, true, false));
+    EXPECT_FALSE(otaImageProofNote(&radio, false, true));
+  }
+}
+
+TEST(OtaProof, ARadioThatNeverBeganNeverKeepsTheImage) {
+  // Rollback then needs nothing more: the next reboot returns to the previous image.
+  OtaImageProof p = {};
+  for (int i = 0; i < 100; i++) {
+    EXPECT_FALSE(otaImageProofNote(&p, true, otaRadioWorked(false, 10, 10)));
+  }
+}
+
+TEST(OtaProof, OnceKeptItStaysKept) {
+  OtaImageProof p = {};
+  EXPECT_TRUE(otaImageProofNote(&p, true, true));
+  EXPECT_TRUE(otaImageProofNote(&p, false, false));
+  EXPECT_TRUE(otaImageProofNote(&p, true, true));
+  EXPECT_TRUE(p.network && p.radio);
+  EXPECT_FALSE(otaImageProofNote(NULL, true, true));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

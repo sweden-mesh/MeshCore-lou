@@ -116,3 +116,25 @@ static inline bool otaImageProven(bool command_verified, bool plane_listening,
   if (command_verified) return true;
   return !plane_listening && otaImageProvenByBridge(uptime_ms, any_slot_published);
 }
+
+// Neither proof above says anything about LoRa: an image whose radio driver is broken but
+// whose WiFi works passes both. So the image is kept only when the radio has worked too --
+// it came up at boot and has received or sent a packet since. The network proof (either of
+// the above) and the radio proof may come in either order; each holds once seen, so a
+// 'clear stats' after the first packet does not take the radio proof back.
+struct OtaImageProof {
+  bool network;
+  bool radio;
+};
+
+static inline bool otaRadioWorked(bool radio_began, uint32_t packets_sent, uint32_t packets_received) {
+  return radio_began && (packets_sent > 0 || packets_received > 0);
+}
+
+// Records what has been seen and returns true once both have.
+static inline bool otaImageProofNote(OtaImageProof* proof, bool network, bool radio) {
+  if (proof == NULL) return false;
+  if (network) proof->network = true;
+  if (radio) proof->radio = true;
+  return proof->network && proof->radio;
+}

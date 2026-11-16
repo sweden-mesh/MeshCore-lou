@@ -111,6 +111,9 @@ void Fork::otaLoop() {
   autoOtaTick();
 #endif
   proveImageByBridge();
+#ifdef ESP_PLATFORM
+  if (!_image_valid) markRunningImageValid(NULL);
+#endif
 }
 
 #ifdef ESP_PLATFORM
@@ -122,16 +125,22 @@ extern "C" bool verifyRollbackLater() { return true; }
 // Rollback (ar-11): a freshly flashed image is pending until it proves itself, and
 // only then is it marked valid; until then a reboot (watchdog, power) returns to the
 // previous image. What counts as proof is the caller's: a verified signed command
-// with the command plane, the bridge without it (otaImageProvenByBridge).
+// with the command plane, the bridge without it (otaImageProvenByBridge). That is the
+// network; the radio must have worked as well (otaImageProofNote), so this is also asked
+// with no proof every loop. main() halts when the radio does not begin, so here it has.
 void Fork::markRunningImageValid(const char* proof) {
   if (_image_valid) return;
+  if (proof) _image_proof_by = proof;
+  const bool radio = otaRadioWorked(true, _mesh.getNumSentFlood() + _mesh.getNumSentDirect(),
+                                    _mesh.getNumRecvFlood() + _mesh.getNumRecvDirect());
+  if (!otaImageProofNote(&_image_proof, proof != NULL, radio)) return;
   _image_valid = true;
   const esp_partition_t* running = esp_ota_get_running_partition();
   esp_ota_img_states_t state;
   if (running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
       state == ESP_OTA_IMG_PENDING_VERIFY) {
     esp_ota_mark_app_valid_cancel_rollback();
-    MESH_DEBUG_PRINTLN("OTA: running image marked valid after %s", proof);
+    MESH_DEBUG_PRINTLN("OTA: running image marked valid after %s and LoRa traffic", _image_proof_by);
   }
 }
 #else

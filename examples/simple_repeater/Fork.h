@@ -40,6 +40,8 @@ class Fork {
   uint32_t _ota_auto_start_at = 0;     // local unix secs the scheduled update may start, 0 = none
   char _ota_last_result[64] = {0};
   bool _image_valid = false;           // marked valid, or found not to need it
+  OtaImageProof _image_proof = {};     // what a pending image has shown so far
+  const char* _image_proof_by = NULL;  // the network proof, for the log line
   unsigned long _ota_proof_next = 0;
 
   void otaBegin();
