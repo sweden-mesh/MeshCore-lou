@@ -164,13 +164,16 @@ static inline const char* autoReplyEffectiveRegion(const char* own, const char* 
 }
 
 // The two channels a node answers on, each empty when it answers nothing there:
-// '#test-<region>', and while `legacy` is on '#test-<iata>' -- but only when there is no
-// region channel, so a node answers a probe on one channel, never two. The legacy channel
-// keeps a node with no region reachable where probes still use the IATA code.
+// '#test-<region>', and while `legacy` is on '#test-<iata>' beside it, so probes and people
+// still on the IATA channel keep their answers through the move to region channels
+// (operator 2026-11-14). A request arrives on one channel and is answered on that one: a
+// probe draws one reply per node, and only a probe sent on both channels draws two. A
+// region spelled like the IATA code is one channel, and is answered once.
 static inline void autoReplyChannelNames(const char* region, const char* iata, bool legacy,
                                          char* region_out, char* legacy_out, size_t out_size) {
   autoReplyRegionChannel(region, region_out, out_size);
-  if (!legacy || region_out[0] || !autoReplyDeriveChannel(iata, legacy_out, out_size)) {
+  if (!legacy || !autoReplyDeriveChannel(iata, legacy_out, out_size)
+      || strcmp(legacy_out, region_out) == 0) {
     legacy_out[0] = 0;
   }
 }

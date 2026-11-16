@@ -33,7 +33,8 @@ The setup wizards set the county as home, so on most nodes there is nothing more
 set autoreply on
 ```
 
-which answers `OK - #test-se-jkp (region home)`. Add the channel in your client and send
+which answers `OK - #test-se-jkp (region home) + legacy #test-jkg` on a node whose `mqtt.iata`
+is `JKG` (see the legacy channel below). Add the channel in your client and send
 `test` to it. Every repeater in direct range answers. Nothing else is needed for a range check.
 
 A node without a home region gets one, or a region for auto-reply alone (see
@@ -54,10 +55,13 @@ answers on `#test-se06` — channel names are lower case — while its replies k
 `region home <name>` and `region default <name>` also says where the node answers from then on.
 
 **The legacy channel.** Releases before ar-12 answered on `#test-<iata>`, derived from
-`set mqtt.iata`. A node with no region answers there instead, while `autoreply.legacy` is on
-(the default), so a node with no region stays reachable where probes still use
-the IATA code. A node with a region answers on its region's channel only: one answer to a
-probe, never two.
+`set mqtt.iata`. While `autoreply.legacy` is on (the default) the node answers there too,
+beside its region's channel (lou-18; lou-16 and lou-17 answered there only when the node had
+no region), so probes and people still using the IATA channel keep getting answers while the
+region channels take over. Each request is answered once, on the channel it came in on: a
+probe on one channel draws one reply per node, and only a probe sent on both channels draws
+two. A region spelled like the IATA code is one channel and is answered once. When adoption
+of the region channels is high, `set autoreply.legacy off` ends it without a flashing round.
 
 A build without the Observer's MQTT bridge has no `mqtt.iata`, so it has no legacy channel at
 all: it answers on its region's channel only, and stays silent until a home region (or
@@ -104,8 +108,8 @@ release before ar-12 keeps `autoreply.region` as the reply's scope alone and ans
 - `get autoreply.channel`
 
 **Read-only.** The channel is `#test-` plus the region — `autoreply.region` when set, otherwise
-the home region, else a default scope narrower than a country — folded to lower case; with no
-region, and legacy on, it is `#test-` plus the node's `mqtt.iata` code. Change them with
+the home region, else a default scope narrower than a country — folded to lower case; with
+legacy on, also `#test-` plus the node's `mqtt.iata` code. Change them with
 `region home`, `set autoreply.region` and `set autoreply.legacy`. Building the name rather than
 accepting one is what keeps every repeater off the mesh-wide `#test`, where a reply from each
 of them would be spam — a name that starts `#test-` can never be one of the shared channel
@@ -118,10 +122,13 @@ names.
 
 **Default:** `on`
 
-While on, `mqtt.iata` is set and the node has no region, it answers on `#test-<iata>`, the
-channel every release before ar-12 answered on. A node with a region never does: a `test`
-sent on both channels draws one answer. A probe the node originates (`trigger test`) goes to
-the channel it answers on. Off silences the legacy channel completely.
+While on and `mqtt.iata` is set, the node also answers on `#test-<iata>`, the channel every
+release before ar-12 answered on, whether or not it has a region. Each channel keeps its own
+rate limits, and each request is answered on the channel it came in on, so a `test` sent on
+both channels draws two answers from the node, one on each; a `test` on one draws one. Nothing
+extra goes on the air unless probes are sent on both. A probe the node originates
+(`trigger test`) goes to the region's channel, and to the legacy one only when the node has no
+region. Off silences the legacy channel completely.
 
 **Note:** the channel key is derived from the name — the first 16 bytes of `sha256("#name")`
 — so there is no PSK to configure or share. Any client that adds a channel of the same name
@@ -335,7 +342,7 @@ travels and what it costs is under [A private request](#a-private-request).
 - `get autoreply`
 
 ```
-> on, mode flood, private on, direct flood, 8 hops, region se-jkp (region home), legacy on: #test-se-jkp (region home)
+> on, mode flood, private on, direct flood, 8 hops, region se-jkp (region home), legacy on: #test-se-jkp (region home) + legacy #test-jkg
 ```
 
 The region and where it comes from, legacy, and the channel the node answers on, so a site

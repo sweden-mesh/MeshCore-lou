@@ -53,9 +53,9 @@ struct AutoReplyLane {
  * else a 'region default' narrower than a country) -- the same name that bounds how far a
  * reply floods -- and its key is the first 16 bytes of sha256 of that name, so there is
  * no PSK to configure or share, and any client that adds a channel of the same name can
- * use it. A node with no region
- * answers on '#test-<iata>' instead while 'autoreply.legacy' is on (the default), the
- * channel releases before ar-12 derived from 'set mqtt.iata'. Switched on with
+ * use it. While 'autoreply.legacy' is on (the default) the node also answers on
+ * '#test-<iata>', the channel releases before ar-12 derived from 'set mqtt.iata', each
+ * request on the channel it came in on. Switched on with
  * 'set autoreply on'; a node with neither channel stays silent either way.
  *
  * Every repeater in range answers the same trigger, so requests from further away than
@@ -85,7 +85,7 @@ class AutoReply {
 
   void toStored(AutoReplyStoredConfig* c) const;
   void fromStored(const AutoReplyStoredConfig& c);
-  // The region's own channel and the legacy one; at most one is ever ready.
+  // The region's own channel and the legacy one; either, both or neither is ready.
   AutoReplyLane _lanes[2];
   // The private path keeps its own budget: a burst of private requests must not be
   // able to spend the channel's replies, nor the other way round.
@@ -189,7 +189,7 @@ public:
    */
   bool probeChannel(const char* iata, const char* default_scope, mesh::GroupChannel* out) {
     refreshChannels(iata, default_scope);
-    const AutoReplyLane& lane = _lanes[1].ready() ? _lanes[1] : _lanes[0];
+    const AutoReplyLane& lane = _lanes[0].ready() ? _lanes[0] : _lanes[1];
     if (!lane.ready() || out == NULL) return false;
     *out = lane.channel;
     return true;

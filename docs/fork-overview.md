@@ -142,14 +142,15 @@ Now add the channel it named — `#test-sto` above — in your MeshCore client, 
 it, and every repeater in range answers.
 
 That is the legacy channel, `#test-<iata>` from the node's `mqtt.iata`, which a node answers
-on only while it has no region. To answer on your region's own channel instead, give the node
+on while `autoreply.legacy` is on -- with a region, beside the region's channel (lou-18). To
+answer on your region's own channel as well, give the node
 its default scope (it must be in the node's region table; the meshat.se setup wizards do this):
 
 ```
 region put se-sto
 region default se-sto
 region save
-> default scope is now se-sto; auto-reply #test-se-sto (region default)
+> default scope is now se-sto; auto-reply #test-se-sto (region default) + legacy #test-sto
 ```
 
 > **If `get autoreply` says `no channel`**, the node has neither a region nor an IATA code.
