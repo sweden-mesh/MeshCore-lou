@@ -1586,6 +1586,36 @@ TEST(AutoSlot, NoFreeSlotIsSaidNotGuessed) {
   EXPECT_EQ(-1, mqttCtrlPickSlot(NULL, 6, NO_PSRAM));
 }
 
+// ---- `get mqtt.cmd` says what was refused unverified (bench, LOUTEST 2026-11-16) ----------
+
+TEST(Unverified, ResultNamesAreMccontrolsAndFollowTheEnum) {
+  EXPECT_STREQ("ok", mqttCtrlResultName(MQTTCTRL_OK));
+  EXPECT_STREQ("bad-version", mqttCtrlResultName(MQTTCTRL_ERR_BAD_VERSION));
+  EXPECT_STREQ("not-allowed", mqttCtrlResultName(MQTTCTRL_ERR_NOT_ALLOWED));
+  EXPECT_STREQ("no-owner-key", mqttCtrlResultName(MQTTCTRL_ERR_NO_OWNER_KEY));
+  EXPECT_STREQ("sig-invalid", mqttCtrlResultName(MQTTCTRL_ERR_SIG_INVALID));
+  EXPECT_STREQ("broadcast-transmit", mqttCtrlResultName(MQTTCTRL_ERR_BROADCAST_TRANSMIT));
+  EXPECT_STREQ("unknown", mqttCtrlResultName(MQTTCTRL_ERR_BROADCAST_TRANSMIT + 1));
+  EXPECT_STREQ("unknown", mqttCtrlResultName(-1));
+}
+
+TEST(Unverified, TheNoteNamesTheCountAndTheLastReason) {
+  char out[64];
+  mqttCtrlRefusalNote(0, MQTTCTRL_ERR_SIG_INVALID, out, sizeof(out));
+  EXPECT_STREQ("", out);                                     // nothing refused, nothing said
+  mqttCtrlRefusalNote(3, MQTTCTRL_ERR_SIG_INVALID, out, sizeof(out));
+  EXPECT_STREQ(", unverified 3 (last sig-invalid)", out);
+  // fits beside a day-old `get mqtt.cmd` line in the 160-byte reply; the caller passes what
+  // is left of it, so a longer one is cut, never overrun
+  mqttCtrlRefusalNote(65535, MQTTCTRL_ERR_BROADCAST_TRANSMIT, out, sizeof(out));
+  EXPECT_LE(strlen(out) + strlen("> on, counter 1794734056, slot 3 connected, /cmd subscribed, "
+                                 "last command 86400 s ago, ping pong in 1234 ms"),
+            (size_t)MQTTCTRL_MAX_REPLY - 1);
+  char tiny[12];
+  mqttCtrlRefusalNote(3, MQTTCTRL_ERR_SIG_INVALID, tiny, sizeof(tiny));
+  EXPECT_STREQ(", unverifie", tiny);
+}
+
 // ---- `set mqtt.cmd on [<host>]`: the shared broker or a region's own (RB-2) ----------
 
 TEST(SlotPlan, TheBareFormIsTheMccontrolPresetAsBefore) {

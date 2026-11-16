@@ -83,6 +83,8 @@ class Fork {
   bool _ping_remote = false;                  // a ping that came over the plane is waiting
   MqttCtrlOutcome _ping_outcome;              // what its r2 answers, once it settles
   unsigned long _ctrl_last_verified_ms = 0;   // millis() of the last command the key vouched for
+  uint32_t _ctrl_unverified = 0;               // commands refused before the key vouched for them
+  uint8_t _ctrl_last_unverified = 0;           // ... and the last one's MqttCtrlResult
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
 
   bool handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply);

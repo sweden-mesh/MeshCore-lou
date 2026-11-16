@@ -116,6 +116,31 @@ enum MqttCtrlResult {
   MQTTCTRL_ERR_BROADCAST_TRANSMIT,
 };
 
+// A result's name as mccontrol and Panopticon print it (envelope.py RESULT_CODES).
+static inline const char* mqttCtrlResultName(int result) {
+  static const char* const names[] = {
+    "ok", "empty", "too-long", "no-signature", "bad-sig-len", "bad-sig-hex", "bad-version",
+    "bad-fields", "bad-counter", "replay", "expired", "expiry-too-far", "no-clock",
+    "command-chars", "not-allowed", "no-owner-key", "sig-invalid", "rate-limited",
+    "broadcast-transmit",
+  };
+  if (result < 0 || result >= (int)(sizeof(names) / sizeof(names[0]))) return "unknown";
+  return names[result];
+}
+
+// What `get mqtt.cmd` adds about commands refused before the key vouched for them: a
+// missing or wrong command key, a broken envelope. Those are never answered, since anyone
+// on the broker can send one, so this line is the only place they show; without it a node
+// with the wrong key looked exactly like one that never received anything (bench, LOUTEST
+// 2026-11-16). Empty while there are none.
+static inline void mqttCtrlRefusalNote(uint32_t refused, int last, char* out, size_t out_size) {
+  if (out == NULL || out_size == 0) return;
+  out[0] = 0;
+  if (refused == 0) return;
+  snprintf(out, out_size, ", unverified %lu (last %s)", (unsigned long)refused,
+           mqttCtrlResultName(last));
+}
+
 // Can a staged command be examined at all?
 //
 // Without a provisioned owner key there is nothing to verify a signature against,

@@ -156,6 +156,11 @@ observer tooling watches. That separation was never needed: the tooling matches 
 whether the slot is connected, whether the broker acknowledged the subscription since it
 connected, how long ago the command key last vouched for a command, and how the last ping
 ended: `pong in N ms`, `no pong in 10 s`, `publish refused`, `waiting` or `-` (no ping since boot).
+From lou-18 a command refused before the key vouched for it -- no command key, the wrong one,
+a broken envelope -- adds `, unverified <n> (last <reason>)`, the reason as mccontrol names it
+(`sig-invalid`, `no-owner-key`, ...). Such a refusal is never answered, since anyone on the
+broker can send one, so this is where it shows: `sig-invalid` means the node holds another
+command key than the sender's (`get mqtt.cmd.pubkey`).
 
 `mqtt.cmd ping` proves the rest, at the console and without the owner's laptop. The node
 publishes `ping|<8-hex nonce>` on its own `/ping`, answers at once, and goes on repeating:

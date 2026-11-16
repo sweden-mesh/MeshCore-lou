@@ -458,6 +458,7 @@ The four fields to check:
 | `slot <slot> ...` | `connected` | `not connected`: WiFi, clock, the slot (symptom table) |
 | `/cmd ...` | `subscribed` | `not subscribed`: the broker refused or has not acknowledged the subscription |
 | `last command ...` | `none yet` until a signed command arrives | |
+| `unverified <n> (last ...)` | absent | lou-18: commands arrived but were refused unanswered; `sig-invalid`: `get mqtt.cmd.pubkey` is not the sender's key; `no-owner-key`: set it |
 | `ping ...` | `pong in <ms> ms` | `waiting`: read again in a few seconds; `no pong in 10 s`: /cmd subscription, or the broker does not answer pings; `publish refused` |
 
 If the ping cannot go out, `mqtt.cmd ping` says so at once:
