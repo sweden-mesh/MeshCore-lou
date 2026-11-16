@@ -1,0 +1,28 @@
+# Publishing a release refreshes the firmware page (sweden-mesh/firmware) at once, instead of
+# waiting for its hourly index run, which GitHub may delay or skip. A release's own token cannot
+# start workflows in another repository, so this needs the secret FIRMWARE_PAGE_TOKEN: a
+# fine-grained token with Actions: read and write on sweden-mesh/firmware only. Without it this
+# job only warns; the fallback is the release checklist's step "run the page's index".
+name: Refresh the firmware page
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run the page's index
+        env:
+          GH_TOKEN: ${{ secrets.FIRMWARE_PAGE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::FIRMWARE_PAGE_TOKEN is not set: run index.yml in sweden-mesh/firmware by hand"
+            exit 0
+          fi
+          gh workflow run index.yml -R sweden-mesh/firmware
+          echo "index.yml started in sweden-mesh/firmware for ${{ github.event.release.tag_name || github.ref_name }}"
