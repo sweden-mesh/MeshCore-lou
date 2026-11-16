@@ -1586,6 +1586,71 @@ TEST(AutoSlot, NoFreeSlotIsSaidNotGuessed) {
   EXPECT_EQ(-1, mqttCtrlPickSlot(NULL, 6, NO_PSRAM));
 }
 
+// ---- `set mqtt.cmd on [<host>]`: the shared broker or a region's own (RB-2) ----------
+
+TEST(SlotPlan, TheBareFormIsTheMccontrolPresetAsBefore) {
+  MqttCtrlSlotPlan plan;
+  ASSERT_EQ(MQTTCTRL_SETUP_PRESET, mqttCtrlPlanSlot("set mqtt.cmd on", &plan));
+  EXPECT_STREQ("mccontrol", plan.preset);
+  EXPECT_STREQ("", plan.server);       // the preset names the server and the audience
+  EXPECT_STREQ("", plan.audience);
+  EXPECT_EQ(MQTTPacketFilter::kAllPacketTypes, plan.filter);
+  ASSERT_EQ(MQTTCTRL_SETUP_PRESET, mqttCtrlPlanSlot("set mqtt.cmd on  ", &plan));
+  EXPECT_STREQ("mccontrol", plan.preset);
+}
+
+TEST(SlotPlan, AHostIsACustomSlotOnThatBroker) {
+  MqttCtrlSlotPlan plan;
+  ASSERT_EQ(MQTTCTRL_SETUP_HOST, mqttCtrlPlanSlot("set mqtt.cmd on mqtt.meshcore-vgr.se", &plan));
+  EXPECT_STREQ("custom", plan.preset);
+  EXPECT_STREQ("mqtts://mqtt.meshcore-vgr.se:8883", plan.server);
+  EXPECT_STREQ("mqtt.meshcore-vgr.se", plan.audience);
+  EXPECT_EQ(MQTTPacketFilter::kAllPacketTypes, plan.filter);
+  // the longest host that fits the slot's server field, exactly
+  std::string longest(MQTTCTRL_HOST_MAX - 3, 'a');
+  longest += ".se";
+  ASSERT_EQ(MQTTCTRL_SETUP_HOST, mqttCtrlPlanSlot(("set mqtt.cmd on " + longest).c_str(), &plan));
+  EXPECT_EQ("mqtts://" + longest + ":8883", std::string(plan.server));
+  EXPECT_EQ(sizeof(plan.server) - 1, strlen(plan.server));
+}
+
+TEST(SlotPlan, ABadHostIsRefused) {
+  MqttCtrlSlotPlan plan;
+  const char* bad[] = {
+    "set mqtt.cmd on mqtts://mqtt.meshcore-vgr.se:8883",   // a URL, not a name
+    "set mqtt.cmd on mqtt.meshcore-vgr.se:8883",
+    "set mqtt.cmd on mqtt.meshcore-vgr.se/x",
+    "set mqtt.cmd on mqtt meshcore-vgr.se",
+    "set mqtt.cmd on .meshcore-vgr.se",
+    "set mqtt.cmd on meshcore-vgr.se.",
+    "set mqtt.cmd on mqtt_meshcore.se",
+    "set mqtt.cmd on m\xc3\xa4sh.se",
+  };
+  for (const char* c : bad) {
+    EXPECT_EQ(MQTTCTRL_SETUP_BAD_HOST, mqttCtrlPlanSlot(c, &plan)) << c;
+  }
+  std::string too_long(MQTTCTRL_HOST_MAX - 2, 'a');
+  too_long += ".se";
+  EXPECT_EQ(MQTTCTRL_SETUP_BAD_HOST, mqttCtrlPlanSlot(("set mqtt.cmd on " + too_long).c_str(), &plan));
+}
+
+TEST(SlotPlan, OtherCommandsAreNotThisOne) {
+  MqttCtrlSlotPlan plan;
+  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("set mqtt.cmd off", &plan));
+  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("set mqtt.cmd only", &plan));
+  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("set mqtt.cmd.slot 3", &plan));
+  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("get mqtt.cmd", &plan));
+  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot(NULL, &plan));
+}
+
+TEST(SlotPlan, NeverOverThePlane) {
+  // Pointing the plane at another broker cuts the line it would arrive on, and hands the
+  // node to whoever runs that broker: serial only, like every `set mqtt.cmd`.
+  const char* c = "set mqtt.cmd on mqtt.meshcore-vgr.se";
+  EXPECT_FALSE(mqttCtrlCommandAllowed(c, strlen(c), true));
+  EXPECT_FALSE(mqttCtrlCommandAllowed(c, strlen(c), false));
+}
+
 TEST(PlaneSlot, NoCommandFormChangesTheSlotThePlaneRides) {
   // Slot 2, as on a board without PSRAM: analyzer.eu on or off, the slot's preset, its
   // server, anything under mqtt2.

@@ -10,6 +10,7 @@
 #include <strings.h>
 
 #include "MQTTObserverValidation.h"   // mqttOwnerKeyValid
+#include "MQTTPacketFilter.h"         // kAllPacketTypes, what the plane's slot carries
 #include "MQTTReplyFormat.h"          // replyAppendf
 #include "OtaAutoLogic.h"             // the check interval the file carries a default for
 
@@ -343,6 +344,57 @@ static inline int mqttCtrlPickSlot(const char* const* presets, int slot_count,
     if (mqttCtrlPresetFree(presets[i])) return i;
   }
   return -1;
+}
+
+// What `set mqtt.cmd on [<host>]` gives the command slot (RB-2, 2026-11-16). Bare, the
+// `mccontrol` preset: the shared broker, the default for every region. With a host, a
+// region's own broker as a custom slot -- server `mqtts://<host>:8883`, the host as the
+// login token's audience -- which is what the custom-slot lines of the regional sites
+// send by hand. Either way every packet type is on: the broker collects them too.
+//
+// The host is a name, never a URL: letters, digits, '.' and '-', no dot at either end,
+// and short enough that the server fits the slot's 64-byte field. Anything else is
+// refused, so a typo cannot leave a slot pointing at a server that never answers.
+#define MQTTCTRL_PLANE_PRESET     "mccontrol"
+#define MQTTCTRL_PLANE_PORT       8883
+#define MQTTCTRL_HOST_MAX         50     // "mqtts://" + 50 + ":8883" + NUL is 64
+
+enum MqttCtrlSetup {
+  MQTTCTRL_SETUP_NOT_ON,      // not `set mqtt.cmd on [...]`
+  MQTTCTRL_SETUP_PRESET,      // bare: the mccontrol preset
+  MQTTCTRL_SETUP_HOST,        // a region's own broker, as a custom slot
+  MQTTCTRL_SETUP_BAD_HOST
+};
+
+struct MqttCtrlSlotPlan {
+  char preset[24];            // MQTTPrefs' mqtt_slot_preset
+  char server[64];            // mqtt_slot_host; empty for the preset
+  char audience[64];          // mqtt_slot_audience; empty for the preset
+  uint16_t filter;            // mqtt_slot_packet_filter
+};
+
+static inline bool mqttCtrlBrokerHostValid(const char* host) {
+  return mqttNtpHostnameValid(host) && strlen(host) <= MQTTCTRL_HOST_MAX;
+}
+
+static inline MqttCtrlSetup mqttCtrlPlanSlot(const char* command, MqttCtrlSlotPlan* plan) {
+  if (command == NULL || plan == NULL || strncmp(command, "set mqtt.cmd on", 15) != 0) {
+    return MQTTCTRL_SETUP_NOT_ON;
+  }
+  const char* host = &command[15];
+  if (host[0] != 0 && host[0] != ' ') return MQTTCTRL_SETUP_NOT_ON;
+  while (*host == ' ') host++;
+  memset(plan, 0, sizeof(*plan));
+  plan->filter = MQTTPacketFilter::kAllPacketTypes;
+  if (host[0] == 0) {
+    strcpy(plan->preset, MQTTCTRL_PLANE_PRESET);
+    return MQTTCTRL_SETUP_PRESET;
+  }
+  if (!mqttCtrlBrokerHostValid(host)) return MQTTCTRL_SETUP_BAD_HOST;
+  strcpy(plan->preset, "custom");
+  snprintf(plan->server, sizeof(plan->server), "mqtts://%s:%d", host, MQTTCTRL_PLANE_PORT);
+  strcpy(plan->audience, host);
+  return MQTTCTRL_SETUP_HOST;
 }
 
 // Does this command change the MQTT slot the command plane rides? Any form does it:
