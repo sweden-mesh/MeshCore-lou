@@ -45,3 +45,36 @@ static inline bool forkParseOnOff(const char* arg, bool* out) {
   }
   return false;
 }
+
+// The serial console's line editor, one received byte at a time. A terminal sends what its
+// keys make: 0x08 or 0x7F for the key that erases, ESC [ ... for the arrow keys. Stored as
+// they came, those bytes stayed in the command out of sight -- the terminal had already
+// drawn their effect -- so `set mqtt.cmd on` typed with one correction read as an unknown
+// config, and a line after an arrow key as an unknown command (bench, LOUTEST 2026-11-16).
+// Erasing takes back the last character, a UTF-8 one whole; an escape sequence and every
+// other control byte but the line's own '\r' is dropped. `esc` is the caller's, zero to
+// start, and carries a sequence across reads. The return says what to echo.
+enum ForkConsoleKey { FORK_KEY_KEEP, FORK_KEY_ERASE, FORK_KEY_DROP };
+
+static inline ForkConsoleKey forkConsoleKey(char* line, size_t* len, unsigned char* esc, char c) {
+  const unsigned char b = (unsigned char)c;
+  if (*esc == 1) {                                   // after ESC: CSI or SS3 opens, else done
+    *esc = (b == '[' || b == 'O') ? 2 : 0;
+    return FORK_KEY_DROP;
+  }
+  if (*esc == 2) {                                   // inside a sequence, up to its final byte
+    if (b >= 0x40 && b <= 0x7E) *esc = 0;
+    return FORK_KEY_DROP;
+  }
+  if (b == 0x1B) { *esc = 1; return FORK_KEY_DROP; }
+  if (b == 0x08 || b == 0x7F) {
+    if (*len == 0) return FORK_KEY_DROP;
+    do { (*len)--; } while (*len > 0 && ((unsigned char)line[*len] & 0xC0) == 0x80);
+    line[*len] = 0;
+    return FORK_KEY_ERASE;
+  }
+  if (b < 0x20 && b != '\r') return FORK_KEY_DROP;
+  line[(*len)++] = c;
+  line[*len] = 0;
+  return FORK_KEY_KEEP;
+}
