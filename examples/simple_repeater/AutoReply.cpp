@@ -87,12 +87,16 @@ void AutoReply::refreshChannels(const char* iata, const char* default_scope) {
   deriveLane(_lanes[1], legacy_name);
 }
 
-// "#test-se-jkp (region default)" or "legacy #test-jkg", for the replies that say where the
-// node answers. A region that names no channel (too long for one) is said so, not hidden.
+// "#test-se-jkp (region home) + legacy #test-jkg", either half alone, for the replies that
+// say where the node answers. A region that names no channel (too long for one) is said
+// so, not hidden.
 void AutoReply::describeChannels(char* out, size_t size) const {
   if (_lanes[0].ready()) {
-    snprintf(out, size, "%s (%s)", _lanes[0].name,
-             _region[0] ? "autoreply.region" : regionSource());
+    int n = snprintf(out, size, "%s (%s)", _lanes[0].name,
+                     _region[0] ? "autoreply.region" : regionSource());
+    if (_lanes[1].ready() && (size_t)n < size) {
+      snprintf(out + n, size - n, " + legacy %s", _lanes[1].name);
+    }
   } else if (_lanes[1].ready()) {
     snprintf(out, size, "legacy %s", _lanes[1].name);
   } else if (region()[0]) {

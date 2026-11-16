@@ -7,37 +7,50 @@
 
 // `set mqtt.cmd on` with no slot configured, the one line a fresh node needs
 // (operator decision 2026-10-08): take a free slot (mqttCtrlPickSlot says which:
-// slot 2 first on a board that runs two at once, else 3 up), give it the
-// `mccontrol` preset with every packet type on (the broker collects the region's
+// slot 2 first on a board that runs two at once, else 3 up), give it what
+// mqttCtrlPlanSlot says -- the `mccontrol` preset, or with a host a custom slot on a
+// region's own broker -- with every packet type on (the broker collects the region's
 // packets as well as status and neighbours), point the control plane at it, enable, and
 // say what was done. Slot 1 and the active-slot cap are not touched: when the cap
-// is reached the reply names the cure and nothing is set.
-void Fork::autoSetupMqttControl(char* reply) {
+// is reached the reply names the cure and nothing is set. With a host and a slot
+// already set, that slot is the one rewritten, so a node moves to its region's broker
+// in one line.
+void Fork::autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply) {
   MQTTPrefs* obs = _mesh._cli.getObserverPrefs();
   const char* presets[RUNTIME_MQTT_SLOTS];
   for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) presets[i] = obs->mqtt_slot_preset[i];
   const bool two_slot_board = MQTTBridge::getMaxActiveSlots() <= 2;
-  int idx = mqttCtrlPickSlot(presets, RUNTIME_MQTT_SLOTS, two_slot_board);
+  int idx = _mqtt_control.slot() > 0 ? _mqtt_control.slot() - 1
+          : mqttCtrlPickSlot(presets, RUNTIME_MQTT_SLOTS, two_slot_board);
   if (idx < 0) {
     strcpy(reply, "Err - no free slot 3-6: set mqttN.preset none on one, or set mqtt.cmd.slot <n>");
     return;
   }
-  // Taking slot 2 from analyzer-eu frees the position it takes; anything else needs room.
+  // A slot that already runs something (analyzer-eu in slot 2, or the plane's own) frees
+  // the position it takes; an empty one needs room.
   const bool was_analyzer = strcasecmp(presets[idx], MQTTCTRL_SLOT2_DEFAULT) == 0;
-  if (!was_analyzer && _mesh.bridge != NULL && !_mesh.bridge->hasRoomForAnotherSlot()) {
+  if (mqttCtrlPresetFree(presets[idx]) && _mesh.bridge != NULL && !_mesh.bridge->hasRoomForAnotherSlot()) {
     sprintf(reply, "Err - this board runs %d slots at once and all are taken: turn one off "
                    "(set mqtt2.preset none) and send 'set mqtt.cmd on' again",
             MQTTBridge::getMaxActiveSlots());
     return;
   }
-  const MQTTPresetDef* p = findMQTTPreset("mccontrol");
-  if (p == NULL) { strcpy(reply, "Err - no mccontrol preset in this build"); return; }
-  StrHelper::strncpy(obs->mqtt_slot_preset[idx], "mccontrol", sizeof(obs->mqtt_slot_preset[idx]));
-  obs->mqtt_slot_packet_filter[idx] = MQTTPacketFilter::kAllPacketTypes;
+  const char* server = plan.server;
+  if (plan.server[0] == 0) {
+    const MQTTPresetDef* p = findMQTTPreset(plan.preset);
+    if (p == NULL) { strcpy(reply, "Err - no mccontrol preset in this build"); return; }
+    server = p->server_url;
+  }
+  StrHelper::strncpy(obs->mqtt_slot_preset[idx], plan.preset, sizeof(obs->mqtt_slot_preset[idx]));
+  if (plan.server[0]) {
+    StrHelper::strncpy(obs->mqtt_slot_host[idx], plan.server, sizeof(obs->mqtt_slot_host[idx]));
+    StrHelper::strncpy(obs->mqtt_slot_audience[idx], plan.audience, sizeof(obs->mqtt_slot_audience[idx]));
+  }
+  obs->mqtt_slot_packet_filter[idx] = plan.filter;
   _mesh._cli.savePrefs(_mesh._fs);
   _mqtt_control.setSlotAndEnable((uint8_t)(idx + 1));
-  sprintf(reply, "OK - slot %d%s, mccontrol (%s), packets on; reboot to apply", idx + 1,
-          was_analyzer ? " (was analyzer-eu, now off)" : "", p->server_url);
+  sprintf(reply, "OK - slot %d%s, %s (%s), packets on; reboot to apply", idx + 1,
+          was_analyzer ? " (was analyzer-eu, now off)" : "", plan.preset, server);
 }
 
 // Build this node's control topics once and hand the bridge a list it can
@@ -286,8 +299,15 @@ void Fork::ControlLink::runCommand(uint32_t sender_timestamp, char* command, cha
 // The command plane's own verbs, and the guard that keeps every other command off the
 // slot the plane rides.
 bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply) {
-  if (strcmp(command, "set mqtt.cmd on") == 0 && _mqtt_control.slot() == 0) {
-    autoSetupMqttControl(reply);
+  MqttCtrlSlotPlan plan;
+  const MqttCtrlSetup setup = mqttCtrlPlanSlot(command, &plan);
+  if (setup == MQTTCTRL_SETUP_BAD_HOST) {
+    sprintf(reply, "Err - use: set mqtt.cmd on [<broker host name, up to %d characters>]",
+            MQTTCTRL_HOST_MAX);
+    return true;
+  }
+  if (setup == MQTTCTRL_SETUP_HOST || (setup == MQTTCTRL_SETUP_PRESET && _mqtt_control.slot() == 0)) {
+    autoSetupMqttControl(plan, reply);
     return true;
   }
   if (strcmp(command, "mqtt.cmd ping") == 0) {

@@ -1819,11 +1819,12 @@ static Channels channelsFor(const char* region, const char* iata, bool legacy) {
   return c;
 }
 
-TEST(ChannelNames, ARegionChannelReplacesTheLegacyOne) {
-  // One channel per node: a probe sent on both channels gets one answer, not two.
+TEST(ChannelNames, ARegionAndAnIataAnswerOnBothChannels) {
+  // Operator 2026-11-14: probes and people still on '#test-<iata>' keep their answers
+  // while the region channels take over. Each request is answered on its own channel.
   Channels c = channelsFor("se-jkp", "JKG", true);
   EXPECT_STREQ("#test-se-jkp", c.region);
-  EXPECT_STREQ("", c.legacy);
+  EXPECT_STREQ("#test-jkg", c.legacy);
 }
 
 TEST(ChannelNames, LegacyOnWithoutARegionStillAnswersTheOldChannel) {
@@ -1939,7 +1940,7 @@ TEST(NodeRegion, TheHomeNamesTheChannelUnderACountryWideDefault) {
   autoReplyDefaultScope(autoReplyNodeRegion("se-jkp", "se"), scope, sizeof(scope));
   Channels c = channelsFor(autoReplyEffectiveRegion("", scope), "JKG", true);
   EXPECT_STREQ("#test-se-jkp", c.region);
-  EXPECT_STREQ("", c.legacy);
+  EXPECT_STREQ("#test-jkg", c.legacy);
   EXPECT_STREQ("se-ost", autoReplyEffectiveRegion("se-ost", scope));   // autoreply.region first
 }
 
@@ -1949,7 +1950,7 @@ TEST(EffectiveRegion, TheChannelIsFoldedFromTheDefaultScope) {
   autoReplyDefaultScope("SE06", scope, sizeof(scope));
   Channels c = channelsFor(autoReplyEffectiveRegion("", scope), "JKG", true);
   EXPECT_STREQ("#test-se06", c.region);
-  EXPECT_STREQ("", c.legacy);
+  EXPECT_STREQ("#test-jkg", c.legacy);
   EXPECT_STREQ("SE06", scope);
 }
 
@@ -2006,14 +2007,14 @@ TEST(AutoReplyConfig, LegacyOffRoundTrips) {
 
 TEST(AutoReplyConfig, APreAr12RegionLoadsIntoItsNewMeaning) {
   // ar-11 stored `autoreply.region` as the reply's scope alone; read now it also names the
-  // channel, and the IATA channel, a fallback for nodes with no region, is not answered.
+  // channel, and the IATA channel is still answered beside it while legacy is on.
   std::vector<uint8_t> b = v4Prefix(7, "se-jkp");
   b.insert(b.end(), {AUTOREPLY_MODE_FLOOD, 1, 0, 10, 0, 120, 0, 16});
   AutoReplyStoredConfig c = decodeFrom(b);
   EXPECT_STREQ("se-jkp", c.region);
   Channels ch = channelsFor(c.region, "JKG", c.legacy);
   EXPECT_STREQ("#test-se-jkp", ch.region);
-  EXPECT_STREQ("", ch.legacy);
+  EXPECT_STREQ("#test-jkg", ch.legacy);
 }
 
 // The channel hash the mesh matches on is the first byte of sha256 of the 16-byte key, whose
@@ -2042,6 +2043,40 @@ TEST(ChannelMatch, OnlyReadyChannelsWithTheHashAndNoMoreThanAsked) {
   const bool both[2] = { true, true };
   EXPECT_EQ(1, autoReplyMatchingChannels(hashes, both, 2, 0x0B, idx, 1));
   EXPECT_EQ(0, autoReplyMatchingChannels(hashes, both, 2, 0x0C, idx, 4));
+}
+
+TEST(ChannelMatch, AProbeOnEitherChannelIsOfferedThatChannelAlone) {
+  // Both lanes ready, hashes apart: a probe on the region channel is decrypted with the
+  // region's key only and one on '#test-<iata>' with the legacy key only, so each probe
+  // draws one reply, on the channel it came in on, and never one on the other channel.
+  const uint8_t hashes[2] = { 0x3C, 0x91 };
+  const bool ready[2] = { true, true };
+  int idx[4];
+  ASSERT_EQ(1, autoReplyMatchingChannels(hashes, ready, 2, 0x3C, idx, 4));
+  EXPECT_EQ(0, idx[0]);
+  ASSERT_EQ(1, autoReplyMatchingChannels(hashes, ready, 2, 0x91, idx, 4));
+  EXPECT_EQ(1, idx[0]);
+}
+
+TEST(ChannelMatch, AReplyOnEitherChannelNeverTriggersAReply) {
+  // A reply goes out on the channel its request came in on, where every other node on
+  // that channel decrypts it. The second channel must not open a way round the
+  // invariant: what one node sends on either channel is never a request to another.
+  Channels c = channelsFor("se-jkp", "JKG", true);
+  const char* lanes[2] = { c.region, c.legacy };
+  for (const char* lane : lanes) {
+    ASSERT_STRNE("", lane);
+    const char* bodies[] = {
+      "SE-JKG-Rep: [LouHome] #a1b2c3d4 SNR 1.0 RSSI -100 2h AA,BB",
+      "SE-JKG-Rep: [test] SNR 1.0 RSSI -100 0h direct",
+      "test: [test a1b2c3d4] SNR 1.0 RSSI -100 0h direct",   // a node named after the keyword
+    };
+    for (const char* b : bodies) {
+      char text[256];
+      copyText(text, sizeof(text), b);
+      EXPECT_FALSE(autoReplyParseRequest(text, "test").is_trigger) << lane << ": " << b;
+    }
+  }
 }
 
 // ---- the region table looked up without regard to case (ar-13) -------------

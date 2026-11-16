@@ -299,7 +299,8 @@ get autoreply.region           -> > (none: region home se-jkp)
 ```
 
 The `set autoreply on` reply names the channel and where it comes from:
-`OK - #test-se-jkp (region home)`. On a node that already had `autoreply.region`, both show
+`OK - #test-se-jkp (region home) + legacy #test-<iata>` (an image without MQTT has no legacy
+half). On a node that already had `autoreply.region`, both show
 that name and `(autoreply.region)`; on one with no region at all, `get autoreply.region` reads
 `(none: no region home or default either, request scope)`, and an Observer node answers on
 `legacy #test-<iata>` instead. Leave what you find, and write it down.

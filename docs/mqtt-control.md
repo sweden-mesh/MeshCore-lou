@@ -21,6 +21,7 @@ Ed25519 signature by the command key this node was given.
 ```
 set mqtt.cmd.pubkey <64 hex characters>   # serial only; the PUBLIC half of the signing key
 set mqtt.cmd on                           # with no slot set: takes one, see below; reboot to apply
+set mqtt.cmd on <host>                    # the same on a region's own broker (lou-18)
 get mqtt.cmd                              # state, counter, slot, /cmd subscription, last command
 mqtt.cmd ping                             # the whole plane, end to end, on the spot (ar-12)
 ```
@@ -51,11 +52,21 @@ every command that would change it is refused with the reason, by serial or over
 move the plane first with `set mqtt.cmd.slot`, which the command plane does not admit.
 
 When no slot can run another connection the reply says so and names the cure -- turn one off
-(`set mqtt2.preset none`) -- rather than doing it for you. A slot for a different command
-broker is set by hand:
+(`set mqtt2.preset none`) -- rather than doing it for you.
+
+**A region's own command broker** (lou-18): `set mqtt.cmd on <host>` does the same with a
+custom slot in place of the preset -- server `mqtts://<host>:8883`, the host as the login
+token's audience, every packet type on -- and answers
+`OK - slot 3, custom (mqtts://mqtt.meshcore-vgr.se:8883), packets on; reboot to apply`. The
+host is a name: letters, digits, `.` and `-`, up to 50 characters; a URL, a port or anything
+else is refused. The slot is chosen as above, or, when the plane already has one, that slot
+is rewritten, so a node moves from the shared broker to its region's (or between two
+regional ones) in one line. The bare `set mqtt.cmd on` stays the shared broker. Like every
+`set mqtt.cmd`, it is serial only. On firmware before lou-18 the same slot is set by hand:
 
 ```
 set mqttN.preset custom · set mqttN.server mqtts://broker.example:8883 · set mqttN.audience broker.example
+set mqttN.filter all
 set mqtt.cmd.slot <n>                     # the MQTT slot to listen and answer on; reboot to apply
 ```
 

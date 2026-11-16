@@ -87,7 +87,7 @@ class Fork {
 
   bool handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply);
   void setupMqttControl(MQTTBridge* bridge);
-  void autoSetupMqttControl(char* reply);
+  void autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply);
   void pingMqttControl(char* reply);
   void describeMqttControl(char* reply);
   void formatNodeStats(char* reply);

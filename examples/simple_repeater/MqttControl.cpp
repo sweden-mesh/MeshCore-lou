@@ -286,7 +286,7 @@ bool MqttControl::handleCommand(uint32_t sender_timestamp, int slot_count,
   if (memcmp(command, "set mqtt.cmd ", 13) == 0) {
     bool on = false;
     if (!forkParseOnOff(&command[13], &on)) {
-      strcpy(reply, "Err - use: set mqtt.cmd on|off");
+      strcpy(reply, "Err - use: set mqtt.cmd on [<broker host>]|off");
       return true;
     }
     _enabled = on;
