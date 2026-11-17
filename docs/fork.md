@@ -12,7 +12,7 @@ built, and any combination of them builds from the same tree:
 | base | `ar` | `rc` | `arrc` | with `as` (reserved) |
 |---|---|---|---|---|
 | Observer (`fork/observer`), 33 repeater boards | built | built | built | `as`, `asar`, `asrc`, `asarrc`: not yet |
-| core MeshCore (`fork/core`), 93 boards (`scripts/boards-core.txt`) | built | mesh only: builds with `-c`, not in the release matrix | the same | `as`, `asar`: not yet |
+| core MeshCore (`fork/core`), 93 boards (`scripts/boards-core.txt`) | built | built, mesh only | built, mesh only | `as`, `asar`: not yet |
 
 Every Observer image also carries signed pull OTA; a core image has none. Room-server and
 companion images are not built (TODO 22a rulings 14, 23).
@@ -38,7 +38,7 @@ that has none of its features.
 The switches are passed by the build script, never written into a variant's
 `platformio.ini`, so every board builds every combination unchanged.
 `scripts/build-matrix.sh` builds every combination for every board of the base it runs on
-(`ar rc arrc` × the 33 Observer boards on `fork/observer`, `ar` × `scripts/boards-core.txt` on
+(`ar rc arrc` × the 33 Observer boards on `fork/observer` and × `scripts/boards-core.txt` on
 `fork/core`), or the ones named with `-c` and `-b`:
 
 ```sh
@@ -50,9 +50,11 @@ Each image is `<env>-<mcu>-v1.18.0-lou-<nn>-<features>-<hash>.bin` and asks its 
 manifest `<env>-<features>.json` (`OTA_VARIANT`), so it can only be offered its own combination.
 `scripts/check-build-matrix.sh` compares the plan with `test/data/build-matrix-<base>.txt`.
 The whole matrix runs in GitHub Actions, `.github/workflows/fork-matrix.yml`, started by hand
-with the two refs and the revision: the host suites per combination, then one job per image
-(192 at lou-15), then one artifact, `candidate-<revision>`, with every image, every Observer
-image's unsigned manifest and `SHA256SUMS`. It signs nothing and publishes nothing; the
+with the two refs and the revision: the host suites per combination, then one job per Observer
+image and one per core board building its three combinations in turn (192 jobs, 378 images at
+lou-19; GitHub allows 256 jobs in a matrix, `scripts/ci-plan.sh`), then one artifact,
+`candidate-<revision>`, with every image, every Observer image's unsigned manifest and
+`SHA256SUMS`. It signs nothing and publishes nothing; the
 release step on the release host does both. Every pull request and push to either branch runs
 `.github/workflows/fork-pr.yml`: each combination of the base on one ESP32 and one nRF52 board
 (`scripts/ci-pr-plan.sh`), and on `fork/observer` the XIAO S3 WIO image built as a release

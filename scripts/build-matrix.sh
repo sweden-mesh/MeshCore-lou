@@ -4,8 +4,8 @@
 #
 #   scripts/build-matrix.sh [-c "ar rc arrc"] [-b "env ..."] [-r lou-14] [-o DIR] [-n]
 #
-#   -c  combinations, the codes as/ar/rc run together in that order. Default: ar rc arrc on
-#       fork/observer, ar on fork/core. rc on a board without the Observer bridge is mesh only.
+#   -c  combinations, the codes as/ar/rc run together in that order. Default: ar rc arrc.
+#       rc on a board without the Observer bridge (fork/core) is mesh only.
 #   -b  boards (env names). Default: every *_repeater_observer_mqtt env on fork/observer,
 #       scripts/boards-core.txt on fork/core. "all": every *_repeater_observer_mqtt env on
 #       fork/observer, every *_repeater env on fork/core -- the sweep for which boards fit.
@@ -42,9 +42,7 @@ while getopts "c:b:r:o:n" opt; do
 done
 
 if [ -f src/helpers/bridges/MQTTBridge.h ]; then BASE=observer; else BASE=core; fi
-if [ -z "$COMBOS" ]; then
-  [ "$BASE" = observer ] && COMBOS="ar rc arrc" || COMBOS="ar"
-fi
+[ -z "$COMBOS" ] && COMBOS="ar rc arrc"
 if [ -z "$BOARDS" ]; then
   if [ "$BASE" = observer ]; then
     BOARDS=$(bash build.sh list | awk '{print $1}' | grep '_repeater_observer_mqtt$' | LC_ALL=C sort)

@@ -1,6 +1,8 @@
 # Every combination of the fork's features, for every board of both bases (TODO 22a ruling
-# 16): ar, rc and arrc x the 17 Observer repeaters from fork/observer, ar x the curated core
+# 16): ar, rc and arrc x the Observer repeaters from fork/observer and x the curated core
 # boards from fork/core (scripts/boards-core.txt). The host suites per combination first.
+# One job per Observer image, one per core board with its combinations built in turn
+# (scripts/ci-plan.sh), to stay under GitHub's 256 jobs in a matrix.
 #
 # Out: one artifact holding every image, its UNSIGNED manifest (<env>-<features>.unsigned.json,
 # Observer images only) and SHA256SUMS. Nothing here signs, tags or publishes: the release
@@ -103,7 +105,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: img-${{ matrix.base }}-${{ matrix.env }}-${{ matrix.combo }}
+          name: img-${{ matrix.base }}-${{ matrix.name }}
           path: |
             dist/*
             !dist/logs
@@ -111,12 +113,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: log-${{ matrix.base }}-${{ matrix.env }}-${{ matrix.combo }}
+          name: log-${{ matrix.base }}-${{ matrix.name }}
           path: dist/logs
       - uses: actions/upload-artifact@v4
-        if: success()
+        if: always()
         with:
-          name: size-${{ matrix.base }}-${{ matrix.env }}-${{ matrix.combo }}
+          name: size-${{ matrix.base }}-${{ matrix.name }}
           path: dist/logs/*.size
 
   # Which boards built and how much RAM and flash each image uses, whether or not every
@@ -138,6 +140,7 @@ jobs:
           print("| base | board | features | built | RAM used / of | flash used / of |")
           print("|---|---|---|---|---|---|")
           built = 0
+          rows = [dict(r, combo=c) for r in rows for c in r["combo"].split()]
           for r in sorted(rows, key=lambda r: (r["base"], r["env"], r["combo"])):
               f = os.path.join("sizes", f'{r["env"]}-{r["combo"]}.size')
               n = open(f).read().split() if os.path.exists(f) else []
