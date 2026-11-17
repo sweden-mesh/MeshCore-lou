@@ -2396,7 +2396,7 @@ TEST(MeshOnly, TheUplinksRepairsAndItsUpdateAreRefused) {
   const char* refused[] = {
     "set wifi.ssid HomeNet", "set wifi.pwd hunter2", "set mqtt.cmd on",
     "set mqtt.cmd on mqtt-meshcore.louie.se", "ota update", "ota check", "mqtt.cmd ping",
-    "OTA UPDATE",
+    "OTA UPDATE", "set mqtt1.preset meshat.se", "set mqtt2.server mqtt.example.org", "SET MQTT6.PORT 1883",
   };
   const uint32_t now = 1795000000 - 60;
   for (const char* c : refused) {
@@ -2408,6 +2408,10 @@ TEST(MeshOnly, TheUplinksRepairsAndItsUpdateAreRefused) {
   // With an uplink the same commands travel as before.
   for (const char* c : refused) EXPECT_TRUE(mqttCtrlMeshCommandAllowed(c, strlen(c), true)) << c;
   EXPECT_FALSE(mqttCtrlMeshCommandAllowed("ota updatex", 11, true, false));
+  // Only a slot: the plane's own settings and a name that merely starts so are not the slot's.
+  EXPECT_FALSE(mqttCtrlNeedsUplink("set mqtt.iata GOT", 17));
+  EXPECT_FALSE(mqttCtrlNeedsUplink("set mqtt1", 9));
+  EXPECT_FALSE(mqttCtrlNeedsUplink("set mqttx.preset a", 18));
 }
 
 TEST(MeshOnly, CounterExpiryAndDenyListAreUnchanged) {

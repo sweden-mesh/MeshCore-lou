@@ -412,8 +412,11 @@ above holds, with these differences:
   `mqtt.cmd.mesh` does not exist there, and a mode carried over in `/mqttcontrol` from an
   Observer image is ignored.
 - **What only an uplink means is refused** as `not-allowed` (14): the repair allowance, which
-  repairs an uplink there is none of, and `ota check`, `ota update` and `mqtt.cmd ping`. The
-  deny list applies in full.
+  repairs an uplink there is none of, `ota check`, `ota update`, `mqtt.cmd ping` and the broker
+  slots' settings (`set mqttN.*`). The deny list applies in full.
+
+On an Observer image the mesh road already reaches the broker slots' settings (`set mqttN.*`),
+as the deny list admits them, so a broken Observer feed can be repaired over the mesh.
 
 Set it up on the console: `set mqtt.cmd.pubkey <64 hex>` (serial only, as everywhere), then
 `set mqtt.cmd on`.
