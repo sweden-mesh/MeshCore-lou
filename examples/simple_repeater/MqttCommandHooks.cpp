@@ -15,16 +15,17 @@
 // region's own broker -- with every packet type on (the broker collects the region's
 // packets as well as status and neighbours), point the control plane at it, enable, and
 // say what was done. Slot 1 and the active-slot cap are not touched: when the cap
-// is reached the reply names the cure and nothing is set. With a host and a slot
-// already set, that slot is the one rewritten, so a node moves to its region's broker
-// in one line.
+// is reached the reply names the cure and nothing is set. With a slot already set,
+// that slot is the one rewritten: with a host a node moves to its region's broker in
+// one line, and bare it goes back to the preset. The slot is saved to the Observer's
+// own file before the plane is pointed at it; a save that fails leaves the slot as it
+// was and the plane untouched.
 void Fork::autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply) {
   MQTTPrefs* obs = _mesh._cli.getObserverPrefs();
   const char* presets[RUNTIME_MQTT_SLOTS];
   for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) presets[i] = obs->mqtt_slot_preset[i];
   const bool two_slot_board = MQTTBridge::getMaxActiveSlots() <= 2;
-  int idx = _mqtt_control.slot() > 0 ? _mqtt_control.slot() - 1
-          : mqttCtrlPickSlot(presets, RUNTIME_MQTT_SLOTS, two_slot_board);
+  int idx = mqttCtrlSetupSlot(_mqtt_control.slot(), presets, RUNTIME_MQTT_SLOTS, two_slot_board);
   if (idx < 0) {
     strcpy(reply, "Err - no free slot 3-6: set mqttN.preset none on one, or set mqtt.cmd.slot <n>");
     return;
@@ -44,13 +45,24 @@ void Fork::autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply) {
     if (p == NULL) { strcpy(reply, "Err - no mccontrol preset in this build"); return; }
     server = p->server_url;
   }
-  StrHelper::strncpy(obs->mqtt_slot_preset[idx], plan.preset, sizeof(obs->mqtt_slot_preset[idx]));
-  if (plan.server[0]) {
-    StrHelper::strncpy(obs->mqtt_slot_host[idx], plan.server, sizeof(obs->mqtt_slot_host[idx]));
-    StrHelper::strncpy(obs->mqtt_slot_audience[idx], plan.audience, sizeof(obs->mqtt_slot_audience[idx]));
+  MqttCtrlSlotPlan was;
+  StrHelper::strncpy(was.preset, obs->mqtt_slot_preset[idx], sizeof(was.preset));
+  StrHelper::strncpy(was.server, obs->mqtt_slot_host[idx], sizeof(was.server));
+  StrHelper::strncpy(was.audience, obs->mqtt_slot_audience[idx], sizeof(was.audience));
+  was.filter = obs->mqtt_slot_packet_filter[idx];
+  mqttCtrlApplySlotPlan(&plan, obs->mqtt_slot_preset[idx], sizeof(obs->mqtt_slot_preset[idx]),
+                        obs->mqtt_slot_host[idx], sizeof(obs->mqtt_slot_host[idx]),
+                        obs->mqtt_slot_audience[idx], sizeof(obs->mqtt_slot_audience[idx]),
+                        &obs->mqtt_slot_packet_filter[idx]);
+  if (!_mesh._cli.saveObserverPrefs(_mesh._fs)) {
+    mqttCtrlApplySlotPlan(&was, obs->mqtt_slot_preset[idx], sizeof(obs->mqtt_slot_preset[idx]),
+                          obs->mqtt_slot_host[idx], sizeof(obs->mqtt_slot_host[idx]),
+                          obs->mqtt_slot_audience[idx], sizeof(obs->mqtt_slot_audience[idx]),
+                          &obs->mqtt_slot_packet_filter[idx]);
+    sprintf(reply, "Err - the MQTT settings could not be saved: slot %d and the plane are unchanged",
+            idx + 1);
+    return;
   }
-  obs->mqtt_slot_packet_filter[idx] = plan.filter;
-  _mesh._cli.savePrefs(_mesh._fs);
   _mqtt_control.setSlotAndEnable((uint8_t)(idx + 1));
   sprintf(reply, "OK - slot %d%s, %s (%s), packets on; reboot to apply", idx + 1,
           was_analyzer ? " (was analyzer-eu, now off)" : "", plan.preset, server);
@@ -348,7 +360,7 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* rep
             MQTTCTRL_HOST_MAX);
     return true;
   }
-  if (setup == MQTTCTRL_SETUP_HOST || (setup == MQTTCTRL_SETUP_PRESET && _mqtt_control.slot() == 0)) {
+  if (setup == MQTTCTRL_SETUP_HOST || setup == MQTTCTRL_SETUP_PRESET) {
     autoSetupMqttControl(plan, reply);
     return true;
   }

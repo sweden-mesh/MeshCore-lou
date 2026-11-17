@@ -1731,6 +1731,48 @@ TEST(SlotPlan, NeverOverThePlane) {
   EXPECT_FALSE(mqttCtrlCommandAllowed(c, strlen(c), false));
 }
 
+// OTM-7: with a command slot already set, both forms rewrite that slot -- the bare one puts
+// it back on the preset -- and only a node without one picks a free slot.
+TEST(SlotPlan, TheSlotWrittenIsThePlanesOwnWhenItHasOne) {
+  const char* presets[6] = { "analyzer-us", "analyzer-eu", "custom", "none", "", "none" };
+  EXPECT_EQ(2, mqttCtrlSetupSlot(3, presets, 6, PSRAM));      // its own, though not free
+  EXPECT_EQ(5, mqttCtrlSetupSlot(6, presets, 6, PSRAM));
+  EXPECT_EQ(1, mqttCtrlSetupSlot(2, presets, 6, NO_PSRAM));
+  EXPECT_EQ(3, mqttCtrlSetupSlot(0, presets, 6, PSRAM));      // none yet: the first free
+  EXPECT_EQ(1, mqttCtrlSetupSlot(0, presets, 6, NO_PSRAM));
+  const char* busy[6] = { "a", "b", "c", "d", "e", "f" };
+  EXPECT_EQ(-1, mqttCtrlSetupSlot(0, busy, 6, PSRAM));
+  EXPECT_EQ(3, mqttCtrlSetupSlot(4, busy, 6, PSRAM));
+  EXPECT_EQ(-1, mqttCtrlSetupSlot(7, busy, 6, PSRAM));        // out of range is no slot
+}
+
+TEST(SlotPlan, TheBareFormPutsACustomSlotBackOnThePreset) {
+  char preset[24] = "custom", server[64] = "mqtts://mqtt.meshcore-vgr.se:8883";
+  char audience[64] = "mqtt.meshcore-vgr.se";
+  uint16_t filter = 0x0001;
+  MqttCtrlSlotPlan plan;
+  ASSERT_EQ(MQTTCTRL_SETUP_PRESET, mqttCtrlPlanSlot("set mqtt.cmd on", &plan));
+  mqttCtrlApplySlotPlan(&plan, preset, sizeof(preset), server, sizeof(server), audience,
+                        sizeof(audience), &filter);
+  EXPECT_STREQ("mccontrol", preset);
+  EXPECT_STREQ("", server);
+  EXPECT_STREQ("", audience);
+  EXPECT_EQ(MQTTPacketFilter::kAllPacketTypes, filter);
+}
+
+TEST(SlotPlan, TheHostFormRewritesTheSlotAsBefore) {
+  char preset[24] = "mccontrol", server[64] = "", audience[64] = "";
+  uint16_t filter = 0;
+  MqttCtrlSlotPlan plan;
+  ASSERT_EQ(MQTTCTRL_SETUP_HOST, mqttCtrlPlanSlot("set mqtt.cmd on mqtt.meshcore-vgr.se", &plan));
+  mqttCtrlApplySlotPlan(&plan, preset, sizeof(preset), server, sizeof(server), audience,
+                        sizeof(audience), &filter);
+  EXPECT_STREQ("custom", preset);
+  EXPECT_STREQ("mqtts://mqtt.meshcore-vgr.se:8883", server);
+  EXPECT_STREQ("mqtt.meshcore-vgr.se", audience);
+  EXPECT_EQ(MQTTPacketFilter::kAllPacketTypes, filter);
+}
+
 TEST(PlaneSlot, NoCommandFormChangesTheSlotThePlaneRides) {
   // Slot 2, as on a board without PSRAM: analyzer.eu on or off, the slot's preset, its
   // server, anything under mqtt2.
