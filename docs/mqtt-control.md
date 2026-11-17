@@ -359,6 +359,9 @@ restarts every node it reaches: one publish would take a region off the air at o
 no node had yet shown to work. Sent to one node it is a command like any other, on the command
 budget.
 
+`reboot` is refused there for the same reason (lou-19, operator 2026-11-17): one publish would
+restart the whole region together. Sent to one node it is admitted as before.
+
 ## Over the mesh, when Wi-Fi or the broker is down (lou-19)
 
 A node whose Wi-Fi or broker fails is still on the mesh. The same signed `v1` command can then

@@ -947,12 +947,14 @@ static inline MqttCtrlResult mqttCtrlTransmitTopicResult(bool is_transmit, const
   return MQTTCTRL_OK;
 }
 
-// What the broadcast topic refuses: a transmit, and `ota update`, which restarts every
-// node it reaches. One publish would take a whole region off the air at once, and put
-// the same image on all of it before any one node had shown that image works. Answered
-// with the transmit's code, since the reason is the same: one publish, every node.
+// What the broadcast topic refuses: a transmit, and `ota update` and `reboot`, which
+// restart every node they reach. One publish would take a whole region off the air at
+// once, and for `ota update` put the same image on all of it before any one node had
+// shown that image works. Answered with the transmit's code, since the reason is the
+// same: one publish, every node.
 static inline bool mqttCtrlBroadcastRefused(const char* command, size_t len) {
-  return mqttCtrlIsTransmitCommand(command, len) || mqttCtrlExactCommand(command, len, "ota update");
+  return mqttCtrlIsTransmitCommand(command, len) || mqttCtrlExactCommand(command, len, "ota update") ||
+         mqttCtrlExactCommand(command, len, "reboot");
 }
 
 // The sender_timestamp an MQTT command executes with. **Never 0.**
