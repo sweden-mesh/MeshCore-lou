@@ -163,28 +163,38 @@ TEST(ForkConsole, OtherControlBytesAreDroppedAndUtf8IsKept) {
 // ---- what only a local caller starts (OTM-6c) -----------------------------------
 
 TEST(OpensBoardToRange, ManualOtaInEveryForm) {
-  EXPECT_TRUE(forkOpensBoardToRange("start ota", true));
-  EXPECT_TRUE(forkOpensBoardToRange("start ota ap", true));
-  EXPECT_TRUE(forkOpensBoardToRange("start ota", false));
-  EXPECT_TRUE(forkOpensBoardToRange("start otax", true));   // core's CLI matches the prefix
+  EXPECT_TRUE(forkOpensBoardToRange("start ota", true, false));
+  EXPECT_TRUE(forkOpensBoardToRange("start ota ap", true, false));
+  EXPECT_TRUE(forkOpensBoardToRange("start ota", false, false));
+  EXPECT_TRUE(forkOpensBoardToRange("start otax", true, false));   // core's CLI matches the prefix
+}
+
+// nRF52: `start ota` is BLE DFU, which a remote admin starts as on stock MeshCore (operator
+// 2026-11-17); the ESP32's hotspot and uploader stay serial-only.
+TEST(OpensBoardToRange, Nrf52BleDfuIsAllowedEsp32OtaIsNot) {
+  EXPECT_FALSE(forkOpensBoardToRange("start ota", true, true));
+  EXPECT_FALSE(forkOpensBoardToRange("start ota", false, true));
+  EXPECT_TRUE(forkOpensBoardToRange("start ota", false, false));
+  EXPECT_TRUE(forkOpensBoardToRange("start ota ap", true, false));
+  EXPECT_TRUE(forkOpensBoardToRange("start webconfig ap", true, true));   // never on nRF52, still refused
 }
 
 TEST(OpensBoardToRange, TheSetupAccessPointButNotTheLanPortal) {
-  EXPECT_TRUE(forkOpensBoardToRange("start webconfig ap", true));
-  EXPECT_TRUE(forkOpensBoardToRange("start webconfig ap", false));
-  EXPECT_TRUE(forkOpensBoardToRange("start webconfig", false));   // no network: the setup AP
-  EXPECT_FALSE(forkOpensBoardToRange("start webconfig", true));   // the LAN portal, password
+  EXPECT_TRUE(forkOpensBoardToRange("start webconfig ap", true, false));
+  EXPECT_TRUE(forkOpensBoardToRange("start webconfig ap", false, false));
+  EXPECT_TRUE(forkOpensBoardToRange("start webconfig", false, false));   // no network: the setup AP
+  EXPECT_FALSE(forkOpensBoardToRange("start webconfig", true, false));   // the LAN portal, password
 }
 
 TEST(OpensBoardToRange, NothingElse) {
-  EXPECT_FALSE(forkOpensBoardToRange("stop ota", false));
-  EXPECT_FALSE(forkOpensBoardToRange("stop webconfig", false));
-  EXPECT_FALSE(forkOpensBoardToRange("ota update", false));
-  EXPECT_FALSE(forkOpensBoardToRange("ota check", false));
-  EXPECT_FALSE(forkOpensBoardToRange("start", false));
-  EXPECT_FALSE(forkOpensBoardToRange("start ot", false));
-  EXPECT_FALSE(forkOpensBoardToRange("", false));
-  EXPECT_FALSE(forkOpensBoardToRange(NULL, false));
+  EXPECT_FALSE(forkOpensBoardToRange("stop ota", false, false));
+  EXPECT_FALSE(forkOpensBoardToRange("stop webconfig", false, false));
+  EXPECT_FALSE(forkOpensBoardToRange("ota update", false, false));
+  EXPECT_FALSE(forkOpensBoardToRange("ota check", false, false));
+  EXPECT_FALSE(forkOpensBoardToRange("start", false, false));
+  EXPECT_FALSE(forkOpensBoardToRange("start ot", false, false));
+  EXPECT_FALSE(forkOpensBoardToRange("", false, false));
+  EXPECT_FALSE(forkOpensBoardToRange(NULL, false, false));
 }
 
 int main(int argc, char** argv) {

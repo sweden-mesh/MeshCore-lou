@@ -53,9 +53,11 @@ static inline bool forkParseOnOff(const char* arg, bool* out) {
 // starts them. Matched as upstream's CLI matches `start ota`, by the bare prefix. `start
 // webconfig` alone raises the setup access point only while the node has no network to join
 // ('network_up' false); with one it binds the LAN portal, which takes the admin password.
-static inline bool forkOpensBoardToRange(const char* command, bool network_up) {
+// 'ble_dfu': the board's `start ota` is the nRF52's BLE DFU, which a remote admin starts as
+// on stock MeshCore (operator 2026-11-17): a mast-top nRF52 has no other way to be updated.
+static inline bool forkOpensBoardToRange(const char* command, bool network_up, bool ble_dfu) {
   if (command == NULL) return false;
-  if (strncmp(command, "start ota", 9) == 0) return true;
+  if (strncmp(command, "start ota", 9) == 0) return !ble_dfu;
   if (strncmp(command, "start webconfig", 15) != 0) return false;
   return command[15] != 0 || !network_up;
 }

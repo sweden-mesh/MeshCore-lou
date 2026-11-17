@@ -102,9 +102,10 @@ Two things are deliberately out of reach of the remote path no matter what it ca
 `set prv.key`, `erase` and `set mqtt.cmd.pubkey`, which require a locally-privileged caller (or,
 for a keyless node's first key only, a remote admin); and a broadcast that would make every node
 transmit at once. Nor does a remote admin start what opens the board to anyone in Wi-Fi or BLE
-range with no password of its own: `start ota` (the OTA hotspot and uploader, the nRF52's BLE
-DFU) and the web portal's setup access point (`start webconfig ap`, or `start webconfig` with no
-network to join) answer only serial and the local console.
+range with no password of its own: `start ota` on ESP32 (the OTA hotspot and uploader) and the
+web portal's setup access point (`start webconfig ap`, or `start webconfig` with no
+network to join) answer only serial and the local console. On nRF52 a remote admin still
+starts BLE DFU with `start ota`, as on stock MeshCore (operator 2026-11-17).
 
 ### What this does not defend against
 
