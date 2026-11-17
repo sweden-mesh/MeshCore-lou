@@ -75,10 +75,14 @@ class MqttControl {
   char _v2_topic[MQTTCTRL_MAX_TOPIC + 1];      // the only topic a v2 command may arrive on
   MqttCtrlBudget _commands;
   MqttCtrlBudget _transmits;
+  uint8_t _mesh_mode;         // MqttCtrlMeshMode
+  MqttCtrlMeshBudget _mesh_answers;
 
   void load();
   void save();
   void toStored(MqttCtrlStoredConfig* c) const;
+  MqttCtrlResult execute(const MqttCtrlEnvelope& env, const char* topic, bool mesh, uint32_t now,
+                         MqttCommandRunner* runner, char* reply, MqttCtrlOutcome* out);
 
 public:
   MqttControl();
@@ -99,6 +103,8 @@ public:
     _v2_ready = key_for[0] != 0;
   }
   const uint8_t* v2Key() const { return _v2_key; }
+  uint8_t meshMode() const { return _mesh_mode; }
+  void setMeshMode(uint8_t mode) { _mesh_mode = mode; save(); }
 
   // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
   static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);
@@ -134,6 +140,15 @@ public:
   MqttCtrlResult drain(const mesh::Identity& owner, uint32_t now,
                        MqttCommandRunner* runner, char* reply, size_t reply_size,
                        MqttCtrlOutcome* out = NULL);
+
+  // The same, for a command that came over the mesh (mqttCtrlMeshParse) addressed to
+  // 'topic', this node's own command topic. 'open' is mqttCtrlMeshOpen now. 'answer' says
+  // whether the outcome may go back over the air: only once the key has vouched for the
+  // command, its counter is new and the mesh budget allowed it, so that nobody who heard a
+  // request can make the node transmit by sending it again.
+  MqttCtrlResult meshCommand(const mesh::Identity& owner, const char* topic,
+                             const MqttCtrlMeshRequest& req, uint32_t now, bool open,
+                             MqttCommandRunner* runner, char* reply, bool* answer);
 
   // 'slot_count' bounds 'set mqtt.cmd.slot'; see mqttCtrlParseSlot. A non-zero
   // 'sender_timestamp' is a remote caller, which may not read or write the key.

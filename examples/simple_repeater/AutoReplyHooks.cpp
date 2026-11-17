@@ -144,8 +144,8 @@ void Fork::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Group
 // (chooseReplyRoute): a flooded request gets the path it collected back with the
 // answer, as a login does, so a requester with no path here gains one; a direct one
 // carries no path of its own and goes back along the stored one, or floods.
-bool Fork::onAnonRequest(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
-                         const uint8_t* data, size_t len) {
+bool Fork::onPrivateTest(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                        const uint8_t* data, size_t len) {
   if (!autoReplyIsPrivateTest(data, len, AUTOREPLY_KEYWORD)) return false;
 
   uint8_t report[AUTOREPLY_MAX_PAYLOAD];

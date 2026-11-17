@@ -49,6 +49,19 @@ void Fork::loop() {
 #endif
 }
 
+#if defined(WITH_AUTO_REPLY) || defined(WITH_MQTT_COMMAND)
+bool Fork::onAnonRequest(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                         const uint8_t* data, size_t len) {
+#ifdef WITH_MQTT_COMMAND
+  if (onMeshCommand(packet, secret, sender, data, len)) return true;
+#endif
+#ifdef WITH_AUTO_REPLY
+  if (onPrivateTest(packet, secret, sender, data, len)) return true;
+#endif
+  return false;
+}
+#endif
+
 bool Fork::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
 #ifdef WITH_MQTT_BRIDGE
   if (handleOtaCommand(command, reply)) return true;

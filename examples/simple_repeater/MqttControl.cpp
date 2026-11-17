@@ -44,7 +44,8 @@ MqttControl::MqttControl()
   : _fs(NULL), _enabled(false), _counter(0), _slot(0),
     _v2_ready(false),
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
-    _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW)
+    _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW),
+    _mesh_mode(MQTTCTRL_MESH_AUTO)
 {
   _pubkey[0] = 0;
   _ota_legacy[0] = 0;
@@ -80,6 +81,7 @@ void MqttControl::load() {
   _slot = c.slot;
   memcpy(_pubkey, c.pubkey, sizeof(_pubkey));
   memcpy(_ota_legacy, c.ota_legacy, sizeof(_ota_legacy));
+  _mesh_mode = c.mesh_mode;
 }
 
 void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
@@ -88,6 +90,7 @@ void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
   c->slot = _slot;
   memcpy(c->pubkey, _pubkey, sizeof(c->pubkey));
   memcpy(c->ota_legacy, _ota_legacy, sizeof(c->ota_legacy));
+  c->mesh_mode = _mesh_mode;
 }
 
 void MqttControl::save() {
@@ -179,54 +182,81 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
         break;
       }
     }
-    // Past this line the sender held the command key, so the outcome is safe to
-    // publish however it turns out -- and the counter and command it signed are
-    // what let the requester tell which question the answer belongs to.
-    if (out != NULL) {
-      out->authentic = true;
-      out->counter = env.counter;
-      size_t n = env.command_len < MQTTCTRL_MAX_COMMAND ? env.command_len : MQTTCTRL_MAX_COMMAND;
-      memcpy(out->command, env.command, n);
-      out->command[n] = 0;
-    }
-
-    result = mqttCtrlAuthorise(&env, _counter, now, FORK_AUTO_REPLY);
-    if (result != MQTTCTRL_OK) break;
-
-    // The limiters are stateful and spend budget when asked, so they come after
-    // every stateless check: otherwise anyone could drain the budget with garbage
-    // that was going to be refused anyway.
-    bool transmit = mqttCtrlIsTransmitCommand(env.command, env.command_len);
-
-    // Stateless, so it runs before the limiters spend anything.
-    result = mqttCtrlTransmitTopicResult(transmit, _staged.topic);
-    if (result != MQTTCTRL_OK) break;
-
-    // One limiter is asked, never both: a limiter spends when asked, and the two
-    // budgets are disjoint. A transmit costs a transmit; a parameter change costs a
-    // command.
-    const bool general_ok = mqttCtrlSpendsCommandBudget(transmit) ? _commands.allow(now) : true;
-    const bool transmit_ok = mqttCtrlSpendsTransmitBudget(transmit) ? _transmits.allow(now) : true;
-    result = mqttCtrlRateResult(transmit, general_ok, transmit_ok);
-    if (result != MQTTCTRL_OK) break;
-
-    // Persisted before the command runs, never after. A counter written afterwards
-    // is reopened by whatever crashes mid-command, and a silently repeated
-    // 'trigger test' spends airtime nobody asked for. The cost is that a crashed
-    // command is not retried, which is the right way round.
-    _counter = env.counter;
-    save();
-
-    char command[MQTTCTRL_MAX_COMMAND + 1];
-    memcpy(command, env.command, env.command_len);
-    command[env.command_len] = 0;
-    if (runner != NULL) {
-      runner->runCommand(mqttCtrlSenderStamp(now), command, reply);
-    }
+    result = execute(env, _staged.topic, false, now, runner, reply, out);
   } while (false);
 
   _staged.pending = false;
   return result;
+}
+
+// Everything after the key has vouched for a command, on either road.
+MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, const char* topic, bool mesh,
+                                    uint32_t now, MqttCommandRunner* runner, char* reply,
+                                    MqttCtrlOutcome* out) {
+  // Past this line the sender held the command key, so the outcome is safe to
+  // publish however it turns out -- and the counter and command it signed are
+  // what let the requester tell which question the answer belongs to.
+  if (out != NULL) {
+    out->authentic = true;
+    out->counter = env.counter;
+    size_t n = env.command_len < MQTTCTRL_MAX_COMMAND ? env.command_len : MQTTCTRL_MAX_COMMAND;
+    memcpy(out->command, env.command, n);
+    out->command[n] = 0;
+  }
+
+  MqttCtrlResult result = mesh ? mqttCtrlAuthoriseMesh(&env, _counter, now, FORK_AUTO_REPLY)
+                               : mqttCtrlAuthorise(&env, _counter, now, FORK_AUTO_REPLY);
+  if (result != MQTTCTRL_OK) return result;
+
+  // The limiters are stateful and spend budget when asked, so they come after
+  // every stateless check: otherwise anyone could drain the budget with garbage
+  // that was going to be refused anyway.
+  bool transmit = mqttCtrlIsTransmitCommand(env.command, env.command_len);
+
+  // Stateless, so it runs before the limiters spend anything.
+  result = mqttCtrlTransmitTopicResult(transmit, topic);
+  if (result != MQTTCTRL_OK) return result;
+
+  // One limiter is asked, never both: a limiter spends when asked, and the two
+  // budgets are disjoint. A transmit costs a transmit; a parameter change costs a
+  // command.
+  const bool general_ok = mqttCtrlSpendsCommandBudget(transmit) ? _commands.allow(now) : true;
+  const bool transmit_ok = mqttCtrlSpendsTransmitBudget(transmit) ? _transmits.allow(now) : true;
+  result = mqttCtrlRateResult(transmit, general_ok, transmit_ok);
+  if (result != MQTTCTRL_OK) return result;
+
+  // Persisted before the command runs, never after. A counter written afterwards
+  // is reopened by whatever crashes mid-command, and a silently repeated
+  // 'trigger test' spends airtime nobody asked for. The cost is that a crashed
+  // command is not retried, which is the right way round.
+  _counter = env.counter;
+  save();
+
+  char command[MQTTCTRL_MAX_COMMAND + 1];
+  memcpy(command, env.command, env.command_len);
+  command[env.command_len] = 0;
+  if (runner != NULL) {
+    runner->runCommand(mqttCtrlSenderStamp(now), command, reply);
+  }
+  return MQTTCTRL_OK;
+}
+
+MqttCtrlResult MqttControl::meshCommand(const mesh::Identity& owner, const char* topic,
+                                        const MqttCtrlMeshRequest& req, uint32_t now, bool open,
+                                        MqttCommandRunner* runner, char* reply, bool* answer) {
+  reply[0] = 0;
+  *answer = false;
+  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
+  size_t signed_len = 0;
+  if (!mqttCtrlBuildSignedMessage(topic, &req.env, signed_bytes, sizeof(signed_bytes), &signed_len)) {
+    return MQTTCTRL_ERR_TOO_LONG;
+  }
+  if (!owner.verify(req.env.signature, signed_bytes, signed_len)) return MQTTCTRL_ERR_SIG_INVALID;
+  if (!mqttCtrlCounterAccepted(_counter, req.env.counter)) return MQTTCTRL_ERR_REPLAY;
+  if (!_mesh_answers.allow(now)) return MQTTCTRL_ERR_RATE_LIMITED;
+  *answer = true;
+  if (!open) return MQTTCTRL_ERR_MESH_CLOSED;
+  return execute(req.env, topic, true, now, runner, reply, NULL);
 }
 
 bool MqttControl::handleCommand(uint32_t sender_timestamp, int slot_count,
