@@ -91,3 +91,189 @@ Xiao_nrf52_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.18.0-lou-14-
 Xiao_rp2040_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.18.0-lou-14-ar variant=Xiao_rp2040_repeater-ar
 Xiao_S3_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.18.0-lou-14-ar variant=Xiao_S3_repeater-ar
 Xiao_S3_WIO_repeater ar flags='-DWITH_AUTO_REPLY=1' version=<mcu>-v1.18.0-lou-14-ar variant=Xiao_S3_WIO_repeater-ar
+GAT562_30S_Mesh_Kit_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=GAT562_30S_Mesh_Kit_repeater-rc
+GAT562_Mesh_EVB_Pro_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=GAT562_Mesh_EVB_Pro_repeater-rc
+GAT562_Mesh_Tracker_Pro_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=GAT562_Mesh_Tracker_Pro_repeater-rc
+Generic_E22_sx1262_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Generic_E22_sx1262_repeater-rc
+Generic_E22_sx1268_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Generic_E22_sx1268_repeater-rc
+Heltec_ct62_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_ct62_repeater-rc
+Heltec_E213_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_E213_repeater-rc
+Heltec_E290_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_E290_repeater-rc
+Heltec_mesh_solar_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_mesh_solar_repeater-rc
+heltec_rc32_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=heltec_rc32_repeater-rc
+heltec_rc32_without_display_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=heltec_rc32_without_display_repeater-rc
+Heltec_t096_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_t096_repeater-rc
+Heltec_t114_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_t114_repeater-rc
+Heltec_t114_without_display_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_t114_without_display_repeater-rc
+Heltec_t1_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_t1_repeater-rc
+Heltec_tower_v2_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_tower_v2_repeater-rc
+heltec_tracker_v2_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=heltec_tracker_v2_repeater-rc
+Heltec_v2_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_v2_repeater-rc
+Heltec_v3_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_v3_repeater-rc
+heltec_v4_expansionkit_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=heltec_v4_expansionkit_repeater-rc
+heltec_v4_r8_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=heltec_v4_r8_repeater-rc
+heltec_v4_r8_tft_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=heltec_v4_r8_tft_repeater-rc
+heltec_v4_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=heltec_v4_repeater-rc
+heltec_v4_tft_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=heltec_v4_tft_repeater-rc
+Heltec_Wireless_Paper_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_Wireless_Paper_repeater-rc
+Heltec_Wireless_Tracker_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_Wireless_Tracker_repeater-rc
+Heltec_WSL3_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Heltec_WSL3_repeater-rc
+ikoka_handheld_nrf_e22_30dbm_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ikoka_handheld_nrf_e22_30dbm_repeater-rc
+ikoka_nano_nrf_22dbm_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ikoka_nano_nrf_22dbm_repeater-rc
+ikoka_nano_nrf_30dbm_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ikoka_nano_nrf_30dbm_repeater-rc
+ikoka_nano_nrf_33dbm_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ikoka_nano_nrf_33dbm_repeater-rc
+ikoka_stick_nrf_22dbm_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ikoka_stick_nrf_22dbm_repeater-rc
+ikoka_stick_nrf_30dbm_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ikoka_stick_nrf_30dbm_repeater-rc
+ikoka_stick_nrf_33dbm_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ikoka_stick_nrf_33dbm_repeater-rc
+KeepteenLT1_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=KeepteenLT1_repeater-rc
+LilyGo_T-Echo-Lite_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_T-Echo-Lite_repeater-rc
+LilyGo_T-Echo_Card_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_T-Echo_Card_repeater-rc
+LilyGo_T-Echo_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_T-Echo_repeater-rc
+LilyGo_T3S3_sx1262_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_T3S3_sx1262_repeater-rc
+LilyGo_T3S3_sx1276_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_T3S3_sx1276_repeater-rc
+LilyGo_T_Impulse_Plus_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_T_Impulse_Plus_repeater-rc
+LilyGo_TBeam_1W_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_TBeam_1W_repeater-rc
+LilyGo_TDeck_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_TDeck_repeater-rc
+LilyGo_TETH_Elite_sx1262_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_TETH_Elite_sx1262_repeater-rc
+LilyGo_TLora_V2_1_1_6_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=LilyGo_TLora_V2_1_1_6_repeater-rc
+M5Stack_Unit_C6L_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=M5Stack_Unit_C6L_repeater-rc
+Mesh_pocket_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Mesh_pocket_repeater-rc
+Meshadventurer_sx1262_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Meshadventurer_sx1262_repeater-rc
+Meshadventurer_sx1268_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Meshadventurer_sx1268_repeater-rc
+meshnology_w12_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=meshnology_w12_repeater-rc
+MeshTracker_X1_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=MeshTracker_X1_repeater-rc
+Minewsemi_me25ls01_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Minewsemi_me25ls01_repeater-rc
+muzi_base_duo_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=muzi_base_duo_repeater-rc
+muzi_base_uno_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=muzi_base_uno_repeater-rc
+Nano_G2_Ultra_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Nano_G2_Ultra_repeater-rc
+PicoW_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=PicoW_repeater-rc
+ProMicro_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ProMicro_repeater-rc
+R1Neo_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=R1Neo_repeater-rc
+RAK_11310_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=RAK_11310_repeater-rc
+RAK_3112_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=RAK_3112_repeater-rc
+RAK_3401_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=RAK_3401_repeater-rc
+RAK_3x72_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=RAK_3x72_repeater-rc
+RAK_4631_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=RAK_4631_repeater-rc
+RAK_WisMesh_Tag_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=RAK_WisMesh_Tag_repeater-rc
+SenseCap_Solar_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=SenseCap_Solar_repeater-rc
+Station_G2_logging_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Station_G2_logging_repeater-rc
+Station_G2_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Station_G2_repeater-rc
+Station_G3_ESP32_logging_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Station_G3_ESP32_logging_repeater-rc
+Station_G3_ESP32_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Station_G3_ESP32_repeater-rc
+t1000e_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=t1000e_repeater-rc
+T_Beam_S3_Supreme_SX1262_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=T_Beam_S3_Supreme_SX1262_repeater-rc
+Tbeam_SX1262_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Tbeam_SX1262_repeater-rc
+Tbeam_SX1276_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Tbeam_SX1276_repeater-rc
+Tenstar_C3_sx1262_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Tenstar_C3_sx1262_repeater-rc
+Tenstar_C3_sx1268_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Tenstar_C3_sx1268_repeater-rc
+ThinkNode_M1_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ThinkNode_M1_repeater-rc
+ThinkNode_M3_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ThinkNode_M3_repeater-rc
+ThinkNode_M4_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ThinkNode_M4_repeater-rc
+ThinkNode_M6_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ThinkNode_M6_repeater-rc
+ThinkNode_M7_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=ThinkNode_M7_repeater-rc
+Tiny_Relay_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Tiny_Relay_repeater-rc
+waveshare_rp2040_lora_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=waveshare_rp2040_lora_repeater-rc
+Waveshare_S3_LR1121_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Waveshare_S3_LR1121_repeater-rc
+wio-e5-mini_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=wio-e5-mini_repeater-rc
+wio-e5_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=wio-e5_repeater-rc
+wio_wm1110_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=wio_wm1110_repeater-rc
+WioTrackerL1-1W_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=WioTrackerL1-1W_repeater-rc
+WioTrackerL1_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=WioTrackerL1_repeater-rc
+Xiao_C3_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Xiao_C3_repeater-rc
+Xiao_nrf52_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Xiao_nrf52_repeater-rc
+Xiao_rp2040_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Xiao_rp2040_repeater-rc
+Xiao_S3_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Xiao_S3_repeater-rc
+Xiao_S3_WIO_repeater rc flags='-DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-rc variant=Xiao_S3_WIO_repeater-rc
+GAT562_30S_Mesh_Kit_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=GAT562_30S_Mesh_Kit_repeater-arrc
+GAT562_Mesh_EVB_Pro_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=GAT562_Mesh_EVB_Pro_repeater-arrc
+GAT562_Mesh_Tracker_Pro_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=GAT562_Mesh_Tracker_Pro_repeater-arrc
+Generic_E22_sx1262_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Generic_E22_sx1262_repeater-arrc
+Generic_E22_sx1268_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Generic_E22_sx1268_repeater-arrc
+Heltec_ct62_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_ct62_repeater-arrc
+Heltec_E213_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_E213_repeater-arrc
+Heltec_E290_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_E290_repeater-arrc
+Heltec_mesh_solar_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_mesh_solar_repeater-arrc
+heltec_rc32_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=heltec_rc32_repeater-arrc
+heltec_rc32_without_display_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=heltec_rc32_without_display_repeater-arrc
+Heltec_t096_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_t096_repeater-arrc
+Heltec_t114_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_t114_repeater-arrc
+Heltec_t114_without_display_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_t114_without_display_repeater-arrc
+Heltec_t1_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_t1_repeater-arrc
+Heltec_tower_v2_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_tower_v2_repeater-arrc
+heltec_tracker_v2_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=heltec_tracker_v2_repeater-arrc
+Heltec_v2_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_v2_repeater-arrc
+Heltec_v3_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_v3_repeater-arrc
+heltec_v4_expansionkit_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=heltec_v4_expansionkit_repeater-arrc
+heltec_v4_r8_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=heltec_v4_r8_repeater-arrc
+heltec_v4_r8_tft_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=heltec_v4_r8_tft_repeater-arrc
+heltec_v4_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=heltec_v4_repeater-arrc
+heltec_v4_tft_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=heltec_v4_tft_repeater-arrc
+Heltec_Wireless_Paper_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_Wireless_Paper_repeater-arrc
+Heltec_Wireless_Tracker_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_Wireless_Tracker_repeater-arrc
+Heltec_WSL3_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Heltec_WSL3_repeater-arrc
+ikoka_handheld_nrf_e22_30dbm_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ikoka_handheld_nrf_e22_30dbm_repeater-arrc
+ikoka_nano_nrf_22dbm_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ikoka_nano_nrf_22dbm_repeater-arrc
+ikoka_nano_nrf_30dbm_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ikoka_nano_nrf_30dbm_repeater-arrc
+ikoka_nano_nrf_33dbm_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ikoka_nano_nrf_33dbm_repeater-arrc
+ikoka_stick_nrf_22dbm_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ikoka_stick_nrf_22dbm_repeater-arrc
+ikoka_stick_nrf_30dbm_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ikoka_stick_nrf_30dbm_repeater-arrc
+ikoka_stick_nrf_33dbm_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ikoka_stick_nrf_33dbm_repeater-arrc
+KeepteenLT1_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=KeepteenLT1_repeater-arrc
+LilyGo_T-Echo-Lite_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_T-Echo-Lite_repeater-arrc
+LilyGo_T-Echo_Card_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_T-Echo_Card_repeater-arrc
+LilyGo_T-Echo_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_T-Echo_repeater-arrc
+LilyGo_T3S3_sx1262_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_T3S3_sx1262_repeater-arrc
+LilyGo_T3S3_sx1276_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_T3S3_sx1276_repeater-arrc
+LilyGo_T_Impulse_Plus_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_T_Impulse_Plus_repeater-arrc
+LilyGo_TBeam_1W_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_TBeam_1W_repeater-arrc
+LilyGo_TDeck_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_TDeck_repeater-arrc
+LilyGo_TETH_Elite_sx1262_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_TETH_Elite_sx1262_repeater-arrc
+LilyGo_TLora_V2_1_1_6_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=LilyGo_TLora_V2_1_1_6_repeater-arrc
+M5Stack_Unit_C6L_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=M5Stack_Unit_C6L_repeater-arrc
+Mesh_pocket_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Mesh_pocket_repeater-arrc
+Meshadventurer_sx1262_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Meshadventurer_sx1262_repeater-arrc
+Meshadventurer_sx1268_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Meshadventurer_sx1268_repeater-arrc
+meshnology_w12_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=meshnology_w12_repeater-arrc
+MeshTracker_X1_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=MeshTracker_X1_repeater-arrc
+Minewsemi_me25ls01_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Minewsemi_me25ls01_repeater-arrc
+muzi_base_duo_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=muzi_base_duo_repeater-arrc
+muzi_base_uno_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=muzi_base_uno_repeater-arrc
+Nano_G2_Ultra_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Nano_G2_Ultra_repeater-arrc
+PicoW_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=PicoW_repeater-arrc
+ProMicro_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ProMicro_repeater-arrc
+R1Neo_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=R1Neo_repeater-arrc
+RAK_11310_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_11310_repeater-arrc
+RAK_3112_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_3112_repeater-arrc
+RAK_3401_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_3401_repeater-arrc
+RAK_3x72_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_3x72_repeater-arrc
+RAK_4631_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_4631_repeater-arrc
+RAK_WisMesh_Tag_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_WisMesh_Tag_repeater-arrc
+SenseCap_Solar_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=SenseCap_Solar_repeater-arrc
+Station_G2_logging_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Station_G2_logging_repeater-arrc
+Station_G2_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Station_G2_repeater-arrc
+Station_G3_ESP32_logging_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Station_G3_ESP32_logging_repeater-arrc
+Station_G3_ESP32_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Station_G3_ESP32_repeater-arrc
+t1000e_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=t1000e_repeater-arrc
+T_Beam_S3_Supreme_SX1262_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=T_Beam_S3_Supreme_SX1262_repeater-arrc
+Tbeam_SX1262_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Tbeam_SX1262_repeater-arrc
+Tbeam_SX1276_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Tbeam_SX1276_repeater-arrc
+Tenstar_C3_sx1262_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Tenstar_C3_sx1262_repeater-arrc
+Tenstar_C3_sx1268_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Tenstar_C3_sx1268_repeater-arrc
+ThinkNode_M1_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ThinkNode_M1_repeater-arrc
+ThinkNode_M3_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ThinkNode_M3_repeater-arrc
+ThinkNode_M4_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ThinkNode_M4_repeater-arrc
+ThinkNode_M6_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ThinkNode_M6_repeater-arrc
+ThinkNode_M7_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ThinkNode_M7_repeater-arrc
+Tiny_Relay_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Tiny_Relay_repeater-arrc
+waveshare_rp2040_lora_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=waveshare_rp2040_lora_repeater-arrc
+Waveshare_S3_LR1121_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Waveshare_S3_LR1121_repeater-arrc
+wio-e5-mini_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=wio-e5-mini_repeater-arrc
+wio-e5_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=wio-e5_repeater-arrc
+wio_wm1110_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=wio_wm1110_repeater-arrc
+WioTrackerL1-1W_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=WioTrackerL1-1W_repeater-arrc
+WioTrackerL1_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=WioTrackerL1_repeater-arrc
+Xiao_C3_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Xiao_C3_repeater-arrc
+Xiao_nrf52_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Xiao_nrf52_repeater-arrc
+Xiao_rp2040_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Xiao_rp2040_repeater-arrc
+Xiao_S3_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Xiao_S3_repeater-arrc
+Xiao_S3_WIO_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Xiao_S3_WIO_repeater-arrc
