@@ -46,6 +46,20 @@ static inline bool forkParseOnOff(const char* arg, bool* out) {
   return false;
 }
 
+// Does the command open the board to whoever is in Wi-Fi or BLE range, with no password of
+// its own? Manual OTA does -- the MeshCore-OTA access point, the station web uploader, the
+// nRF52's BLE DFU -- and so does the web portal's setup access point, which asks for nothing
+// because it assumes the person who raised it is standing at the board. Only a local caller
+// starts them. Matched as upstream's CLI matches `start ota`, by the bare prefix. `start
+// webconfig` alone raises the setup access point only while the node has no network to join
+// ('network_up' false); with one it binds the LAN portal, which takes the admin password.
+static inline bool forkOpensBoardToRange(const char* command, bool network_up) {
+  if (command == NULL) return false;
+  if (strncmp(command, "start ota", 9) == 0) return true;
+  if (strncmp(command, "start webconfig", 15) != 0) return false;
+  return command[15] != 0 || !network_up;
+}
+
 // The serial console's line editor, one received byte at a time. A terminal sends what its
 // keys make: 0x08 or 0x7F for the key that erases, ESC [ ... for the arrow keys. Stored as
 // they came, those bytes stayed in the command out of sight -- the terminal had already

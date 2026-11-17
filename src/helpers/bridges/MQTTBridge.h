@@ -901,13 +901,24 @@ public:
     strncpy(_client_tag, tag, sizeof(_client_tag) - 1);
     _client_tag[sizeof(_client_tag) - 1] = 0;
   }
+
+  // The command key's fingerprint and how it was set ("admin" or "usb"), carried in every
+  // status message so an owner can see a key appear; "" when none is set.
+  void setCommandKey(const char* fingerprint, const char* via) {
+    strncpy(_cmd_key, fingerprint, sizeof(_cmd_key) - 1);
+    strncpy(_cmd_key_via, via, sizeof(_cmd_key_via) - 1);
+  }
 #endif
 
 private:
+  const char* statusCommandKey() const;
+  const char* statusCommandKeyVia() const;
   ControlSink* _control_sink = NULL;
   volatile bool _control_subscribed = false;
 #ifdef WITH_MQTT_COMMAND
   char _client_tag[MQTT_SLOT_CLIENT_TAG_LEN + 1] = {0};
+  char _cmd_key[MQTT_SLOT_CLIENT_TAG_LEN + 1] = {0};
+  char _cmd_key_via[6] = {0};
 #endif
   const char* const* _control_topics = NULL;
   size_t _control_topic_count = 0;

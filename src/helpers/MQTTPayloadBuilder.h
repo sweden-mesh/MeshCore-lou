@@ -67,7 +67,9 @@ public:
     int packets_sent = -1,
     int packets_received = -1,
     const char* repeat = nullptr,
-    const MQTTConnHealth& conn_health = MQTTConnHealth()
+    const MQTTConnHealth& conn_health = MQTTConnHealth(),
+    const char* cmd_key = nullptr,
+    const char* cmd_key_via = nullptr
   );
 
   static int buildPacketMessage(

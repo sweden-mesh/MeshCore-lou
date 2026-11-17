@@ -35,12 +35,12 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 
 // The node's own MQTT-originated commands run with the RTC time rather than 0.
 // Zero is not a clock, it is a privilege signal: 'set prv.key', 'erase' and
-// 'set mqtt.cmd.pubkey' are gated on it, and serial and the web CLI both rely on
-// physical or password authentication as their boundary. A remote caller has
-// neither, so it must never present itself as local. The allowlist in
+// replacing 'mqtt.cmd.pubkey' are gated on it, and serial and the web CLI both rely
+// on physical or password authentication as their boundary. A remote caller has
+// neither, so it must never present itself as local. The deny list in
 // MqttControlLogic.h is the independent second guard on the same door.
 MqttControl::MqttControl()
-  : _fs(NULL), _enabled(false), _counter(0), _slot(0),
+  : _fs(NULL), _enabled(false), _counter(0), _slot(0), _key_via(MQTTCTRL_KEY_VIA_USB),
 #ifdef WITH_MQTT_BRIDGE
     _v2_ready(false),
 #endif
@@ -85,6 +85,7 @@ void MqttControl::load() {
   memcpy(_pubkey, c.pubkey, sizeof(_pubkey));
   memcpy(_ota_legacy, c.ota_legacy, sizeof(_ota_legacy));
   _mesh_mode = c.mesh_mode;
+  _key_via = c.key_via;
 }
 
 void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
@@ -94,6 +95,7 @@ void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
   memcpy(c->pubkey, _pubkey, sizeof(c->pubkey));
   memcpy(c->ota_legacy, _ota_legacy, sizeof(c->ota_legacy));
   c->mesh_mode = _mesh_mode;
+  c->key_via = _key_via;
 }
 
 void MqttControl::save() {
@@ -265,31 +267,47 @@ MqttCtrlResult MqttControl::meshCommand(const mesh::Identity& owner, const char*
   return execute(req.env, topic, true, now, runner, reply, NULL);
 }
 
-bool MqttControl::handleCommand(uint32_t sender_timestamp, int slot_count,
+bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
+                                const char* guest_password, int slot_count,
                                 const char* command, char* reply) {
-  // The key that authorises every signed command, so neither half of it is reachable
-  // from anything but a caller who is physically present. The MQTT allowlist refuses
-  // it too; this is the second, independent guard. The public half only, and the
-  // name says so: a private seed is also 64 hex characters, and nothing here could
-  // tell the two apart.
+  // The key that authorises every signed command. A local caller sets, clears and reads
+  // it; a remote admin may give a keyless node its first key and read its fingerprint;
+  // the plane reaches neither, and its deny list refuses both as the second, independent
+  // guard. The public half only, and the name says so: a private seed is also 64 hex
+  // characters, and nothing here could tell the two apart.
   bool set_key = memcmp(command, "set mqtt.cmd.pubkey", 19) == 0
                  && (command[19] == 0 || command[19] == ' ');
   if (set_key || strcmp(command, "get mqtt.cmd.pubkey") == 0) {
-    if (sender_timestamp != 0) {
+    if (caller == MQTTCTRL_KEY_REMOTE) {
       strcpy(reply, "Err - serial only");
       return true;
     }
     if (!set_key) {
-      sprintf(reply, "> %s", _pubkey[0] ? _pubkey : "(not set)");
+      if (_pubkey[0] == 0) {
+        strcpy(reply, "> (not set)");
+      } else if (caller == MQTTCTRL_KEY_LOCAL) {
+        sprintf(reply, "> %s, set via %s", _pubkey, mqttCtrlKeyViaName(_key_via));
+      } else {
+        char fingerprint[MQTTCTRL_KEY_FINGERPRINT_LEN + 1];
+        mqttCtrlKeyFingerprint(_pubkey, fingerprint);
+        sprintf(reply, "> %s..., set via %s", fingerprint, mqttCtrlKeyViaName(_key_via));
+      }
+      return true;
+    }
+    const char* refusal = mqttCtrlKeySetRefusal(caller, _pubkey[0] != 0, password, guest_password);
+    if (refusal != NULL) {
+      strcpy(reply, refusal);
       return true;
     }
     const char* key = command[19] ? &command[20] : "";
-    if (key[0] == 0) {
+    if (key[0] == 0 && caller == MQTTCTRL_KEY_LOCAL) {
       _pubkey[0] = 0;
+      _key_via = MQTTCTRL_KEY_VIA_USB;
       save();
       strcpy(reply, "OK - key cleared");
     } else if (mqttOwnerKeyValid(key)) {
       strcpy(_pubkey, key);
+      _key_via = caller == MQTTCTRL_KEY_LOCAL ? MQTTCTRL_KEY_VIA_USB : MQTTCTRL_KEY_VIA_ADMIN;
       save();
       strcpy(reply, "OK");
     } else {

@@ -1,4 +1,5 @@
 #include "MyMesh.h"
+#include <helpers/ForkText.h>
 
 void Fork::begin(FILESYSTEM* fs) {
 #ifdef WITH_MQTT_BRIDGE
@@ -62,12 +63,33 @@ bool Fork::onAnonRequest(mesh::Packet* packet, const uint8_t* secret, const mesh
 }
 #endif
 
-bool Fork::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
+bool Fork::loginRefused(const mesh::Identity& sender) {
+  return loginThrottled(&_logins, sender.pub_key, _mesh._ms->getMillis());
+}
+
+void Fork::loginFailed(const mesh::Identity& sender) {
+  loginThrottleFailed(&_logins, sender.pub_key, _mesh._ms->getMillis());
+}
+
+void Fork::loginPassed(const mesh::Identity& sender) {
+  loginThrottleClear(&_logins, sender.pub_key);
+}
+
+bool Fork::handleCommand(uint32_t sender_timestamp, char* command, char* reply, bool mesh_admin) {
+#ifdef WITH_WEBCONFIG
+  const bool network_up = activeNetworkLink().isConnected();
+#else
+  const bool network_up = false;
+#endif
+  if (sender_timestamp != 0 && forkOpensBoardToRange(command, network_up)) {
+    strcpy(reply, "Err - serial only: it opens the board to anyone in Wi-Fi/BLE range");
+    return true;
+  }
 #ifdef WITH_MQTT_BRIDGE
   if (handleOtaCommand(command, reply)) return true;
 #endif
 #ifdef WITH_MQTT_COMMAND
-  if (handleMqttCommand(sender_timestamp, command, reply)) return true;
+  if (handleMqttCommand(sender_timestamp, mesh_admin, command, reply)) return true;
 #endif
 #ifdef WITH_AUTO_REPLY
   if (handleAutoReplyCommand(sender_timestamp, command, reply)) return true;

@@ -124,9 +124,12 @@ pointer placement in that file is split almost evenly. Leave both alone.
 Both were found in this tree and both are load-bearing for security:
 
 - **`sender_timestamp == 0` is a privilege signal**, not merely a clock. It gates
-  `set prv.key`, `erase` and `set mqtt.cmd.pubkey`. **A remote path must never pass 0**, and must
-  additionally be bounded by the deny list over admitted verbs (`mqttCtrlCommandDenied`),
-  so that either gate alone keeps the privileged commands unreachable.
+  `set prv.key`, `erase` and replacing `mqtt.cmd.pubkey`. **A remote path must never pass 0**, and
+  must additionally be bounded by the deny list over admitted verbs (`mqttCtrlCommandDenied`),
+  so that either gate alone keeps the privileged commands unreachable from the plane. The one
+  remote way to the key, a remote admin's first key, is opened by the explicit `mesh_admin` flag
+  on the admin login's own branch (`mqttCtrlKeyCallerOf`), never by a non-zero clock, which the
+  plane presents too.
 - **The rate limit applies to validly signed commands.** A compromised signing key must not
   become a mesh-flood weapon. Do not add a path that bypasses it "because the signature
   checked out" — that is precisely the case it exists for.

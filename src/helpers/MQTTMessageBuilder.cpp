@@ -58,13 +58,15 @@ int MQTTMessageBuilder::buildStatusMessage(
   int packets_sent,
   int packets_received,
   const char* repeat,
-  const MQTTConnHealth& conn_health
+  const MQTTConnHealth& conn_health,
+  const char* cmd_key,
+  const char* cmd_key_via
 ) {
   return MQTTPayloadBuilder::buildStatusMessage(
       doc, origin, origin_id, model, firmware_version, radio, client_version,
       status, timestamp, buffer, buffer_size, battery_mv, uptime_secs, errors,
       queue_len, noise_floor, tx_air_secs, rx_air_secs, recv_errors, internal_heap,
-      packets_sent, packets_received, repeat, conn_health);
+      packets_sent, packets_received, repeat, conn_health, cmd_key, cmd_key_via);
 }
 
 int MQTTMessageBuilder::buildPacketMessage(

@@ -93,6 +93,28 @@ TEST(MQTTPayloadBuilder, StatusIncludesRepeatAndEveryRequestedStatistic) {
   EXPECT_EQ(47, stats["packets_received"].as<int>());
 }
 
+TEST(MQTTPayloadBuilder, StatusCarriesTheCommandKeyOnlyWhenSupplied) {
+  JsonDocument scratch;
+  char buffer[1024];
+  int len = MQTTPayloadBuilder::buildStatusMessage(
+      scratch, "node", "id", "model", "firmware", "radio", "client", "online",
+      kTimestamp, buffer, sizeof(buffer), -1, -1, -1, -1, -999, -1, -1, -1, -1, -1, -1,
+      "on", MQTTConnHealth(), "1a2b3c4d", "admin");
+  ASSERT_GT(len, 0);
+  JsonDocument parsed;
+  ASSERT_FALSE(deserializeJson(parsed, buffer));
+  EXPECT_STREQ("1a2b3c4d", parsed["cmd_key"].as<const char*>());
+  EXPECT_STREQ("admin", parsed["cmd_key_via"].as<const char*>());
+
+  len = MQTTPayloadBuilder::buildStatusMessage(
+      scratch, "node", "id", "model", "firmware", "radio", "client", "online",
+      kTimestamp, buffer, sizeof(buffer));
+  ASSERT_GT(len, 0);
+  ASSERT_FALSE(deserializeJson(parsed, buffer));
+  EXPECT_FALSE(parsed["cmd_key"].is<JsonVariant>());
+  EXPECT_FALSE(parsed["cmd_key_via"].is<JsonVariant>());
+}
+
 TEST(MQTTPayloadBuilder, StatusReportsConnectionHealthWhenSupplied) {
   JsonDocument scratch;
   char buffer[1024];

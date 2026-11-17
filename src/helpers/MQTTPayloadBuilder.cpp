@@ -46,7 +46,9 @@ int MQTTPayloadBuilder::buildStatusMessage(
   int packets_sent,
   int packets_received,
   const char* repeat,
-  const MQTTConnHealth& conn_health
+  const MQTTConnHealth& conn_health,
+  const char* cmd_key,
+  const char* cmd_key_via
 ) {
   doc.clear();
   JsonObject root = doc.to<JsonObject>();
@@ -61,6 +63,12 @@ int MQTTPayloadBuilder::buildStatusMessage(
   root["client_version"] = client_version;
   if (repeat != nullptr) {
     root["repeat"] = repeat;
+  }
+  if (cmd_key != nullptr) {
+    root["cmd_key"] = cmd_key;
+  }
+  if (cmd_key_via != nullptr) {
+    root["cmd_key_via"] = cmd_key_via;
   }
 
   const bool has_conn_health = conn_health.slots_up >= 0 || conn_health.slots_total >= 0 ||

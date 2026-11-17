@@ -121,15 +121,18 @@ uint8_t MyMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t* secr
     }
   }
   if (client == NULL) {
+    if (fork.loginRefused(sender)) return 0;
     uint8_t perms;
     if (strcmp((char *)data, _prefs.password) == 0) { // check for valid admin password
       perms = PERM_ACL_ADMIN;
+      fork.loginPassed(sender);
     } else if (strcmp((char *)data, _prefs.guest_password) == 0) { // check guest password
       perms = PERM_ACL_GUEST;
     } else {
 #if MESH_DEBUG
       MESH_DEBUG_PRINTLN("Invalid password: %s", data);
 #endif
+      fork.loginFailed(sender);
       return 0;
     }
 
@@ -893,7 +896,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       if (is_retry) {
         *reply = 0;
       } else {
-        handleCommand(sender_timestamp, command, reply);
+        handleCommand(sender_timestamp, command, reply, true);
       }
       int text_len = strlen(reply);
       if (text_len > 0) {
@@ -1630,7 +1633,7 @@ void MyMesh::buildStatsJson(char* buf, size_t buf_size) {
 }
 #endif
 
-void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
+void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply, bool mesh_admin) {
   if (region_load_active) {
     if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
       region_map = temp_map;  // copy over the temp instance as new current map
@@ -1746,7 +1749,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
   } else if (memcmp(command, "discover.scopes", 15) == 0) {
     strcpy(reply, "Err - neighbors not enabled in this build");
 #endif
-  } else if (!fork.handleCommand(sender_timestamp, command, reply)) {
+  } else if (!fork.handleCommand(sender_timestamp, command, reply, mesh_admin)) {
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }

@@ -179,7 +179,7 @@ TEST(ControlConfig, TheMeshModeIsVersion4AndDefaultsToAuto) {
   c.counter = 12;
   uint8_t buf[MQTTCTRL_CONFIG_LEN];
   ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mqttCtrlConfigEncode(&c, buf, sizeof(buf)));
-  EXPECT_EQ(4, buf[0]);
+  EXPECT_LE(4, buf[0]);
   MqttCtrlStoredConfig back;
   mqttCtrlConfigDefaults(&back);
   ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
@@ -198,6 +198,38 @@ TEST(ControlConfig, TheMeshModeIsVersion4AndDefaultsToAuto) {
   buf[MQTTCTRL_CONFIG_LEN_3] = 7;
   ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
   EXPECT_EQ(MQTTCTRL_MESH_AUTO, back.mesh_mode);
+}
+
+TEST(ControlConfig, HowTheKeyWasSetIsVersion5AndAnOlderKeyWasUsbs) {
+  MqttCtrlStoredConfig c;
+  mqttCtrlConfigDefaults(&c);
+  EXPECT_EQ(MQTTCTRL_KEY_VIA_USB, c.key_via);
+  strcpy(c.pubkey, KEY);
+  c.key_via = MQTTCTRL_KEY_VIA_ADMIN;
+  c.mesh_mode = MQTTCTRL_MESH_OFF;
+  uint8_t buf[MQTTCTRL_CONFIG_LEN];
+  ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mqttCtrlConfigEncode(&c, buf, sizeof(buf)));
+  EXPECT_EQ(5, buf[0]);
+  MqttCtrlStoredConfig back;
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(MQTTCTRL_KEY_VIA_ADMIN, back.key_via);
+  EXPECT_EQ(MQTTCTRL_MESH_OFF, back.mesh_mode);
+  EXPECT_STREQ(KEY, back.pubkey);
+
+  // A v4 file, as lou-19-rc writes it: the key it holds was set over USB, the only way then.
+  buf[0] = 4;
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_4, 6, &back));
+  EXPECT_EQ(MQTTCTRL_KEY_VIA_USB, back.key_via);
+  EXPECT_EQ(MQTTCTRL_MESH_OFF, back.mesh_mode);
+  EXPECT_STREQ(KEY, back.pubkey);
+
+  // A value this build does not know reads as USB.
+  buf[0] = 5;
+  buf[MQTTCTRL_CONFIG_LEN_4] = 9;
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(MQTTCTRL_KEY_VIA_USB, back.key_via);
 }
 
 int main(int argc, char** argv) {

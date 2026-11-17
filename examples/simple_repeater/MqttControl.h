@@ -69,6 +69,7 @@ class MqttControl {
   uint32_t _counter;          // highest command counter accepted, persisted
   uint8_t _slot;              // 1-based MQTT slot to listen and answer on, 0 = none
   char _pubkey[PUB_KEY_SIZE * 2 + 1];   // hex public key commands must be signed by
+  uint8_t _key_via;           // MqttCtrlKeyVia: how _pubkey was set
   // Version 3 ends in the two automatic-OTA bytes releases up to ar-13 kept here. OTA
   // keeps its settings in /ota now; the bytes are carried as read, so an image that
   // rolls back to one of those releases still finds what it wrote.
@@ -103,6 +104,7 @@ public:
   // `set mqtt.cmd on` with no slot configured chooses one (MyMesh::autoSetupMqttControl).
   void setSlotAndEnable(uint8_t slot) { _slot = slot; _enabled = true; save(); }
   const char* pubkey() const { return _pubkey; }
+  uint8_t keyVia() const { return _key_via; }
   uint8_t meshMode() const { return _mesh_mode; }
   void setMeshMode(uint8_t mode) { _mesh_mode = mode; save(); }
 
@@ -163,8 +165,9 @@ public:
                              const MqttCtrlMeshRequest& req, uint32_t now, bool open,
                              MqttCommandRunner* runner, char* reply, bool* answer);
 
-  // 'slot_count' bounds 'set mqtt.cmd.slot'; see mqttCtrlParseSlot. A non-zero
-  // 'sender_timestamp' is a remote caller, which may not read or write the key.
-  bool handleCommand(uint32_t sender_timestamp, int slot_count, const char* command,
-                     char* reply);
+  // 'slot_count' bounds 'set mqtt.cmd.slot'; see mqttCtrlParseSlot. 'caller' says who may
+  // touch the key (mqttCtrlKeySetRefusal); 'password' and 'guest_password' are the node's,
+  // which a remote admin's first install is judged by.
+  bool handleCommand(MqttCtrlKeyCaller caller, const char* password, const char* guest_password,
+                     int slot_count, const char* command, char* reply);
 };
