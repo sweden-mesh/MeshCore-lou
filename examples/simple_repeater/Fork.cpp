@@ -5,7 +5,7 @@ void Fork::begin(FILESYSTEM* fs) {
   otaBegin();
 #endif
 #ifdef WITH_AUTO_REPLY
-  _auto_reply.begin(fs);
+  _auto_reply.begin(fs, &_mesh.region_map);
 #endif
 #ifdef WITH_MQTT_COMMAND
   _mqtt_control.begin(fs);

@@ -33,8 +33,9 @@ The setup wizards set the county as home, so on most nodes there is nothing more
 set autoreply on
 ```
 
-which answers `OK - #test-se-jkp (region home) + legacy #test-jkg` on a node whose `mqtt.iata`
-is `JKG` (see the legacy channel below). Add the channel in your client and send
+which answers `OK - #test-se-jkp (region home) + legacy #test-jkg + national #test-se (region tree)`
+on a node whose `mqtt.iata` is `JKG` and whose region table has `se` (see the legacy and the
+national channel below). Add the channel in your client and send
 `test` to it. Every repeater in direct range answers. Nothing else is needed for a range check.
 
 A node without a home region gets one, or a region for auto-reply alone (see
@@ -69,6 +70,28 @@ all: it answers on its region's channel only, and stays silent until a home regi
 `autoreply.legacy` is still stored, so a node flashed back to an Observer build finds it as it
 was, and `get autoreply` shows it as `legacy on, inert: no MQTT`.
 
+**The national channel** (lou-19). A node also answers on `#test-<country>`, so a test can
+be made with people anywhere in the country, not only in the county. The country is not
+written into the firmware: it is found in the node's own region table, from its region (the
+one behind `#test-<region>`):
+
+1. the topmost parent region whose name the region starts with: `se` for `se-jkp`,
+   `se-jkp-mul` and `se0680`, and still `se` in a `* > eu > se > se-jkp` tree, since `se-jkp`
+   does not start with `eu`;
+2. otherwise the region's first label (`se` for `se-jkp`), when a region of that name is in
+   the table, which is how a table where every region hangs under `*` is read;
+3. otherwise there is no national channel, and `get autoreply.national` says why.
+
+So `no-osl` with `no` in the table answers on `#test-no`, and `dk-cph` on `#test-dk`. A node
+whose region *is* the country already answers on that channel, and has no second one. Trees
+the rule cannot read take `set autoreply.national <region>`.
+
+A reply to a request on the national channel floods in the **national region**, not the
+county, so a tester in another county hears it. That makes every national reply cost the
+whole country airtime: send one `test`, wait two minutes, and do not repeat it. What bounds
+how many nodes answer is `autoreply.hops` (default 8), as on the other channels; the national
+channel has its own rate limits beside theirs.
+
 To also get answers from repeaters **more than one hop away**, the request has to carry a
 region scope — see [How far the reply travels](#how-far-the-reply-travels) below.
 
@@ -92,7 +115,8 @@ From version 5 on the format is append-only: a newer file is read by the fields 
 firmware knows and the rest is ignored, so a rollback to any version from 5 onwards keeps
 every setting that version understands. Format 8 (ar-12) appends `autoreply.legacy`; a
 release before ar-12 keeps `autoreply.region` as the reply's scope alone and answers on
-`#test-<iata>` as it always did.
+`#test-<iata>` as it always did. Format 9 (lou-19) appends `autoreply.national`; an older
+release keeps every other setting and has no national channel.
 
 ## Commands
 
@@ -109,8 +133,9 @@ release before ar-12 keeps `autoreply.region` as the reply's scope alone and ans
 
 **Read-only.** The channel is `#test-` plus the region — `autoreply.region` when set, otherwise
 the home region, else a default scope narrower than a country — folded to lower case; with
-legacy on, also `#test-` plus the node's `mqtt.iata` code. Change them with
-`region home`, `set autoreply.region` and `set autoreply.legacy`. Building the name rather than
+legacy on, also `#test-` plus the node's `mqtt.iata` code; and the national channel. Change
+them with `region home`, `set autoreply.region`, `set autoreply.legacy` and
+`set autoreply.national`. Building the name rather than
 accepting one is what keeps every repeater off the mesh-wide `#test`, where a reply from each
 of them would be spam — a name that starts `#test-` can never be one of the shared channel
 names.
@@ -337,19 +362,45 @@ Whether a test request sent to this repeater alone, off the channel, is answered
 to the sender's key. A node that stored `off` keeps it. What the request is, how the answer
 travels and what it costs is under [A private request](#a-private-request).
 
+#### Answer on the national channel
+
+- `get autoreply.national`
+- `set autoreply.national auto|off|<region>`
+
+**Default:** `auto`
+
+`auto` finds the country in the region table, as under
+[The national channel](#setup) above; `off` ends the national channel; a region name
+sets it by hand, and must be in the region table, since national replies flood in it.
+`get autoreply.national` shows the setting and what it comes to:
+
+```
+> auto: #test-se (region tree)
+> auto: #test-se (first label)
+> dk: #test-dk (autoreply.national)
+> off
+> auto: none - no parent or first label of jkg in the region table
+```
+
+Reachable over the control plane like every `set autoreply` command, so the channel can be
+switched off across the mesh without a flashing round.
+
 #### Show the current state
 
 - `get autoreply`
 
 ```
-> on, mode flood, private on, direct flood, 8 hops, region se-jkp (region home), legacy on: #test-se-jkp (region home) + legacy #test-jkg
+> on, mode flood, private on, direct flood, 8 hops, scope se-jkp, legacy on: #test-se-jkp (region home) + legacy #test-jkg + national #test-se (region tree)
 ```
 
-The region and where it comes from, legacy, and the channel the node answers on, so a site
-check sees all of them on one line. `(region home)` means the region is the node's home region,
-`(region default)` its default scope; `(autoreply.region)` that it was set for auto-reply;
-`(not in table: request scope)` that `autoreply.region` names a region no longer in the table,
-and replies take the request's scope until `region put` adds it.
+The scope, legacy, and the channels the node answers on with where each comes from, so a site
+check sees all of them on one line (lou-19; before it the line said
+`region se-jkp (region home)` where it now says `scope se-jkp`). `(region home)` means the
+region is the node's home region, `(region default)` its default scope; `(autoreply.region)`
+that it was set for auto-reply. `scope` is the region replies on the region and legacy
+channels flood in; `scope request (se-x not in table)` means `autoreply.region` names a region
+no longer in the table, and replies take the request's scope until `region put` adds it.
+National replies flood in the national region.
 
 ## How far the reply travels
 
@@ -527,7 +578,9 @@ keyword at the start of the message — `test`, or `test` and an id, or those an
 letter — and a reply always begins with the node's name, then the bracketed requester, then
 the measurements. Nothing a repeater sends starts with the keyword, however the tail is
 parsed, and the host suite pins this with real reply bodies (`AReplyCanNeverTriggerAReply`
-in `test/test_autoreply`), including a requester whose own node is named `test`.
+in `test/test_autoreply`), including a requester whose own node is named `test`. The national
+channel is held to the same test (`AReplyOnTheNationalChannelNeverTriggersAReply`): every node
+in the country decrypts every reply sent there.
 
 A private reply is safer still, for a structural reason. It is a text message addressed to
 one key, and a repeater acts on an incoming text message only from a node already in its

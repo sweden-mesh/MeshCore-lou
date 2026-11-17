@@ -61,8 +61,9 @@ class Fork {
   // The node's region, or NULL: `region home`, else `region default` unless country-wide
   // (autoReplyNodeRegion). What auto-reply's channel follows when 'autoreply.region' is unset.
   const char* nodeRegion();
-  bool autoReplyScope(TransportKey* scope);
-  void sendAutoReplyFlood(mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
+  bool autoReplyScope(TransportKey* scope, const char* name);
+  void sendAutoReplyFlood(mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size,
+                          const char* scope);
   uint32_t slottedReplyDelay();
   bool triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply);
   bool triggerPrivateProbe(const char* pubkey_hex, const char* id, size_t id_len, char* reply);

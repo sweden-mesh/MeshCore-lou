@@ -280,7 +280,7 @@ get autoreply.private          -> > on
 
 get autoreply                  -> > <on|off>, mode flood, ...
 set autoreply on               -> OK - legacy #test-<iata>
-get autoreply                  -> > on, mode flood, private on, direct flood, 8 hops, region - (request scope), legacy on: legacy #test-<iata>
+get autoreply                  -> > on, mode flood, private on, direct flood, 8 hops, scope request, legacy on: legacy #test-<iata>
 ```
 
 `autoreply.private on` is the firmware default: a `test` sent privately to this repeater gets
@@ -493,7 +493,7 @@ get mqtt.stats
 ### Auto-reply
 
 ```
-get autoreply                  -> > on, mode flood, private on, direct flood, 8 hops, region - (request scope), legacy on: legacy #test-<iata>
+get autoreply                  -> > on, mode flood, private on, direct flood, 8 hops, scope request, legacy on: legacy #test-<iata>
 ```
 
 ### A test from a phone next to the node

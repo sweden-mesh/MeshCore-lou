@@ -135,7 +135,7 @@ That is it. Check it took:
 
 ```
 get autoreply
-> on, mode flood, private on, direct flood, 8 hops, region - (request scope), legacy on: legacy #test-sto
+> on, mode flood, private on, direct flood, 8 hops, scope request, legacy on: legacy #test-sto
 ```
 
 Now add the channel it named — `#test-sto` above — in your MeshCore client, send `test` to
@@ -172,6 +172,7 @@ To turn it off again: `set autoreply off`.
 | `set autoreply.slots <1-64>` | `16` | How many slots the window is cut into. More is not better: past about one slot per 4 s they become narrower than the replies they separate. |
 | `set autoreply.region <name>` | *(none)* | The test channel `#test-<name>` and the region every reply is scoped to; it must be in the region table. `a-z0-9` groups joined by single hyphens, 3-25 characters. Empty: no region channel, and replies mirror the request's scope. |
 | `set autoreply.legacy on\|off` | `on` | Also answer on `#test-<iata>`, from `mqtt.iata` -- the channel releases before ar-12 used -- so an upgrade never silences a node. |
+| `set autoreply.national auto\|off\|<region>` | `auto` | Also answer on `#test-<country>`, the country found in the region table (`se` for `se-jkp`), or the region named; its replies flood in that region (lou-19). |
 | `set autoreply.mode flood\|private\|direct` | `flood` | How a request that names no mode is answered. `private` and `direct` answer with a text message to the requester alone, and only when the request carries their key. |
 | `set autoreply.private on\|off` | `on` | Whether a test request sent to this repeater alone, off the channel, is answered. On since 2026-09-20: a private request is answered privately, and one that is never answered reads like a dead repeater. |
 | `get autoreply` | — | Current state, in one line. |
