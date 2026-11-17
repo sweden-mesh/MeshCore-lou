@@ -354,6 +354,43 @@ Broadcasting a *parameter* change stays allowed — setting a value costs no air
 transmitting is refused, and the check is stateless so it runs before the limiters spend
 anything.
 
+## Over the mesh, when Wi-Fi or the broker is down (lou-19)
+
+A node whose Wi-Fi or broker fails is still on the mesh. The same signed `v1` command can then
+reach it as an anonymous request from a companion, sub-type `0xC1`, encrypted to the node alone:
+
+```
+request   tag (4) | 0xC1 | counter (4) | expiry (4) | signature (64) | command (1-59 bytes)
+response  tag (4) | node clock (4) | counter (4) | code (1) | reply
+```
+
+Integers little-endian. The node rebuilds the topic it would have received the command on,
+`meshcore/{IATA}/{own key}/cmd`, and the text `v1|<counter>|<expiry>|<command>`, and verifies the
+signature over both exactly as on `/cmd`. One signature is therefore valid on both roads, and the
+counter is one counter: a command that arrives both ways runs once.
+
+The checks are the plane's, with three differences:
+
+- **The repair allowance.** Over the mesh, and only there, `set wifi.ssid <name>`,
+  `set wifi.pwd <password>` and `set mqtt.cmd on [<host>]` are admitted, so a node can be put
+  back on its network and its broker; `reboot` applies them. The command is encrypted to the
+  node on this road, where on the broker it is plain text. Everything else the deny list holds
+  stays denied, and the command still runs with a non-zero `sender_timestamp`.
+- **An unset clock.** A node cut off from NTP may have only the firmware's 2024 default. Then
+  the expiry is not checked and the counter alone stops a replay.
+- **One answer a minute and ten an hour**, on top of the plane's own budget, since each costs
+  airtime. A request that the key did not sign, whose counter is not new, or that is over this
+  budget is not answered at all, so nobody who heard a request can make the node transmit by
+  sending it again.
+
+`set mqtt.cmd.mesh off|on|auto` (console or admin login; denied on both roads) says when the
+road is open. `auto`, the default, opens it once the command slot has been down 15 minutes, so
+a node whose broker answers never takes commands over the air; until then a signed request is
+answered `mesh-closed` (code 19). `get mqtt.cmd.mesh` says which, and `get mqtt.cmd` adds
+`, mesh <mode> ok <n> refused <n>`. With `set mqtt.cmd off` the road is closed too. `reboot`
+answers nothing, over the mesh as over MQTT. A firmware without the road reads `0xC1` as a
+login whose password no one can type, and answers nothing.
+
 ## What is not defended
 
 - **Confidentiality, for `v1` and broadcasts.** A `v2` command and its `r3` result are sealed end

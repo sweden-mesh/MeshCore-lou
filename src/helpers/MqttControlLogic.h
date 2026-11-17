@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <strings.h>
 
+#include "MQTTConnectionPolicy.h"     // kSyncedClockEpoch, the mesh road's unset clock
 #include "MQTTObserverValidation.h"   // mqttOwnerKeyValid
 #include "MQTTPacketFilter.h"         // kAllPacketTypes, what the plane's slot carries
 #include "MQTTReplyFormat.h"          // replyAppendf
@@ -114,6 +115,9 @@ enum MqttCtrlResult {
   // A transmit command addressed to every node in the region at once. Refused on
   // principle rather than on budget -- see mqttCtrlTransmitTopicResult.
   MQTTCTRL_ERR_BROADCAST_TRANSMIT,
+  // A command over the mesh while the mesh road is closed: `mqtt.cmd.mesh auto` and the
+  // broker reachable, or not yet down long enough. Send it over MQTT instead.
+  MQTTCTRL_ERR_MESH_CLOSED,
 };
 
 // A result's name as mccontrol and Panopticon print it (envelope.py RESULT_CODES).
@@ -122,7 +126,7 @@ static inline const char* mqttCtrlResultName(int result) {
     "ok", "empty", "too-long", "no-signature", "bad-sig-len", "bad-sig-hex", "bad-version",
     "bad-fields", "bad-counter", "replay", "expired", "expiry-too-far", "no-clock",
     "command-chars", "not-allowed", "no-owner-key", "sig-invalid", "rate-limited",
-    "broadcast-transmit",
+    "broadcast-transmit", "mesh-closed",
   };
   if (result < 0 || result >= (int)(sizeof(names) / sizeof(names[0]))) return "unknown";
   return names[result];
@@ -1024,17 +1028,239 @@ static inline void mqttCtrlFormatNodeStats(char* buf, size_t bufsize,
   if (pos <= 1) replyAppendf(buf, bufsize, &pos, " (no stats sources)");
 }
 
+// ---- the mesh road (operator 2026-11-16) ----------------------------------------------
+//
+// When the node's Wi-Fi or its broker fails, the node is still on the mesh. The same signed
+// command then comes as an anonymous request to this node alone, which a companion sends to
+// any key, contact or not: encrypted to this node, so only it reads the command. The node
+// rebuilds the topic it would have received it on, meshcore/{IATA}/{own key}/cmd, and the
+// text `v1|<counter>|<expiry>|<command>` the signature covers, so one signature is valid on
+// both roads, and the one persisted counter makes a command that arrives both ways run once.
+//
+//   request   tag (4) | 0xC1 | counter (4) | expiry (4) | signature (64) | command (1..59)
+//   response  tag (4) | node clock (4) | counter (4) | code (1) | reply
+//
+// Integers little-endian. The tag is the companion's own (BaseChatMesh::sendAnonReq), echoed
+// so it can match the response. The command ends at the first NUL or at the end, since the
+// cipher pads with zeros; 59 bytes, because Mesh::createAnonDatagram takes at most 136 bytes.
+//
+// 0xC1: upstream's typed requests are 0x01-0x03 and read any first byte from ' ' up as a
+// login password. 0xC1 begins no UTF-8 sequence (it could only start an overlong form), so it
+// is never the first byte of a password, and a build without this road reads the request as
+// a login that fails and answers nothing.
+#define MQTTCTRL_MESH_SUBTYPE       0xC1
+#define MQTTCTRL_MESH_HEAD          (4 + 1 + 4 + 4 + MQTTCTRL_SIG_BYTES)
+#define MQTTCTRL_MESH_MAX_PLAIN     136
+#define MQTTCTRL_MESH_MAX_COMMAND   (MQTTCTRL_MESH_MAX_PLAIN - MQTTCTRL_MESH_HEAD)
+#define MQTTCTRL_MESH_RESP_HEAD     13
+
+// The envelope points into 'text', so a request is filled in place and never copied.
+struct MqttCtrlMeshRequest {
+  uint32_t tag;
+  MqttCtrlEnvelope env;
+  char text[26 + MQTTCTRL_MESH_MAX_COMMAND + 1];    // "v1|<10>|<10>|" and the command
+};
+
+static inline uint32_t mqttCtrlMeshU32(const uint8_t* p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static inline void mqttCtrlMeshPutU32(uint8_t* p, uint32_t v) {
+  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+// Is this anonymous request the mesh road's? Then it is never a login, whatever follows.
+static inline bool mqttCtrlMeshIsRequest(const uint8_t* data, size_t len) {
+  return data != NULL && len > 4 && data[4] == MQTTCTRL_MESH_SUBTYPE;
+}
+
+// Nothing here is authenticated: the signature is checked over what this builds.
+static inline MqttCtrlResult mqttCtrlMeshParse(const uint8_t* data, size_t len,
+                                               MqttCtrlMeshRequest* out) {
+  if (data == NULL || out == NULL || len <= MQTTCTRL_MESH_HEAD) return MQTTCTRL_ERR_EMPTY;
+  if (data[4] != MQTTCTRL_MESH_SUBTYPE) return MQTTCTRL_ERR_BAD_VERSION;
+  size_t n = 0;
+  while (MQTTCTRL_MESH_HEAD + n < len && data[MQTTCTRL_MESH_HEAD + n] != 0) n++;
+  if (n == 0) return MQTTCTRL_ERR_EMPTY;
+  if (n > MQTTCTRL_MESH_MAX_COMMAND) return MQTTCTRL_ERR_TOO_LONG;
+  const char* command = (const char *)&data[MQTTCTRL_MESH_HEAD];
+  if (!mqttCtrlCommandCharsOk(command, n)) return MQTTCTRL_ERR_COMMAND_CHARS;
+
+  MqttCtrlEnvelope* env = &out->env;
+  out->tag = mqttCtrlMeshU32(data);
+  env->counter = mqttCtrlMeshU32(&data[5]);
+  env->expiry = mqttCtrlMeshU32(&data[9]);
+  memcpy(env->signature, &data[13], MQTTCTRL_SIG_BYTES);
+  int head = snprintf(out->text, sizeof(out->text), MQTTCTRL_VERSION_TAG "%c%lu%c%lu%c",
+                      MQTTCTRL_FIELD_SEP, (unsigned long)env->counter,
+                      MQTTCTRL_FIELD_SEP, (unsigned long)env->expiry, MQTTCTRL_FIELD_SEP);
+  memcpy(&out->text[head], command, n);
+  out->text[head + n] = 0;
+  env->signed_part = out->text;
+  env->signed_len = head + n;
+  env->command = &out->text[head];
+  env->command_len = n;
+  return MQTTCTRL_OK;
+}
+
+// What the mesh road may run beside everything the deny list admits (operator ruling
+// 2026-11-16): the repair of a broken uplink -- the Wi-Fi network and its password, and the
+// command slot pointed at a broker -- and `reboot`, which both roads admit, to apply it.
+// Only here, because over the mesh the command is encrypted to the node; on the broker the
+// command is plain text. Matched as the CLI matches, case and all, and only with a value:
+// `set wifi.pwdx` and a bare `set wifi.ssid` stay denied. Everything else denied stays denied.
+static inline bool mqttCtrlMeshAllowance(const char* command, size_t len) {
+  static const char* const with_value[] = { "set wifi.ssid ", "set wifi.pwd ", "set mqtt.cmd on " };
+  for (size_t i = 0; i < sizeof(with_value) / sizeof(with_value[0]); i++) {
+    size_t plen = strlen(with_value[i]);
+    if (len > plen && strncmp(command, with_value[i], plen) == 0) return true;
+  }
+  return len == 15 && strncmp(command, "set mqtt.cmd on", 15) == 0;
+}
+
+static inline bool mqttCtrlMeshCommandAllowed(const char* command, size_t len, bool auto_reply) {
+  if (!mqttCtrlCommandCharsOk(command, len)) return false;
+  return mqttCtrlMeshAllowance(command, len) || mqttCtrlCommandAllowed(command, len, auto_reply);
+}
+
+// A node cut off from Wi-Fi may have lost NTP, and after a reboot its clock is the
+// firmware's 2024 default, against which every expiry is meaningless. Then the counter alone
+// stops a replay, as it does anyway (operator ruling 2026-11-16).
+static inline MqttCtrlResult mqttCtrlMeshCheckExpiry(uint32_t now, uint32_t expiry) {
+  if (now < MQTTConnectionPolicy::kSyncedClockEpoch) return MQTTCTRL_OK;
+  return mqttCtrlCheckExpiry(now, expiry);
+}
+
+// mqttCtrlAuthorise for the mesh road: the same counter, its own expiry and command rules.
+static inline MqttCtrlResult mqttCtrlAuthoriseMesh(const MqttCtrlEnvelope* env,
+                                                   uint32_t last_counter, uint32_t now,
+                                                   bool auto_reply) {
+  if (env == NULL) return MQTTCTRL_ERR_EMPTY;
+  if (!mqttCtrlCounterAccepted(last_counter, env->counter)) return MQTTCTRL_ERR_REPLAY;
+  MqttCtrlResult expiry = mqttCtrlMeshCheckExpiry(now, env->expiry);
+  if (expiry != MQTTCTRL_OK) return expiry;
+  if (!mqttCtrlMeshCommandAllowed(env->command, env->command_len, auto_reply)) return MQTTCTRL_ERR_NOT_ALLOWED;
+  return MQTTCTRL_OK;
+}
+
+// `set mqtt.cmd.mesh off|on|auto`. Auto, the default (operator ruling 2026-11-16), opens the
+// road once the command slot has been down 15 minutes, so a node whose broker answers never
+// takes commands over the air. Zero is auto, so a file written before the setting reads so.
+enum MqttCtrlMeshMode : uint8_t {
+  MQTTCTRL_MESH_AUTO = 0,
+  MQTTCTRL_MESH_ON,
+  MQTTCTRL_MESH_OFF,
+};
+#define MQTTCTRL_MESH_AUTO_AFTER_MS  (15UL * 60UL * 1000UL)
+
+static inline const char* mqttCtrlMeshModeName(uint8_t mode) {
+  return mode == MQTTCTRL_MESH_ON ? "on" : mode == MQTTCTRL_MESH_OFF ? "off" : "auto";
+}
+
+static inline bool mqttCtrlMeshParseMode(const char* text, uint8_t* out) {
+  if (text == NULL || out == NULL) return false;
+  for (uint8_t m = MQTTCTRL_MESH_AUTO; m <= MQTTCTRL_MESH_OFF; m++) {
+    if (strcmp(text, mqttCtrlMeshModeName(m)) == 0) { *out = m; return true; }
+  }
+  return false;
+}
+
+// When the command slot went down, in millis(), or 0 while it is up. Called every loop.
+static inline uint32_t mqttCtrlMeshDownSince(bool up, uint32_t down_since, uint32_t now_ms) {
+  if (up) return 0;
+  if (down_since != 0) return down_since;
+  return now_ms != 0 ? now_ms : 1;
+}
+
+static inline bool mqttCtrlMeshOpen(uint8_t mode, uint32_t down_since, uint32_t now_ms) {
+  if (mode == MQTTCTRL_MESH_ON) return true;
+  if (mode == MQTTCTRL_MESH_OFF) return false;
+  return down_since != 0 && now_ms - down_since >= MQTTCTRL_MESH_AUTO_AFTER_MS;
+}
+
+// `get mqtt.cmd.mesh`: the mode and whether the road is open now, and why not.
+static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint32_t now_ms,
+                                        char* out, size_t out_size) {
+  if (out == NULL || out_size == 0) return;
+  const char* name = mqttCtrlMeshModeName(mode);
+  if (mode != MQTTCTRL_MESH_AUTO) {
+    snprintf(out, out_size, "> %s, %s", name, mode == MQTTCTRL_MESH_ON ? "open" : "closed");
+  } else if (down_since == 0) {
+    snprintf(out, out_size, "> auto, closed: MQTT up");
+  } else {
+    snprintf(out, out_size, "> auto, %s: MQTT down %lu min",
+             mqttCtrlMeshOpen(mode, down_since, now_ms) ? "open" : "closed",
+             (unsigned long)((now_ms - down_since) / 60000UL));
+  }
+}
+
+// What `get mqtt.cmd` adds about the mesh road.
+static inline void mqttCtrlMeshNote(uint8_t mode, uint32_t ok, uint32_t refused, char* out,
+                                    size_t out_size) {
+  if (out == NULL || out_size == 0) return;
+  snprintf(out, out_size, ", mesh %s ok %lu refused %lu", mqttCtrlMeshModeName(mode),
+           (unsigned long)ok, (unsigned long)refused);
+}
+
+// Every answer over the mesh costs airtime on a shared network, and off the broker nothing
+// else caps it: at most one a minute and ten an hour, on top of the plane's own budget.
+#define MQTTCTRL_MESH_GAP_SECS   60
+#define MQTTCTRL_MESH_HOUR_MAX   10
+
+// A refusal spends neither limit: an answer refused by the hour must not restart the minute.
+// A clock stepped backwards pulls the last answer back to now, as SlidingBudget does.
+struct MqttCtrlMeshBudget {
+  SlidingBudget hour;
+  uint32_t last;
+  bool any;
+  MqttCtrlMeshBudget() : hour(MQTTCTRL_MESH_HOUR_MAX, 3600), last(0), any(false) { }
+  bool allow(uint32_t now) {
+    if (any) {
+      if (last > now) last = now;
+      if (now - last < MQTTCTRL_MESH_GAP_SECS) return false;
+    }
+    if (!hour.allow(now)) return false;
+    last = now;
+    any = true;
+    return true;
+  }
+};
+
+// Room for the response: a datagram carries 167 bytes (Mesh::createDatagram), a path return
+// 161 less the path it carries back (Mesh::createPathReturn, MAX_COMBINED_PATH).
+static inline size_t mqttCtrlMeshResponseRoom(bool path_return, size_t path_bytes) {
+  if (!path_return) return 167;
+  return path_bytes < 161 ? 161 - path_bytes : 0;
+}
+
+// The reply is last and is cut to the room; the head always fits or nothing is written.
+static inline size_t mqttCtrlMeshFormatResponse(uint8_t* out, size_t room, uint32_t tag,
+                                                uint32_t clock, uint32_t counter, int code,
+                                                const char* reply) {
+  if (out == NULL || room < MQTTCTRL_MESH_RESP_HEAD) return 0;
+  mqttCtrlMeshPutU32(out, tag);
+  mqttCtrlMeshPutU32(&out[4], clock);
+  mqttCtrlMeshPutU32(&out[8], counter);
+  out[12] = (uint8_t)code;
+  size_t n = reply != NULL ? strlen(reply) : 0;
+  if (n > room - MQTTCTRL_MESH_RESP_HEAD) n = room - MQTTCTRL_MESH_RESP_HEAD;
+  if (n > 0) memcpy(&out[MQTTCTRL_MESH_RESP_HEAD], reply, n);
+  return MQTTCTRL_MESH_RESP_HEAD + n;
+}
+
 // /mqttcontrol, the plane's settings file. Append-only, as /autoreply is: version 1 was
 // on/off and the counter; 2 added the slot and the command key; 3 two automatic-OTA bytes
-// that releases up to ar-13 kept here. OTA keeps them in /ota now, and they are carried
-// exactly as read, so an image that rolls back to ar-13 still finds what it wrote. A
-// build without the plane neither reads nor writes this file, so it survives untouched.
+// that releases up to ar-13 kept here; 4 the mesh road's mode. OTA keeps its bytes in /ota
+// now, and they are carried exactly as read, so an image that rolls back to ar-13 still
+// finds what it wrote. A build without the plane neither reads nor writes this file, so it
+// survives untouched.
 //
-//   ver | enabled | counter (4, native order) | slot | key (64 hex + NUL) | ota (2)
+//   ver | enabled | counter (4, native order) | slot | key (64 hex + NUL) | ota (2) | mesh
 #define MQTTCTRL_CONFIG_VER_1   1
-#define MQTTCTRL_CONFIG_VER     3
+#define MQTTCTRL_CONFIG_VER     4
 #define MQTTCTRL_CONFIG_KEY_LEN 65
-#define MQTTCTRL_CONFIG_LEN     (1 + 1 + 4 + 1 + MQTTCTRL_CONFIG_KEY_LEN + 2)
+#define MQTTCTRL_CONFIG_LEN_3   (1 + 1 + 4 + 1 + MQTTCTRL_CONFIG_KEY_LEN + 2)
+#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_3 + 1)
 
 struct MqttCtrlStoredConfig {
   bool enabled;
@@ -1042,6 +1268,7 @@ struct MqttCtrlStoredConfig {
   uint8_t slot;                              // 1-based, 0 = none
   char pubkey[MQTTCTRL_CONFIG_KEY_LEN];      // the command key in hex, "" = none
   uint8_t ota_legacy[2];
+  uint8_t mesh_mode;                         // MqttCtrlMeshMode; 0, the default, is auto
 };
 
 static inline void mqttCtrlConfigDefaults(MqttCtrlStoredConfig* c) {
@@ -1064,7 +1291,9 @@ static inline bool mqttCtrlConfigDecode(const uint8_t* buf, size_t len, int slot
     memcpy(c->pubkey, &buf[7], MQTTCTRL_CONFIG_KEY_LEN);
     c->pubkey[MQTTCTRL_CONFIG_KEY_LEN - 1] = 0;
   }
-  if (ver >= 3 && len >= MQTTCTRL_CONFIG_LEN) memcpy(c->ota_legacy, &buf[7 + MQTTCTRL_CONFIG_KEY_LEN], 2);
+  if (ver >= 3 && len >= MQTTCTRL_CONFIG_LEN_3) memcpy(c->ota_legacy, &buf[7 + MQTTCTRL_CONFIG_KEY_LEN], 2);
+  if (ver >= 4 && len >= MQTTCTRL_CONFIG_LEN) c->mesh_mode = buf[MQTTCTRL_CONFIG_LEN_3];
+  if (c->mesh_mode > MQTTCTRL_MESH_OFF) c->mesh_mode = MQTTCTRL_MESH_AUTO;
   if (c->slot > slot_count) c->slot = 0;
   return true;
 }
@@ -1077,5 +1306,6 @@ static inline size_t mqttCtrlConfigEncode(const MqttCtrlStoredConfig* c, uint8_t
   buf[6] = c->slot;
   memcpy(&buf[7], c->pubkey, MQTTCTRL_CONFIG_KEY_LEN);
   memcpy(&buf[7 + MQTTCTRL_CONFIG_KEY_LEN], c->ota_legacy, 2);
+  buf[MQTTCTRL_CONFIG_LEN_3] = c->mesh_mode;
   return MQTTCTRL_CONFIG_LEN;
 }

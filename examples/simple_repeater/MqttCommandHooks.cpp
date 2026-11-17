@@ -138,6 +138,9 @@ void Fork::describeMqttControl(char* reply) {
   if (slot == 0 || _mesh.bridge == NULL) {
     sprintf(reply, "> %s, counter %u, no slot", _mqtt_control.isEnabled() ? "on" : "off",
             (unsigned)_mqtt_control.counter());
+    size_t used = strlen(reply);
+    mqttCtrlMeshNote(_mqtt_control.meshMode(), _mesh_ok, _mesh_refused, &reply[used],
+                     MQTTCTRL_MAX_REPLY - used);
     return;
   }
   char ping[64];
@@ -157,6 +160,9 @@ void Fork::describeMqttControl(char* reply) {
           _mesh.bridge->controlSlotConnected() ? "connected" : "not connected",
           _mesh.bridge->controlSubscribed() ? "subscribed" : "not subscribed", age, ping);
   size_t used = strlen(reply);
+  mqttCtrlMeshNote(_mqtt_control.meshMode(), _mesh_ok, _mesh_refused, &reply[used],
+                   MQTTCTRL_MAX_REPLY - used);
+  used = strlen(reply);
   mqttCtrlRefusalNote(_ctrl_unverified, _ctrl_last_unverified, &reply[used], MQTTCTRL_MAX_REPLY - used);
 }
 
@@ -165,6 +171,8 @@ void Fork::describeMqttControl(char* reply) {
 // stall the network stack's own thread.
 void Fork::loopMqttControl() {
   refreshMqttControlV2Key();
+  const bool up = _mesh.bridge != NULL && _mesh.bridge->controlSlotConnected();
+  _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
   if (!_mqtt_control.hasPending()) return;
 
   // A staged command is always resolved -- run or discarded -- never left in the
@@ -327,6 +335,20 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* rep
     describeMqttControl(reply);
     return true;
   }
+  if (strcmp(command, "get mqtt.cmd.mesh") == 0) {
+    mqttCtrlMeshDescribe(_mqtt_control.meshMode(), _mesh_down_since, millis(), reply, MQTTCTRL_MAX_REPLY);
+    return true;
+  }
+  if (memcmp(command, "set mqtt.cmd.mesh ", 18) == 0) {
+    uint8_t mode;
+    if (!mqttCtrlMeshParseMode(&command[18], &mode)) {
+      strcpy(reply, "Err - use: set mqtt.cmd.mesh off|on|auto");
+      return true;
+    }
+    _mqtt_control.setMeshMode(mode);
+    strcpy(reply, "OK");
+    return true;
+  }
   if (memcmp(command, "get stats", 9) == 0 && (command[9] == 0 || command[9] == ' ' ||
                                                command[9] == '\n' || command[9] == '\r')) {
     formatNodeStats(reply);
@@ -338,6 +360,72 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* rep
     return true;
   }
   return _mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply);
+}
+
+// The mesh road (operator 2026-11-16): a signed command in an anonymous request to this node,
+// for when Wi-Fi or the broker is down. Verified as a command on /cmd is, against the topic
+// this node would have received it on, and answered with a response to whoever asked.
+// Anything that is not answered stays silent, as a build without the road is.
+bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                         const uint8_t* data, size_t len) {
+  if (!mqttCtrlMeshIsRequest(data, len)) return false;
+  if (!_mqtt_control.isEnabled() || _mqtt_control.meshMode() == MQTTCTRL_MESH_OFF) return true;
+
+  MqttCtrlMeshRequest req;
+  char node_hex[PUB_KEY_SIZE * 2 + 1];
+  char topic[MQTTCTRL_MAX_TOPIC + 1];
+  mesh::Identity owner;
+  mesh::Utils::toHex(node_hex, _mesh.self_id.pub_key, PUB_KEY_SIZE);
+  if (mqttCtrlMeshParse(data, len, &req) != MQTTCTRL_OK
+      || !MqttControl::buildTopic(observerIata(), node_hex, topic, sizeof(topic))
+      || mqttCtrlOwnerReady(_mqtt_control.pubkey()) != MQTTCTRL_OK
+      || !mesh::Utils::fromHex(owner.pub_key, PUB_KEY_SIZE, _mqtt_control.pubkey())) {
+    _mesh_refused++;
+    return true;
+  }
+
+  char reply[MQTTCTRL_MAX_REPLY];
+  bool answer = false;
+  const bool open = mqttCtrlMeshOpen(_mqtt_control.meshMode(), _mesh_down_since, millis());
+  const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
+  MqttCtrlResult result = _mqtt_control.meshCommand(owner, topic, req, now, open, &_control_link,
+                                                    reply, &answer);
+  if (result == MQTTCTRL_OK) _mesh_ok++;
+  else _mesh_refused++;
+  MESH_DEBUG_PRINTLN("MqttControl: mesh result %d, reply '%s'", (uint32_t)result, reply);
+  if (answer) answerMeshCommand(packet, secret, sender, req.tag, req.env.counter, result, reply);
+  return true;
+}
+
+// Back the way upstream answers a login (chooseReplyRoute): a flooded request gets its path
+// returned with the answer, a direct one goes back along a stored path, or floods.
+void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                             uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply) {
+  const uint32_t delay_millis = 300;   // upstream's SERVER_RESPONSE_DELAY
+  ClientInfo* client = _mesh.acl.getClient(sender.pub_key, PUB_KEY_SIZE);
+  bool have_out_path = client != NULL && client->out_path_len != OUT_PATH_UNKNOWN;
+  auto route = mesh::chooseReplyRoute(packet->isRouteFlood(), false, have_out_path);
+  const bool path_return = route == mesh::REPLY_ROUTE_PATH_RETURN;
+
+  uint8_t data[MQTTCTRL_MESH_RESP_HEAD + MQTTCTRL_MAX_REPLY];
+  size_t room = min(mqttCtrlMeshResponseRoom(path_return, packet->getPathByteLen()), sizeof(data));
+  size_t n = mqttCtrlMeshFormatResponse(data, room, tag, _mesh.getRTCClock()->getCurrentTime(),
+                                        counter, (int)result, reply);
+  if (n == 0) return;
+
+  if (path_return) {
+    mesh::Packet* path = _mesh.createPathReturn(sender, secret, packet->path, packet->path_len,
+                                                PAYLOAD_TYPE_RESPONSE, data, n);
+    if (path) _mesh.sendFloodReply(path, delay_millis, packet->getPathHashSize());
+    return;
+  }
+  mesh::Packet* out = _mesh.createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, data, n);
+  if (out == NULL) return;
+  if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
+    _mesh.sendDirect(out, client->out_path, client->out_path_len, delay_millis);
+  } else {
+    _mesh.sendFloodReply(out, delay_millis, packet->getPathHashSize());
+  }
 }
 
 #endif

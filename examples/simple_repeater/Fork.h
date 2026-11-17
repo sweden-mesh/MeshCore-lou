@@ -64,6 +64,8 @@ class Fork {
   uint32_t slottedReplyDelay();
   bool triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply);
   bool triggerPrivateProbe(const char* pubkey_hex, const char* id, size_t id_len, char* reply);
+  bool onPrivateTest(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                     const uint8_t* data, size_t len);
 #endif
 #ifdef WITH_MQTT_COMMAND
   MqttControl _mqtt_control;
@@ -88,6 +90,9 @@ class Fork {
   uint32_t _ctrl_unverified = 0;               // commands refused before the key vouched for them
   uint8_t _ctrl_last_unverified = 0;           // ... and the last one's MqttCtrlResult
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
+  uint32_t _mesh_down_since = 0;               // millis() the command slot went down, 0 while up
+  uint32_t _mesh_ok = 0;                       // commands run over the mesh road
+  uint32_t _mesh_refused = 0;                  // ... and requests on it that ran nothing
 
   bool handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply);
   void setupMqttControl(MQTTBridge* bridge);
@@ -100,6 +105,10 @@ class Fork {
   void loopMqttControl();
   void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                 const char* reply);
+  bool onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                     const uint8_t* data, size_t len);
+  void answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                         uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply);
 #endif
 
 public:
@@ -135,7 +144,7 @@ public:
 
   // An anonymous request, before upstream reads it as a login or a query. Returns true
   // when it was a feature's, answered or refused, and upstream must not see it.
-#ifdef WITH_AUTO_REPLY
+#if defined(WITH_AUTO_REPLY) || defined(WITH_MQTT_COMMAND)
   bool onAnonRequest(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                      const uint8_t* data, size_t len);
 #else

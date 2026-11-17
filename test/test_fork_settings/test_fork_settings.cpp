@@ -136,7 +136,7 @@ TEST(SettingsAcrossCombinations, AnAr13NodeKeepsItsOtaSettingsAndRollsBackToThem
     rc.saveOta(flash);
   }
   const std::vector<uint8_t>& mc = flash["/mqttcontrol"];
-  ASSERT_EQ((size_t)OTA_AUTO_LEGACY_LEN, mc.size());
+  ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mc.size());
   bool on = false;
   uint8_t hours = 0;
   ASSERT_TRUE(otaAutoDecodeLegacy(mc.data(), mc.size(), &on, &hours));
@@ -169,6 +169,35 @@ TEST(ControlConfig, EveryVersionReads) {
   uint8_t v0[] = { 0, 1 };
   EXPECT_FALSE(mqttCtrlConfigDecode(v0, sizeof(v0), 6, &c));
   EXPECT_EQ(0u, mqttCtrlConfigEncode(&c, v2, sizeof(v2)));   // too small for v3
+}
+
+TEST(ControlConfig, TheMeshModeIsVersion4AndDefaultsToAuto) {
+  MqttCtrlStoredConfig c;
+  mqttCtrlConfigDefaults(&c);
+  EXPECT_EQ(MQTTCTRL_MESH_AUTO, c.mesh_mode);
+  c.mesh_mode = MQTTCTRL_MESH_OFF;
+  c.counter = 12;
+  uint8_t buf[MQTTCTRL_CONFIG_LEN];
+  ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mqttCtrlConfigEncode(&c, buf, sizeof(buf)));
+  EXPECT_EQ(4, buf[0]);
+  MqttCtrlStoredConfig back;
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(MQTTCTRL_MESH_OFF, back.mesh_mode);
+  EXPECT_EQ(12u, back.counter);
+
+  // A v3 file, as lou-18 writes it, reads as auto and keeps its OTA bytes.
+  buf[0] = 3;
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_3, 6, &back));
+  EXPECT_EQ(MQTTCTRL_MESH_AUTO, back.mesh_mode);
+  EXPECT_EQ(c.ota_legacy[1], back.ota_legacy[1]);
+
+  // A mode this build does not know reads as the default.
+  buf[0] = 4;
+  buf[MQTTCTRL_CONFIG_LEN_3] = 7;
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(MQTTCTRL_MESH_AUTO, back.mesh_mode);
 }
 
 int main(int argc, char** argv) {
