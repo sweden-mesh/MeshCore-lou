@@ -19,7 +19,7 @@ Ed25519 signature by the command key this node was given.
 ## Turning it on
 
 ```
-set mqtt.cmd.pubkey <64 hex characters>   # serial only; the PUBLIC half of the signing key
+set mqtt.cmd.pubkey <64 hex characters>   # serial, or a remote admin's first key; the PUBLIC half of the signing key
 set mqtt.cmd on                           # takes a slot, or puts the plane's back on the preset; reboot to apply
 set mqtt.cmd on <host>                    # the same on a region's own broker (lou-18)
 get mqtt.cmd                              # state, counter, slot, /cmd subscription, last command
@@ -90,8 +90,19 @@ provisioned. Refusing and clearing are the same act (`mqttCtrlOwnerReady`, teste
 names the person who owns the node, and travels in the login token to the stats services. The
 command key is one key for a whole fleet, held by whoever runs the control plane, so the two
 are kept apart and an operator's ownership claim does not have to give way to it. Both
-`get mqtt.cmd.pubkey` and `set mqtt.cmd.pubkey` answer only a caller at the serial port or the
-local console; an empty `set` clears the key.
+`get mqtt.cmd.pubkey` and `set mqtt.cmd.pubkey` answer a caller at the serial port or the
+local console, where `get` shows the whole key and how it was set, and an empty `set` clears it.
+
+A remote admin, logged in over the mesh with the admin password, may give a node its **first**
+key, so a board on a mast needs no climb (lou-19). Only while no key is set: replacing or
+clearing one stays with serial. And only once the admin password is not the default
+`password`, is at least 8 characters and is not the guest password; the reply says which rule
+failed. Over admin, `get mqtt.cmd.pubkey` shows the key's first 8 hex characters and `set via
+admin` or `set via usb`, and every status message carries the same as `cmd_key` and
+`cmd_key_via`, so an owner can see a key appear. The plane itself never reaches the key: it is
+told apart from a remote admin by an explicit flag on the admin login's path, never by the
+clock, and the deny list refuses it as well. Every password login is throttled: a sender key
+that gives a wrong password 5 times is refused for 10 minutes.
 
 ## Which broker
 

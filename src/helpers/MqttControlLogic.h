@@ -997,6 +997,71 @@ static inline uint32_t mqttCtrlSenderStamp(uint32_t now) {
   return now == 0 ? 1 : now;
 }
 
+// Who asks for the command key (`set`/`get mqtt.cmd.pubkey`). Named by the caller, never
+// read off the clock: the plane runs its commands with a non-zero sender_timestamp exactly
+// as a remote admin's arrive, so "not 0" would let the plane through, and the deny list
+// would be the only gate left on the key.
+enum MqttCtrlKeyCaller {
+  MQTTCTRL_KEY_LOCAL,        // serial, or the web portal's CLI: sender_timestamp 0
+  MQTTCTRL_KEY_MESH_ADMIN,   // logged in over the mesh with the admin password
+  MQTTCTRL_KEY_REMOTE,       // anything else, which is the command plane on either road
+};
+
+// 'mesh_admin' is true only on MyMesh's admin CLI branch; the plane's runner has no way
+// to pass it.
+static inline MqttCtrlKeyCaller mqttCtrlKeyCallerOf(uint32_t sender_timestamp, bool mesh_admin) {
+  if (sender_timestamp == 0) return MQTTCTRL_KEY_LOCAL;
+  return mesh_admin ? MQTTCTRL_KEY_MESH_ADMIN : MQTTCTRL_KEY_REMOTE;
+}
+
+// What the admin password must be before a remote admin may install a key (operator
+// 2026-11-17): not the compiled default every variant ships, 8 characters at least, and
+// not the guest password. NULL when it holds, else the refusal, naming which rule failed.
+#define MQTTCTRL_ADMIN_PASSWORD_DEFAULT  "password"
+#define MQTTCTRL_ADMIN_PASSWORD_MIN      8
+
+static inline const char* mqttCtrlAdminPasswordRefusal(const char* password, const char* guest_password) {
+  if (password == NULL || strcmp(password, MQTTCTRL_ADMIN_PASSWORD_DEFAULT) == 0) {
+    return "Err - the admin password is still the default: change it first (password <new>)";
+  }
+  if (strlen(password) < MQTTCTRL_ADMIN_PASSWORD_MIN) {
+    return "Err - the admin password is under 8 characters: change it first (password <new>)";
+  }
+  if (guest_password != NULL && strcmp(password, guest_password) == 0) {
+    return "Err - the admin password equals the guest password: change one first";
+  }
+  return NULL;
+}
+
+// May 'caller' set the key? NULL when it may, else the refusal. A remote admin gives a
+// keyless node its first key and nothing more: replacing or clearing a key stays with a
+// local caller, so a leaked admin password cannot take over a node that has an owner.
+static inline const char* mqttCtrlKeySetRefusal(MqttCtrlKeyCaller caller, bool key_set,
+                                                const char* password, const char* guest_password) {
+  if (caller == MQTTCTRL_KEY_LOCAL) return NULL;
+  if (caller != MQTTCTRL_KEY_MESH_ADMIN) return "Err - serial only";
+  if (key_set) return "Err - a key is set: replace or clear it over USB";
+  return mqttCtrlAdminPasswordRefusal(password, guest_password);
+}
+
+// How the key was set, kept with it in /mqttcontrol and shown to the owner.
+enum MqttCtrlKeyVia { MQTTCTRL_KEY_VIA_USB = 0, MQTTCTRL_KEY_VIA_ADMIN = 1 };
+
+static inline const char* mqttCtrlKeyViaName(uint8_t via) {
+  return via == MQTTCTRL_KEY_VIA_ADMIN ? "admin" : "usb";
+}
+
+// The key's first 8 hex characters, what a remote admin and the status topic see. "" when
+// no key is set. 'out' holds MQTTCTRL_KEY_FINGERPRINT_LEN + 1.
+#define MQTTCTRL_KEY_FINGERPRINT_LEN  8
+
+static inline void mqttCtrlKeyFingerprint(const char* pubkey, char* out) {
+  size_t n = pubkey != NULL ? strlen(pubkey) : 0;
+  if (n > MQTTCTRL_KEY_FINGERPRINT_LEN) n = MQTTCTRL_KEY_FINGERPRINT_LEN;
+  if (n > 0) memcpy(out, pubkey, n);
+  out[n] = 0;
+}
+
 // Rate limiting, as a decision the caller makes with limiters it owns. Split out
 // rather than folded into mqttCtrlAuthorise because the limiters are stateful and
 // consume budget when asked -- so the caller must run every stateless check
@@ -1317,17 +1382,18 @@ static inline size_t mqttCtrlMeshFormatResponse(uint8_t* out, size_t room, uint3
 
 // /mqttcontrol, the plane's settings file. Append-only, as /autoreply is: version 1 was
 // on/off and the counter; 2 added the slot and the command key; 3 two automatic-OTA bytes
-// that releases up to ar-13 kept here; 4 the mesh road's mode. OTA keeps its bytes in /ota
-// now, and they are carried exactly as read, so an image that rolls back to ar-13 still
-// finds what it wrote. A build without the plane neither reads nor writes this file, so it
-// survives untouched.
+// that releases up to ar-13 kept here; 4 the mesh road's mode; 5 how the key was set. OTA
+// keeps its bytes in /ota now, and they are carried exactly as read, so an image that rolls
+// back to ar-13 still finds what it wrote. A build without the plane neither reads nor
+// writes this file, so it survives untouched.
 //
-//   ver | enabled | counter (4, native order) | slot | key (64 hex + NUL) | ota (2) | mesh
+//   ver | enabled | counter (4, native order) | slot | key (64 hex + NUL) | ota (2) | mesh | via
 #define MQTTCTRL_CONFIG_VER_1   1
-#define MQTTCTRL_CONFIG_VER     4
+#define MQTTCTRL_CONFIG_VER     5
 #define MQTTCTRL_CONFIG_KEY_LEN 65
 #define MQTTCTRL_CONFIG_LEN_3   (1 + 1 + 4 + 1 + MQTTCTRL_CONFIG_KEY_LEN + 2)
-#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_3 + 1)
+#define MQTTCTRL_CONFIG_LEN_4   (MQTTCTRL_CONFIG_LEN_3 + 1)
+#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_4 + 1)
 
 struct MqttCtrlStoredConfig {
   bool enabled;
@@ -1336,6 +1402,7 @@ struct MqttCtrlStoredConfig {
   char pubkey[MQTTCTRL_CONFIG_KEY_LEN];      // the command key in hex, "" = none
   uint8_t ota_legacy[2];
   uint8_t mesh_mode;                         // MqttCtrlMeshMode; 0, the default, is auto
+  uint8_t key_via;                           // MqttCtrlKeyVia; a key older than v5 was USB's
 };
 
 static inline void mqttCtrlConfigDefaults(MqttCtrlStoredConfig* c) {
@@ -1359,8 +1426,10 @@ static inline bool mqttCtrlConfigDecode(const uint8_t* buf, size_t len, int slot
     c->pubkey[MQTTCTRL_CONFIG_KEY_LEN - 1] = 0;
   }
   if (ver >= 3 && len >= MQTTCTRL_CONFIG_LEN_3) memcpy(c->ota_legacy, &buf[7 + MQTTCTRL_CONFIG_KEY_LEN], 2);
-  if (ver >= 4 && len >= MQTTCTRL_CONFIG_LEN) c->mesh_mode = buf[MQTTCTRL_CONFIG_LEN_3];
+  if (ver >= 4 && len >= MQTTCTRL_CONFIG_LEN_4) c->mesh_mode = buf[MQTTCTRL_CONFIG_LEN_3];
+  if (ver >= 5 && len >= MQTTCTRL_CONFIG_LEN) c->key_via = buf[MQTTCTRL_CONFIG_LEN_4];
   if (c->mesh_mode > MQTTCTRL_MESH_OFF) c->mesh_mode = MQTTCTRL_MESH_AUTO;
+  if (c->key_via > MQTTCTRL_KEY_VIA_ADMIN) c->key_via = MQTTCTRL_KEY_VIA_USB;
   if (c->slot > slot_count) c->slot = 0;
   return true;
 }
@@ -1374,5 +1443,6 @@ static inline size_t mqttCtrlConfigEncode(const MqttCtrlStoredConfig* c, uint8_t
   memcpy(&buf[7], c->pubkey, MQTTCTRL_CONFIG_KEY_LEN);
   memcpy(&buf[7 + MQTTCTRL_CONFIG_KEY_LEN], c->ota_legacy, 2);
   buf[MQTTCTRL_CONFIG_LEN_3] = c->mesh_mode;
+  buf[MQTTCTRL_CONFIG_LEN_4] = c->key_via;
   return MQTTCTRL_CONFIG_LEN;
 }

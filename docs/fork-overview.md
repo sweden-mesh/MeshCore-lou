@@ -63,7 +63,7 @@ authorises commands.
 ### Turning it on
 
 ```
-set mqtt.cmd.pubkey <64 hex characters>   # serial only — the PUBLIC half of your signing key
+set mqtt.cmd.pubkey <64 hex characters>   # serial, or a remote admin's first key — the PUBLIC half of your signing key
 set mqtt.cmd on
 set mqtt.cmd.slot <n>                 # the MQTT slot to listen and answer on; reboot to apply
 get mqtt.cmd                          # state, and the highest command counter seen
@@ -71,8 +71,10 @@ get mqtt.cmd                          # state, and the highest command counter s
 
 All three are needed, and `mqtt.cmd.slot` must name a slot on a broker that allows
 subscriptions — the stats presets do not. See `docs/mqtt-control.md`. `mqtt.cmd on` with no
-command key refuses everything. **`set mqtt.cmd.pubkey` cannot be done remotely** — only over
-serial or the local console — so a remote attacker cannot point a node at their own key.
+command key refuses everything. **`set mqtt.cmd.pubkey` cannot be done over the plane**, and a
+remote admin may only give a keyless node its first key, with a non-default admin password of
+8 characters or more; replacing a key is serial or the local console only, so a leaked admin
+password cannot repoint a node that already has an owner's key.
 
 This is not `mqtt.owner`. That one is the Observer firmware's ownership claim sent to the stats
 services, and stays yours; the command key is shared by the whole fleet you command.
@@ -97,8 +99,12 @@ In this order, and it stops at the first failure:
    There is no general `set`, no `erase`, and no way to change the command key
 
 Two things are deliberately out of reach of the remote path no matter what it carries:
-`set prv.key`, `erase` and `set mqtt.cmd.pubkey`, which require a locally-privileged caller; and a
-broadcast that would make every node transmit at once.
+`set prv.key`, `erase` and `set mqtt.cmd.pubkey`, which require a locally-privileged caller (or,
+for a keyless node's first key only, a remote admin); and a broadcast that would make every node
+transmit at once. Nor does a remote admin start what opens the board to anyone in Wi-Fi or BLE
+range with no password of its own: `start ota` (the OTA hotspot and uploader, the nRF52's BLE
+DFU) and the web portal's setup access point (`start webconfig ap`, or `start webconfig` with no
+network to join) answer only serial and the local console.
 
 ### What this does not defend against
 

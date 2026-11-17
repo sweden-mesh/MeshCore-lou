@@ -160,6 +160,33 @@ TEST(ForkConsole, OtherControlBytesAreDroppedAndUtf8IsKept) {
   EXPECT_EQ("set name V\r", typed("set name V\xc3\xa4\b\r"));  // erases the whole character
 }
 
+// ---- what only a local caller starts (OTM-6c) -----------------------------------
+
+TEST(OpensBoardToRange, ManualOtaInEveryForm) {
+  EXPECT_TRUE(forkOpensBoardToRange("start ota", true));
+  EXPECT_TRUE(forkOpensBoardToRange("start ota ap", true));
+  EXPECT_TRUE(forkOpensBoardToRange("start ota", false));
+  EXPECT_TRUE(forkOpensBoardToRange("start otax", true));   // core's CLI matches the prefix
+}
+
+TEST(OpensBoardToRange, TheSetupAccessPointButNotTheLanPortal) {
+  EXPECT_TRUE(forkOpensBoardToRange("start webconfig ap", true));
+  EXPECT_TRUE(forkOpensBoardToRange("start webconfig ap", false));
+  EXPECT_TRUE(forkOpensBoardToRange("start webconfig", false));   // no network: the setup AP
+  EXPECT_FALSE(forkOpensBoardToRange("start webconfig", true));   // the LAN portal, password
+}
+
+TEST(OpensBoardToRange, NothingElse) {
+  EXPECT_FALSE(forkOpensBoardToRange("stop ota", false));
+  EXPECT_FALSE(forkOpensBoardToRange("stop webconfig", false));
+  EXPECT_FALSE(forkOpensBoardToRange("ota update", false));
+  EXPECT_FALSE(forkOpensBoardToRange("ota check", false));
+  EXPECT_FALSE(forkOpensBoardToRange("start", false));
+  EXPECT_FALSE(forkOpensBoardToRange("start ot", false));
+  EXPECT_FALSE(forkOpensBoardToRange("", false));
+  EXPECT_FALSE(forkOpensBoardToRange(NULL, false));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

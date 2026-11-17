@@ -73,6 +73,7 @@ void Fork::autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply) {
 // reconnect: docs/mbedtls-tls-footprint.md records a measured largest-free-block
 // ratchet on this exact path, so the buffers are members and stay that way.
 void Fork::setupMqttControl(MQTTBridge* bridge) {
+  noteCommandKey(bridge);
   const char* iata = observerIata();
   if (iata == NULL || iata[0] == 0) return;      // no region, no control plane
   if (_mqtt_control.slot() == 0) return;         // no slot to listen on
@@ -90,6 +91,14 @@ void Fork::setupMqttControl(MQTTBridge* bridge) {
   _ctrl_topics[1] = _ctrl_broadcast;
   refreshMqttControlV2Key();
   bridge->setControlSink(&_control_link, _ctrl_topics, 2, _mqtt_control.slot() - 1);
+}
+
+// What the status message says about the command key: its fingerprint and how it was set.
+void Fork::noteCommandKey(MQTTBridge* bridge) {
+  if (bridge == NULL) return;
+  char fingerprint[MQTTCTRL_KEY_FINGERPRINT_LEN + 1];
+  mqttCtrlKeyFingerprint(_mqtt_control.pubkey(), fingerprint);
+  bridge->setCommandKey(fingerprint, mqttCtrlKeyViaName(_mqtt_control.keyVia()));
 }
 
 // `mqtt.cmd ping`: the broker echoes a ping on our own /ping as a pong on our own /cmd,
@@ -342,7 +351,7 @@ void Fork::ControlLink::runCommand(uint32_t sender_timestamp, char* command, cha
 
 // The command plane's own verbs, and the guard that keeps every other command off the
 // slot the plane rides.
-bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply) {
+bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* command, char* reply) {
   if (strcmp(command, "get mqtt.cmd") == 0) {
     describeMqttControl(reply);
     return true;
@@ -388,7 +397,13 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* rep
     return true;
   }
 #endif
-  return _mqtt_control.handleCommand(sender_timestamp, MQTTCTRL_SLOTS, command, reply);
+  if (!_mqtt_control.handleCommand(mqttCtrlKeyCallerOf(sender_timestamp, mesh_admin),
+                                   _mesh._prefs.password, _mesh._prefs.guest_password,
+                                   MQTTCTRL_SLOTS, command, reply)) return false;
+#ifdef WITH_MQTT_BRIDGE
+  noteCommandKey(_mesh.bridge);
+#endif
+  return true;
 }
 
 // The mesh road (operator 2026-11-16): a signed command in an anonymous request to this node,

@@ -892,6 +892,83 @@ TEST(TriggerOverThePlane, ThisImageAdmitsATriggerOnlyWithAutoReply) {
 #endif
 }
 
+// ---- the command key over the mesh admin login (OTM-6a) -------------------------
+
+static const char* const kStrong = "correct horse";
+
+TEST(CommandKeyCaller, NamedByTheCallerNeverByTheClock) {
+  EXPECT_EQ(MQTTCTRL_KEY_LOCAL, mqttCtrlKeyCallerOf(0, false));
+  EXPECT_EQ(MQTTCTRL_KEY_LOCAL, mqttCtrlKeyCallerOf(0, true));
+  EXPECT_EQ(MQTTCTRL_KEY_MESH_ADMIN, mqttCtrlKeyCallerOf(1795000000, true));
+  EXPECT_EQ(MQTTCTRL_KEY_REMOTE, mqttCtrlKeyCallerOf(1795000000, false));
+}
+
+// The pin: the plane runs every command with mqttCtrlSenderStamp(now) and no admin flag
+// (its runner has no way to pass one), and that caller may never set the key -- not on a
+// keyless node, not with the strongest password. Nothing here asks the deny list, so this
+// holds with the list's entries removed; the next test pins the list on its own.
+TEST(CommandKeyCaller, ThePlaneNeverSetsTheKeyWhateverTheDenyListSays) {
+  const uint32_t clocks[] = { 0, 1, 1715770351, 1795000000, 0xFFFFFFFFu };
+  for (uint32_t now : clocks) {
+    const MqttCtrlKeyCaller plane = mqttCtrlKeyCallerOf(mqttCtrlSenderStamp(now), false);
+    EXPECT_EQ(MQTTCTRL_KEY_REMOTE, plane) << now;
+    EXPECT_STREQ("Err - serial only", mqttCtrlKeySetRefusal(plane, false, kStrong, "guest")) << now;
+    EXPECT_STREQ("Err - serial only", mqttCtrlKeySetRefusal(plane, true, kStrong, "guest")) << now;
+  }
+}
+
+TEST(CommandKeyCaller, TheDenyListRefusesTheKeyOnItsOwn) {
+  const char* key_cmds[] = { "set mqtt.cmd.pubkey 0123", "get mqtt.cmd.pubkey" };
+  for (const char* c : key_cmds) {
+    EXPECT_TRUE(mqttCtrlCommandDenied(c, strlen(c))) << c;
+    EXPECT_FALSE(mqttCtrlMeshCommandAllowed(c, strlen(c), true, true)) << c;
+  }
+}
+
+TEST(CommandKeyCaller, ALocalCallerAlwaysMay) {
+  EXPECT_EQ(nullptr, mqttCtrlKeySetRefusal(MQTTCTRL_KEY_LOCAL, false, "password", "password"));
+  EXPECT_EQ(nullptr, mqttCtrlKeySetRefusal(MQTTCTRL_KEY_LOCAL, true, "", NULL));
+}
+
+TEST(CommandKeyCaller, ARemoteAdminOnlyGivesAKeylessNodeItsFirstKey) {
+  EXPECT_EQ(nullptr, mqttCtrlKeySetRefusal(MQTTCTRL_KEY_MESH_ADMIN, false, kStrong, "guest"));
+  EXPECT_STREQ("Err - a key is set: replace or clear it over USB",
+               mqttCtrlKeySetRefusal(MQTTCTRL_KEY_MESH_ADMIN, true, kStrong, "guest"));
+}
+
+TEST(CommandKeyCaller, TheAdminPasswordRuleSaysWhichPartFailed) {
+  const char* r = mqttCtrlKeySetRefusal(MQTTCTRL_KEY_MESH_ADMIN, false, "password", "guest");
+  ASSERT_NE(nullptr, r);
+  EXPECT_NE(nullptr, strstr(r, "default"));
+  r = mqttCtrlKeySetRefusal(MQTTCTRL_KEY_MESH_ADMIN, false, "hunter2", "guest");
+  ASSERT_NE(nullptr, r);
+  EXPECT_NE(nullptr, strstr(r, "under 8"));
+  r = mqttCtrlKeySetRefusal(MQTTCTRL_KEY_MESH_ADMIN, false, kStrong, kStrong);
+  ASSERT_NE(nullptr, r);
+  EXPECT_NE(nullptr, strstr(r, "guest"));
+  EXPECT_NE(nullptr, mqttCtrlAdminPasswordRefusal(NULL, "guest"));
+  EXPECT_NE(nullptr, mqttCtrlAdminPasswordRefusal("", "guest"));
+  // Exactly 8 passes; 7 does not; an empty guest password is no match for a real one.
+  EXPECT_EQ(nullptr, mqttCtrlAdminPasswordRefusal("12345678", ""));
+  EXPECT_NE(nullptr, mqttCtrlAdminPasswordRefusal("1234567", ""));
+  EXPECT_EQ(nullptr, mqttCtrlAdminPasswordRefusal("12345678", NULL));
+  // Only the compiled default, not every word that contains it.
+  EXPECT_EQ(nullptr, mqttCtrlAdminPasswordRefusal("password1", "guest"));
+}
+
+TEST(CommandKeyCaller, TheFingerprintIsTheFirstEightHex) {
+  char fp[MQTTCTRL_KEY_FINGERPRINT_LEN + 1];
+  mqttCtrlKeyFingerprint("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", fp);
+  EXPECT_STREQ("01234567", fp);
+  mqttCtrlKeyFingerprint("", fp);
+  EXPECT_STREQ("", fp);
+  mqttCtrlKeyFingerprint(NULL, fp);
+  EXPECT_STREQ("", fp);
+  EXPECT_STREQ("admin", mqttCtrlKeyViaName(MQTTCTRL_KEY_VIA_ADMIN));
+  EXPECT_STREQ("usb", mqttCtrlKeyViaName(MQTTCTRL_KEY_VIA_USB));
+  EXPECT_STREQ("usb", mqttCtrlKeyViaName(7));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

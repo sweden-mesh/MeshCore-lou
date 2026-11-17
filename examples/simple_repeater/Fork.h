@@ -3,6 +3,7 @@
 #include <ForkFeatures.h>
 #include <Mesh.h>
 #include <helpers/IdentityStore.h>
+#include <helpers/LoginThrottle.h>
 #ifdef WITH_AUTO_REPLY
   #include "AutoReply.h"
 #endif
@@ -34,6 +35,7 @@ class MQTTBridge;
  */
 class Fork {
   MyMesh& _mesh;
+  LoginThrottle _logins = {};
 #ifdef WITH_MQTT_BRIDGE
   // Signed pull OTA, in every Observer image (ForkOta.cpp).
   bool _ota_auto = false;
@@ -90,7 +92,7 @@ class Fork {
   uint32_t _mesh_ok = 0;                       // commands run over the mesh road
   uint32_t _mesh_refused = 0;                  // ... and requests on it that ran nothing
 
-  bool handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply);
+  bool handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* command, char* reply);
   void describeMqttControl(char* reply);
   bool onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                      const uint8_t* data, size_t len);
@@ -113,6 +115,7 @@ class Fork {
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
 
   void setupMqttControl(MQTTBridge* bridge);
+  void noteCommandKey(MQTTBridge* bridge);
   void autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply);
   void pingMqttControl(char* reply);
   void formatNodeStats(char* reply);
@@ -135,8 +138,14 @@ public:
   // Every loop, after the radio.
   void loop();
   // A command upstream's own verbs did not take, before the common CLI sees it.
-  // Returns true when a feature answered it in 'reply'.
-  bool handleCommand(uint32_t sender_timestamp, char* command, char* reply);
+  // Returns true when a feature answered it in 'reply'. 'mesh_admin' is true only for a
+  // command from a client logged in over the mesh with the admin password.
+  bool handleCommand(uint32_t sender_timestamp, char* command, char* reply, bool mesh_admin);
+
+  // The failed-login throttle, around every password login (handleLoginReq).
+  bool loginRefused(const mesh::Identity& sender);
+  void loginFailed(const mesh::Identity& sender);
+  void loginPassed(const mesh::Identity& sender);
 
   // The Observer's region code (`set mqtt.iata`): what the command plane's topics are
   // named by and what auto-reply's legacy '#test-<iata>' channel is derived from. NULL
