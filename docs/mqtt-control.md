@@ -20,7 +20,7 @@ Ed25519 signature by the command key this node was given.
 
 ```
 set mqtt.cmd.pubkey <64 hex characters>   # serial only; the PUBLIC half of the signing key
-set mqtt.cmd on                           # with no slot set: takes one, see below; reboot to apply
+set mqtt.cmd on                           # takes a slot, or puts the plane's back on the preset; reboot to apply
 set mqtt.cmd on <host>                    # the same on a region's own broker (lou-18)
 get mqtt.cmd                              # state, counter, slot, /cmd subscription, last command
 mqtt.cmd ping                             # the whole plane, end to end, on the spot (ar-12)
@@ -61,8 +61,17 @@ token's audience, every packet type on -- and answers
 host is a name: letters, digits, `.` and `-`, up to 50 characters; a URL, a port or anything
 else is refused. The slot is chosen as above, or, when the plane already has one, that slot
 is rewritten, so a node moves from the shared broker to its region's (or between two
-regional ones) in one line. The bare `set mqtt.cmd on` stays the shared broker. Like every
-`set mqtt.cmd`, it is serial only. On firmware before lou-18 the same slot is set by hand:
+regional ones) in one line. The bare `set mqtt.cmd on` stays the shared broker, and from
+lou-19, on a node whose plane already has a slot, it rewrites that slot back to the
+`mccontrol` preset (server and audience cleared, every packet type on) and answers
+`OK - slot 3, mccontrol (mqtts://mqtt-meshcore.louie.se:8883), packets on; reboot to apply`:
+the one-line repair for a plane slot that was pointed elsewhere. Before lou-19 it only turned
+the plane on and left the slot as it was. Either form saves the slot to the Observer's
+settings before the plane is pointed at it, and refuses, changing nothing, when that save
+fails. On lou-18 the host form saved the wrong settings file, so its answer was right but
+the slot was back as it was after the reboot. Like every
+`set mqtt.cmd`, it is not admitted over the broker; the mesh road's repair allowance (below)
+admits both forms. On firmware before lou-18 the same slot is set by hand:
 
 ```
 set mqttN.preset custom · set mqttN.server mqtts://broker.example:8883 · set mqttN.audience broker.example

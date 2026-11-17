@@ -426,6 +426,26 @@ static inline MqttCtrlSetup mqttCtrlPlanSlot(const char* command, MqttCtrlSlotPl
   return MQTTCTRL_SETUP_HOST;
 }
 
+// The slot `set mqtt.cmd on [<host>]` writes: the plane's own when it has one -- bare,
+// that puts it back on the preset; with a host, that moves it -- else the one
+// mqttCtrlPickSlot picks. -1 when there is none.
+static inline int mqttCtrlSetupSlot(int plane_slot, const char* const* presets, int slot_count,
+                                    bool two_slot_board) {
+  if (plane_slot > 0 && plane_slot <= slot_count) return plane_slot - 1;
+  return mqttCtrlPickSlot(presets, slot_count, two_slot_board);
+}
+
+// The plan written into one slot's fields. The preset's server and audience are empty, so
+// a slot that was a custom one keeps nothing of it.
+static inline void mqttCtrlApplySlotPlan(const MqttCtrlSlotPlan* plan, char* preset,
+                                         size_t preset_size, char* server, size_t server_size,
+                                         char* audience, size_t audience_size, uint16_t* filter) {
+  snprintf(preset, preset_size, "%s", plan->preset);
+  snprintf(server, server_size, "%s", plan->server);
+  snprintf(audience, audience_size, "%s", plan->audience);
+  *filter = plan->filter;
+}
+
 // Does this command change the MQTT slot the command plane rides? Any form does it:
 // `set mqttN.<anything>` for that slot, and `set mqtt.analyzer.us|eu ...`, which write
 // slots 1 and 2 whatever they hold. Each would take the plane off its slot in silence --
