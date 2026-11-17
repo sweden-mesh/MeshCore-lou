@@ -1129,8 +1129,20 @@ static inline bool mqttCtrlMeshAllowance(const char* command, size_t len) {
   return len == 15 && strncmp(command, "set mqtt.cmd on", 15) == 0;
 }
 
-static inline bool mqttCtrlMeshCommandAllowed(const char* command, size_t len, bool auto_reply) {
+// 'uplink' says whether this image has Wi-Fi and MQTT (WITH_MQTT_BRIDGE). Without them the
+// mesh road is the plane's only road (operator 2026-11-16, plan phase 5) and the deny list
+// applies in full: the allowance repairs an uplink there is none of, and `ota check`,
+// `ota update` and `mqtt.cmd ping` need one. Refused as not-allowed, as a trigger is on an
+// image without auto-reply, rather than left to the CLI to answer "unknown".
+static inline bool mqttCtrlNeedsUplink(const char* command, size_t len) {
+  return mqttCtrlExactCommand(command, len, "ota check") || mqttCtrlExactCommand(command, len, "ota update") ||
+         mqttCtrlExactCommand(command, len, "mqtt.cmd ping");
+}
+
+static inline bool mqttCtrlMeshCommandAllowed(const char* command, size_t len, bool auto_reply,
+                                              bool uplink = true) {
   if (!mqttCtrlCommandCharsOk(command, len)) return false;
+  if (!uplink) return !mqttCtrlNeedsUplink(command, len) && mqttCtrlCommandAllowed(command, len, auto_reply);
   return mqttCtrlMeshAllowance(command, len) || mqttCtrlCommandAllowed(command, len, auto_reply);
 }
 
@@ -1145,12 +1157,12 @@ static inline MqttCtrlResult mqttCtrlMeshCheckExpiry(uint32_t now, uint32_t expi
 // mqttCtrlAuthorise for the mesh road: the same counter, its own expiry and command rules.
 static inline MqttCtrlResult mqttCtrlAuthoriseMesh(const MqttCtrlEnvelope* env,
                                                    uint32_t last_counter, uint32_t now,
-                                                   bool auto_reply) {
+                                                   bool auto_reply, bool uplink = true) {
   if (env == NULL) return MQTTCTRL_ERR_EMPTY;
   if (!mqttCtrlCounterAccepted(last_counter, env->counter)) return MQTTCTRL_ERR_REPLAY;
   MqttCtrlResult expiry = mqttCtrlMeshCheckExpiry(now, env->expiry);
   if (expiry != MQTTCTRL_OK) return expiry;
-  if (!mqttCtrlMeshCommandAllowed(env->command, env->command_len, auto_reply)) return MQTTCTRL_ERR_NOT_ALLOWED;
+  if (!mqttCtrlMeshCommandAllowed(env->command, env->command_len, auto_reply, uplink)) return MQTTCTRL_ERR_NOT_ALLOWED;
   return MQTTCTRL_OK;
 }
 
@@ -1187,6 +1199,26 @@ static inline bool mqttCtrlMeshOpen(uint8_t mode, uint32_t down_since, uint32_t 
   if (mode == MQTTCTRL_MESH_ON) return true;
   if (mode == MQTTCTRL_MESH_OFF) return false;
   return down_since != 0 && now_ms - down_since >= MQTTCTRL_MESH_AUTO_AFTER_MS;
+}
+
+// An image without an uplink has no MQTT to wait for and no other road: there the mesh road
+// listens whenever the plane is on and is always open, whatever mode a file written by an
+// Observer image carried over.
+static inline bool mqttCtrlMeshListening(bool enabled, bool uplink, uint8_t mode) {
+  return enabled && (!uplink || mode != MQTTCTRL_MESH_OFF);
+}
+
+static inline bool mqttCtrlMeshRoadOpen(bool uplink, uint8_t mode, uint32_t down_since, uint32_t now_ms) {
+  return !uplink || mqttCtrlMeshOpen(mode, down_since, now_ms);
+}
+
+// The region an image without an uplink names its command topic by. It has no `mqtt.iata`,
+// since no broker files it under one, so the topic it rebuilds and the one a sender signs for
+// it is always meshcore/mesh/{its key}/cmd.
+#define MQTTCTRL_MESH_ONLY_REGION  "mesh"
+
+static inline const char* mqttCtrlMeshRegion(bool uplink, const char* iata) {
+  return uplink ? iata : MQTTCTRL_MESH_ONLY_REGION;
 }
 
 // `get mqtt.cmd.mesh`: the mode and whether the road is open now, and why not.

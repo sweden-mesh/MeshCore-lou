@@ -7,12 +7,12 @@ built, and any combination of them builds from the same tree:
 |---|---|---|---|
 | `as` | `WITH_AUTO_SCOPE` | auto-scope (reserved: no code yet, the switch stops the build) | |
 | `ar` | `WITH_AUTO_REPLY` | auto-reply: the regional test channel, private tests, `trigger test` | [autoreply.md](autoreply.md) |
-| `rc` | `WITH_MQTT_COMMAND` | remote command: signed commands and results over MQTT | [mqtt-control.md](mqtt-control.md) |
+| `rc` | `WITH_MQTT_COMMAND` | remote command: signed commands and results over MQTT and the mesh; without the Observer bridge over the mesh only | [mqtt-control.md](mqtt-control.md) |
 
 | base | `ar` | `rc` | `arrc` | with `as` (reserved) |
 |---|---|---|---|---|
 | Observer (`fork/observer`), 33 repeater boards | built | built | built | `as`, `asar`, `asrc`, `asarrc`: not yet |
-| core MeshCore (`fork/core`), 93 boards (`scripts/boards-core.txt`) | built | -- (needs the Observer bridge) | -- | `as`, `asar`: not yet |
+| core MeshCore (`fork/core`), 93 boards (`scripts/boards-core.txt`) | built | mesh only: builds with `-c`, not in the release matrix | the same | `as`, `asar`: not yet |
 
 Every Observer image also carries signed pull OTA; a core image has none. Room-server and
 companion images are not built (TODO 22a rulings 14, 23).
@@ -25,8 +25,9 @@ either). The revision
 `lou-<nn>` continues the `ar-<nn>` counter of the releases before the split.
 
 A combination is named by its codes run together in that fixed order: `ar`, `rc`, `arrc`,
-and later `as`, `asar`, `asrc`, `asarrc`. `rc` needs the Observer's MQTT bridge; asking for
-it without `WITH_MQTT_BRIDGE` stops the build (`include/ForkFeatures.h`).
+and later `as`, `asar`, `asrc`, `asarrc`. `rc` without the Observer's MQTT bridge is mesh
+only: signed commands over the mesh road and nothing else (`FORK_UPLINK`,
+[mqtt-control.md](mqtt-control.md), "Mesh only").
 
 Signed pull OTA ([ota.md](ota.md)) is not a feature: every Observer image of this fork
 carries it, because an image that pulled from another channel would replace itself with one
@@ -115,8 +116,9 @@ fork). Every file the fork owns -- listed in `scripts/fork-files.txt` -- is iden
 only the hook lines in each base's own files differ. Develop on `fork/observer`, then
 `git checkout fork/core && scripts/fork-sync.sh fork/observer`, commit, and
 `scripts/fork-check.sh` (also run by `.github/workflows/fork-files.yml` on every push) says
-whether the two agree. On core the command plane and OTA compile to nothing and their suites
-are ignored: they need Observer headers that base does not have.
+whether the two agree. On core OTA compiles to nothing, the command plane builds mesh only,
+and their suites are ignored there and run on fork/observer. The four Observer headers the
+plane's rules need are listed as fork files, so core has the same copies.
 
 ### Auto-reply on core
 

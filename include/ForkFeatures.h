@@ -7,7 +7,8 @@
 //
 //   WITH_AUTO_SCOPE     as  auto-scope (reserved: there is no code for it yet)
 //   WITH_AUTO_REPLY     ar  auto-reply, the regional test channel and private tests
-//   WITH_MQTT_COMMAND   rc  remote command, signed commands over the Observer's MQTT
+//   WITH_MQTT_COMMAND   rc  remote command, signed commands over the Observer's MQTT and
+//                           the mesh; without the Observer bridge, over the mesh alone
 //
 // Each is set with -D by the build script (PLATFORMIO_BUILD_FLAGS), never in a
 // variant's platformio.ini, so every board builds every combination unchanged. A
@@ -15,9 +16,6 @@
 // settings file is left exactly as the last build that had it wrote it. Signed
 // pull OTA is not a feature: every Observer image of this fork carries it (docs/fork.md).
 
-#if defined(WITH_MQTT_COMMAND) && !defined(WITH_MQTT_BRIDGE)
-  #error "WITH_MQTT_COMMAND needs the Observer MQTT bridge (WITH_MQTT_BRIDGE)"
-#endif
 #if defined(WITH_AUTO_SCOPE)
   #error "WITH_AUTO_SCOPE is reserved: auto-scope has no code in this tree yet"
 #endif
@@ -36,6 +34,13 @@
   #define FORK_MQTT_COMMAND 1
 #else
   #define FORK_MQTT_COMMAND 0
+#endif
+// Wi-Fi and MQTT, which only an image with the Observer bridge has. Without them remote
+// command is mesh only: the mesh road is its one road, always open (docs/mqtt-control.md).
+#ifdef WITH_MQTT_BRIDGE
+  #define FORK_UPLINK       1
+#else
+  #define FORK_UPLINK       0
 #endif
 
 // The combination as it appears in an image name and in `ver`: the two-letter codes

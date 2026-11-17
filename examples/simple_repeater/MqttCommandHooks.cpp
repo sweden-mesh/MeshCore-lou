@@ -1,9 +1,12 @@
 // The command plane's side of the repeater: its topics on the bridge, the queue a
-// signed command waits in, the result it publishes, and `mqtt.cmd ping`. Compiled
-// only with WITH_MQTT_COMMAND; MyMesh reaches it through Fork.
+// signed command waits in, the result it publishes, `mqtt.cmd ping`, and the mesh road.
+// Compiled only with WITH_MQTT_COMMAND; without the Observer bridge only the mesh road
+// is (mesh only). MyMesh reaches it through Fork.
 #include "MyMesh.h"
 
 #ifdef WITH_MQTT_COMMAND
+
+#ifdef WITH_MQTT_BRIDGE
 
 // `set mqtt.cmd on` with no slot configured, the one line a fresh node needs
 // (operator decision 2026-10-08): take a free slot (mqttCtrlPickSlot says which:
@@ -124,10 +127,18 @@ void Fork::loopMqttPing() {
   publishMqttControlResult(MQTTCTRL_OK, _ping_outcome, reply);   // the command ran; the reply says how
 }
 
+#endif
+
 // `get mqtt.cmd` on one line: on/off and the counter as before, then the slot's
 // connection, whether the broker acknowledged the /cmd subscription, how long ago
 // the key last vouched for a command, and how many arrived that it did not.
 void Fork::describeMqttControl(char* reply) {
+#ifndef WITH_MQTT_BRIDGE
+  sprintf(reply, "> %s, counter %u, mesh only", _mqtt_control.isEnabled() ? "on" : "off",
+          (unsigned)_mqtt_control.counter());
+  size_t used = strlen(reply);
+  mqttCtrlMeshNote(MQTTCTRL_MESH_ON, _mesh_ok, _mesh_refused, &reply[used], MQTTCTRL_MAX_REPLY - used);
+#else
   char age[20];
   if (_ctrl_last_verified_ms == 0) {
     strcpy(age, "none yet");
@@ -164,7 +175,10 @@ void Fork::describeMqttControl(char* reply) {
                    MQTTCTRL_MAX_REPLY - used);
   used = strlen(reply);
   mqttCtrlRefusalNote(_ctrl_unverified, _ctrl_last_unverified, &reply[used], MQTTCTRL_MAX_REPLY - used);
+#endif
 }
+
+#ifdef WITH_MQTT_BRIDGE
 
 // Drained on the loop task, never on the MQTT event task: verification wants more
 // stack than that task has, and executing a command runs a flash write that would
@@ -308,6 +322,7 @@ void Fork::ControlLink::onControlMessage(const char* topic, const uint8_t* paylo
   }
   fork._mqtt_control.stage(topic, payload, len);
 }
+#endif
 
 void Fork::ControlLink::runCommand(uint32_t sender_timestamp, char* command, char* reply) {
   fork._mesh.handleCommand(sender_timestamp, command, reply);
@@ -316,6 +331,16 @@ void Fork::ControlLink::runCommand(uint32_t sender_timestamp, char* command, cha
 // The command plane's own verbs, and the guard that keeps every other command off the
 // slot the plane rides.
 bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply) {
+  if (strcmp(command, "get mqtt.cmd") == 0) {
+    describeMqttControl(reply);
+    return true;
+  }
+#ifdef WITH_MQTT_BRIDGE
+  if (memcmp(command, "get stats", 9) == 0 && (command[9] == 0 || command[9] == ' ' ||
+                                               command[9] == '\n' || command[9] == '\r')) {
+    formatNodeStats(reply);
+    return true;
+  }
   MqttCtrlSlotPlan plan;
   const MqttCtrlSetup setup = mqttCtrlPlanSlot(command, &plan);
   if (setup == MQTTCTRL_SETUP_BAD_HOST) {
@@ -329,10 +354,6 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* rep
   }
   if (strcmp(command, "mqtt.cmd ping") == 0) {
     pingMqttControl(reply);
-    return true;
-  }
-  if (strcmp(command, "get mqtt.cmd") == 0) {
-    describeMqttControl(reply);
     return true;
   }
   if (strcmp(command, "get mqtt.cmd.mesh") == 0) {
@@ -349,27 +370,24 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, char* command, char* rep
     strcpy(reply, "OK");
     return true;
   }
-  if (memcmp(command, "get stats", 9) == 0 && (command[9] == 0 || command[9] == ' ' ||
-                                               command[9] == '\n' || command[9] == '\r')) {
-    formatNodeStats(reply);
-    return true;
-  }
   if (mqttCtrlTouchesSlot(command, _mqtt_control.slot())) {
     sprintf(reply, "Err - slot %d is the command plane's: move it with set mqtt.cmd.slot first (not over the plane)",
             _mqtt_control.slot());
     return true;
   }
-  return _mqtt_control.handleCommand(sender_timestamp, RUNTIME_MQTT_SLOTS, command, reply);
+#endif
+  return _mqtt_control.handleCommand(sender_timestamp, MQTTCTRL_SLOTS, command, reply);
 }
 
 // The mesh road (operator 2026-11-16): a signed command in an anonymous request to this node,
-// for when Wi-Fi or the broker is down. Verified as a command on /cmd is, against the topic
-// this node would have received it on, and answered with a response to whoever asked.
-// Anything that is not answered stays silent, as a build without the road is.
+// for when Wi-Fi or the broker is down, and the only road on an image without them. Verified
+// as a command on /cmd is, against the topic this node would have received it on, and
+// answered with a response to whoever asked. Anything that is not answered stays silent,
+// as a build without the road is.
 bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                          const uint8_t* data, size_t len) {
   if (!mqttCtrlMeshIsRequest(data, len)) return false;
-  if (!_mqtt_control.isEnabled() || _mqtt_control.meshMode() == MQTTCTRL_MESH_OFF) return true;
+  if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) return true;
 
   MqttCtrlMeshRequest req;
   char node_hex[PUB_KEY_SIZE * 2 + 1];
@@ -377,7 +395,7 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
   mesh::Identity owner;
   mesh::Utils::toHex(node_hex, _mesh.self_id.pub_key, PUB_KEY_SIZE);
   if (mqttCtrlMeshParse(data, len, &req) != MQTTCTRL_OK
-      || !MqttControl::buildTopic(observerIata(), node_hex, topic, sizeof(topic))
+      || !MqttControl::buildTopic(mqttCtrlMeshRegion(FORK_UPLINK, observerIata()), node_hex, topic, sizeof(topic))
       || mqttCtrlOwnerReady(_mqtt_control.pubkey()) != MQTTCTRL_OK
       || !mesh::Utils::fromHex(owner.pub_key, PUB_KEY_SIZE, _mqtt_control.pubkey())) {
     _mesh_refused++;
@@ -386,7 +404,7 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
 
   char reply[MQTTCTRL_MAX_REPLY];
   bool answer = false;
-  const bool open = mqttCtrlMeshOpen(_mqtt_control.meshMode(), _mesh_down_since, millis());
+  const bool open = mqttCtrlMeshRoadOpen(FORK_UPLINK, _mqtt_control.meshMode(), _mesh_down_since, millis());
   const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
   MqttCtrlResult result = _mqtt_control.meshCommand(owner, topic, req, now, open, &_control_link,
                                                     reply, &answer);

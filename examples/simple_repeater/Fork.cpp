@@ -40,11 +40,11 @@ const char* Fork::observerIata() const {
 }
 
 void Fork::loop() {
+#ifdef WITH_MQTT_BRIDGE
 #ifdef WITH_MQTT_COMMAND
   loopMqttControl();
   loopMqttPing();
 #endif
-#ifdef WITH_MQTT_BRIDGE
   otaLoop();
 #endif
 }
