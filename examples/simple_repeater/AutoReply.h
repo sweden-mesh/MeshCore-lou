@@ -21,6 +21,8 @@
 #define AUTOREPLY_MAX_CHANNEL 32
 // a region name bounding how far a reply floods, or empty for the request's own scope
 #define AUTOREPLY_MAX_REGION  31
+// "where the node answers": three channels, each with what it came from
+#define AUTOREPLY_MAX_WHERE   (3 * AUTOREPLY_MAX_CHANNEL + 48)
 #define AUTOREPLY_MAX_PAYLOAD (5 + AUTOREPLY_MAX_TEXT)   // timestamp + flags + text
 // how many leading bytes of a requester's key name it in a private reply's brackets
 #define AUTOREPLY_PRIVATE_WHO 4
@@ -32,6 +34,7 @@
 struct AutoReplyTarget {
   uint8_t mode;
   uint8_t pubkey[PUB_KEY_SIZE];
+  const char* scope;   // the region a flooded reply stays in; empty for the request's
 };
 
 // One channel the node answers on, and the budgets its requests spend.
@@ -54,8 +57,10 @@ struct AutoReplyLane {
  * reply floods -- and its key is the first 16 bytes of sha256 of that name, so there is
  * no PSK to configure or share, and any client that adds a channel of the same name can
  * use it. While 'autoreply.legacy' is on (the default) the node also answers on
- * '#test-<iata>', the channel releases before ar-12 derived from 'set mqtt.iata', each
- * request on the channel it came in on. Switched on with
+ * '#test-<iata>', the channel releases before ar-12 derived from 'set mqtt.iata', and while
+ * 'autoreply.national' is not off on '#test-<national>', the country the region table puts
+ * the region in (AutoReplyLogic.h), whose replies flood the whole national region. Each
+ * request is answered on the channel it came in on. Switched on with
  * 'set autoreply on'; a node with neither channel stays silent either way.
  *
  * Every repeater in range answers the same trigger, so requests from further away than
@@ -82,11 +87,16 @@ class AutoReply {
   uint8_t _mode;                // how a request that names no mode is answered
   uint8_t _slot;                // assigned reply slot, 0 = derive one from our key
   bool _private;                // answer a private test request sent to this node directly
+  uint8_t _national;            // 'autoreply.national': AUTOREPLY_NATIONAL_AUTO, _OFF or _NAMED
+  char _national_name[AUTOREPLY_MAX_REGION + 1];    // ... the region it names when _NAMED
+  char _national_scope[AUTOREPLY_MAX_REGION + 1];   // the national region, as of the last refresh
+  int _national_source;         // ... and where it came from (AUTOREPLY_NATIONAL_FROM_*)
+  RegionMap* _regions;
 
   void toStored(AutoReplyStoredConfig* c) const;
   void fromStored(const AutoReplyStoredConfig& c);
-  // The region's own channel and the legacy one; either, both or neither is ready.
-  AutoReplyLane _lanes[2];
+  // The region's own channel, the legacy one and the national one; any of them may be ready.
+  AutoReplyLane _lanes[3];
   // The private path keeps its own budget: a burst of private requests must not be
   // able to spend the channel's replies, nor the other way round.
   SlidingBudget _private_limiter;
@@ -97,7 +107,9 @@ class AutoReply {
   const char* regionSource() const { return _from_home ? "region home" : "region default"; }
   const char* region() const { return autoReplyEffectiveRegion(_region, _default_scope); }
   static void deriveLane(AutoReplyLane& lane, const char* name);
-  bool anyChannel() const { return _lanes[0].ready() || _lanes[1].ready(); }
+  bool anyChannel() const {
+    return _lanes[0].ready() || _lanes[1].ready() || _lanes[2].ready();
+  }
   void describeChannels(char* out, size_t size) const;
   void load();
   void save();
@@ -108,7 +120,7 @@ class AutoReply {
 public:
   AutoReply();
 
-  void begin(FILESYSTEM* fs);
+  void begin(FILESYSTEM* fs, RegionMap* regions);
 
   /**
    * \brief  Handle the 'set/get autoreply[.*]' commands.

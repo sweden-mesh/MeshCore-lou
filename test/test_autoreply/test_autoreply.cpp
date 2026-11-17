@@ -1657,7 +1657,7 @@ TEST(AutoReplyConfig, AFileFromNewerFirmwareIsReadByTheFieldsWeKnow) {
   in.enabled = true; in.slot = 4;
   uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
   size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
-  buf[0] = 9;                                 // some later version
+  buf[0] = AUTOREPLY_CONFIG_VERSION + 1;      // some later version
   std::vector<uint8_t> b(buf, buf + n);
   b.push_back(0x77); b.push_back(0x88);       // and fields we have never heard of
   AutoReplyStoredConfig out = decodeFrom(b);
@@ -2001,7 +2001,7 @@ TEST(AutoReplyConfig, LegacyOffRoundTrips) {
   in.legacy = false;
   uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
   size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
-  EXPECT_EQ(buf[0], 8);
+  EXPECT_EQ(buf[0], 9);
   EXPECT_FALSE(decodeFrom(std::vector<uint8_t>(buf, buf + n)).legacy);
 }
 
@@ -2081,7 +2081,7 @@ TEST(ChannelMatch, AReplyOnEitherChannelNeverTriggersAReply) {
 
 // ---- the region table looked up without regard to case (ar-13) -------------
 
-struct FakeEntry { char name[31]; };
+struct FakeEntry { char name[31]; uint16_t id; uint16_t parent; };
 struct FakeMap {
   std::vector<FakeEntry> e;
   int getCount() const { return (int)e.size(); }
@@ -2110,4 +2110,257 @@ TEST(FindRegion, TheVerdictFindsATableNameInCapitals) {
   char name[AUTOREPLY_REGION_NAME_MAX + 1];
   EXPECT_EQ(AUTOREPLY_REGION_SET, autoReplyRegionVerdict("se-jkp", name, sizeof(name),
       [&m](const char* n) { return autoReplyFindRegion(m, n) != nullptr; }));
+}
+
+// ---- the national lane (AR-NAT, operator 2026-11-17) --------------------------
+
+static std::string nationalOf(const FakeMap& m, const char* home, int* source = nullptr) {
+  char out[AUTOREPLY_MAX_REGION + 1];
+  int src = autoReplyNationalRegion(m, home, out, sizeof(out));
+  if (source) *source = src;
+  return out;
+}
+
+TEST(National, ACountyUnderItsCountryFindsTheCountry) {
+  FakeMap m{{{"se", 1, 0}, {"se-jkp", 2, 1}}};
+  int src;
+  EXPECT_EQ("se", nationalOf(m, "se-jkp", &src));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_FROM_TREE, src);
+}
+
+TEST(National, TheMeshatTreeStopsAtTheCountryNotEurope) {
+  // meshat.se's guide: region def eu|* europe|eu se se-jkp. 'eu' is the topmost ancestor,
+  // but 'se-jkp' does not start with it, so the country is the topmost that it does.
+  FakeMap m{{{"eu", 1, 0}, {"europe", 2, 1}, {"se", 3, 1}, {"se-jkp", 4, 3},
+             {"se-jkp-mul", 5, 4}}};
+  int src;
+  EXPECT_EQ("se", nationalOf(m, "se-jkp", &src));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_FROM_TREE, src);
+  EXPECT_EQ("se", nationalOf(m, "se-jkp-mul"));     // topmost, not the nearest 'se-jkp'
+}
+
+TEST(National, AFlatTableFallsBackToTheFirstLabel) {
+  // The firmware page sends 'region put se-jkp' and 'region put se', both under '*'.
+  FakeMap m{{{"se-jkp", 1, 0}, {"se", 2, 0}}};
+  int src;
+  EXPECT_EQ("se", nationalOf(m, "se-jkp", &src));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_FROM_LABEL, src);
+}
+
+TEST(National, AnUnhyphenatedRegionNeedsTheTree) {
+  FakeMap tree{{{"se", 1, 0}, {"se0680", 2, 1}}};
+  EXPECT_EQ("se", nationalOf(tree, "se0680"));
+  FakeMap flat{{{"se", 1, 0}, {"se0680", 2, 0}}};
+  int src;
+  EXPECT_EQ("", nationalOf(flat, "se0680", &src));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_NONE, src);
+}
+
+TEST(National, NoMatchMeansNoNationalLane) {
+  int src;
+  FakeMap no_country{{{"se-jkp", 1, 0}, {"eu", 2, 0}}};
+  EXPECT_EQ("", nationalOf(no_country, "se-jkp", &src));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_NONE, src);
+  FakeMap jkg{{{"jkg", 1, 0}}};
+  EXPECT_EQ("", nationalOf(jkg, "jkg"));
+  EXPECT_EQ("", nationalOf(jkg, ""));
+  EXPECT_EQ("", nationalOf(jkg, nullptr));
+  FakeMap empty;
+  EXPECT_EQ("", nationalOf(empty, "se-jkp"));
+}
+
+TEST(National, NothingIsSweden) {
+  // No country code is in the code: Oslo gets Norway, Copenhagen Denmark.
+  FakeMap no{{{"no", 1, 0}, {"no-osl", 2, 1}}};
+  EXPECT_EQ("no", nationalOf(no, "no-osl"));
+  FakeMap dk{{{"dk-cph", 1, 0}, {"dk", 2, 0}, {"se", 3, 0}}};
+  EXPECT_EQ("dk", nationalOf(dk, "dk-cph"));
+}
+
+TEST(National, AHomeThatIsTheCountryHasNoSecondLane) {
+  FakeMap m{{{"se", 1, 0}, {"se-jkp", 2, 1}}};
+  EXPECT_EQ("", nationalOf(m, "se"));
+}
+
+TEST(National, KeepsTheTablesSpellingAndIgnoresAHash) {
+  // The name is also the scope, and repeaters forward only the exact name.
+  FakeMap m{{{"#SE", 1, 0}, {"SE-JKP", 2, 1}}};
+  EXPECT_EQ("SE", nationalOf(m, "se-jkp"));
+  EXPECT_EQ("SE", nationalOf(m, "#se-jkp"));
+  char ch[REGION_CHANNEL_BUF];
+  autoReplyNationalChannel("SE", "#test-se-jkp", "#test-jkg", ch, sizeof(ch));
+  EXPECT_STREQ("#test-se", ch);
+}
+
+TEST(National, AParentLoopEnds) {
+  FakeMap m{{{"se", 1, 2}, {"se-jkp", 2, 1}}};
+  EXPECT_EQ("se", nationalOf(m, "se-jkp"));
+}
+
+TEST(National, TheSettingDecides) {
+  FakeMap m{{{"se", 1, 0}, {"se-jkp", 2, 1}, {"dk", 3, 0}}};
+  char out[AUTOREPLY_MAX_REGION + 1];
+  EXPECT_EQ(AUTOREPLY_NATIONAL_FROM_TREE,
+            autoReplyNationalFor(AUTOREPLY_NATIONAL_AUTO, "", m, "se-jkp", out, sizeof(out)));
+  EXPECT_STREQ("se", out);
+  EXPECT_EQ(AUTOREPLY_NATIONAL_NONE,
+            autoReplyNationalFor(AUTOREPLY_NATIONAL_OFF, "dk", m, "se-jkp", out, sizeof(out)));
+  EXPECT_STREQ("", out);
+  EXPECT_EQ(AUTOREPLY_NATIONAL_FROM_SETTING,
+            autoReplyNationalFor(AUTOREPLY_NATIONAL_NAMED, "dk", m, "se-jkp", out, sizeof(out)));
+  EXPECT_STREQ("dk", out);
+  EXPECT_EQ(AUTOREPLY_NATIONAL_NONE,
+            autoReplyNationalFor(AUTOREPLY_NATIONAL_NAMED, "", m, "se-jkp", out, sizeof(out)));
+}
+
+TEST(National, TheOverrideTakesAutoOffOrARegionInTheTable) {
+  FakeMap m{{{"SE", 1, 0}, {"se-jkp", 2, 1}}};
+  auto known = [&m](const char* n) { return autoReplyFindRegion(m, n) != nullptr; };
+  char name[AUTOREPLY_REGION_NAME_MAX + 1];
+  uint8_t setting = 0xEE;
+  EXPECT_EQ(AUTOREPLY_REGION_SET, autoReplyNationalVerdict("off", &setting, name, sizeof(name), known));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_OFF, setting);
+  EXPECT_EQ(AUTOREPLY_REGION_SET, autoReplyNationalVerdict("AUTO", &setting, name, sizeof(name), known));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_AUTO, setting);
+  EXPECT_STREQ("", name);
+  EXPECT_EQ(AUTOREPLY_REGION_SET, autoReplyNationalVerdict("Se", &setting, name, sizeof(name), known));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_NAMED, setting);
+  EXPECT_STREQ("se", name);                       // folded, two letters allowed
+
+  setting = AUTOREPLY_NATIONAL_AUTO;
+  EXPECT_EQ(AUTOREPLY_REGION_NOT_IN_TABLE,
+            autoReplyNationalVerdict("dk", &setting, name, sizeof(name), known));
+  EXPECT_STREQ("dk", name);
+  const char* bad[] = { "", "s", "a--b", "-se", "#se", "on" };
+  for (const char* b : bad) {
+    EXPECT_NE(AUTOREPLY_REGION_SET, autoReplyNationalVerdict(b, &setting, name, sizeof(name), known))
+        << b;
+  }
+  EXPECT_EQ(AUTOREPLY_NATIONAL_AUTO, setting);    // a refused argument changes nothing
+}
+
+TEST(National, AThirdChannelBesideTheOtherTwo) {
+  Channels c = channelsFor("se-jkp", "JKG", true);
+  char nat[REGION_CHANNEL_BUF];
+  autoReplyNationalChannel("se", c.region, c.legacy, nat, sizeof(nat));
+  EXPECT_STREQ("#test-se", nat);
+  EXPECT_STREQ("#test-se-jkp", c.region);
+  EXPECT_STREQ("#test-jkg", c.legacy);
+}
+
+TEST(National, AChannelAlreadyAnsweredIsAnsweredOnce) {
+  // A national region spelled like the home region or the IATA code is one channel.
+  Channels c = channelsFor("abc", "XYZ", true);
+  char nat[REGION_CHANNEL_BUF];
+  autoReplyNationalChannel("abc", c.region, c.legacy, nat, sizeof(nat));
+  EXPECT_STREQ("", nat);
+  autoReplyNationalChannel("xyz", c.region, c.legacy, nat, sizeof(nat));
+  EXPECT_STREQ("", nat);
+  autoReplyNationalChannel("", c.region, c.legacy, nat, sizeof(nat));
+  EXPECT_STREQ("", nat);
+  autoReplyNationalChannel(nullptr, c.region, c.legacy, nat, sizeof(nat));
+  EXPECT_STREQ("", nat);
+}
+
+TEST(National, OneReplyPerRequestOnTheLaneItArrivedOn) {
+  // Three lanes ready, hashes apart: a probe on any one channel is offered that channel's
+  // key alone, and spends that lane's budget alone.
+  const uint8_t hashes[3] = { 0x3C, 0x91, 0x5A };
+  const bool ready[3] = { true, true, true };
+  int idx[4];
+  for (int lane = 0; lane < 3; lane++) {
+    ASSERT_EQ(1, autoReplyMatchingChannels(hashes, ready, 3, hashes[lane], idx, 4));
+    EXPECT_EQ(lane, idx[0]);
+  }
+  AutoReplyBudgets region_lane, national_lane;
+  const uint32_t now = 1700000000;
+  for (int i = 0; i < AUTOREPLY_MAX_REPLIES; i++) {
+    EXPECT_TRUE(region_lane.limiter.allow(now));
+  }
+  EXPECT_FALSE(region_lane.limiter.allow(now));
+  EXPECT_TRUE(national_lane.limiter.allow(now));
+  EXPECT_TRUE(autoReplySenderAllowed(national_lane.senders, AUTOREPLY_MAX_SENDERS,
+                                     national_lane.next_sender, 1000, now, AUTOREPLY_WINDOW_SECS));
+  EXPECT_FALSE(autoReplySenderAllowed(national_lane.senders, AUTOREPLY_MAX_SENDERS,
+                                      national_lane.next_sender, 1000, now, AUTOREPLY_WINDOW_SECS));
+}
+
+TEST(National, ACollisionOffersEveryLaneWithTheHash) {
+  const uint8_t hashes[3] = { 0x0B, 0x91, 0x0B };
+  const bool ready[3] = { true, true, true };
+  int idx[4];
+  ASSERT_EQ(2, autoReplyMatchingChannels(hashes, ready, 3, 0x0B, idx, 4));
+  EXPECT_EQ(0, idx[0]);
+  EXPECT_EQ(2, idx[1]);
+}
+
+TEST(National, AReplyOnTheNationalChannelNeverTriggersAReply) {
+  // Every node on '#test-se' decrypts every reply sent there, across the whole country;
+  // none of them may read one as a request.
+  const char* bodies[] = {
+    "SE-JKG-Rep: [LouHome] #a1b2c3d4 SNR 1.0 RSSI -100 2h AA,BB",
+    "SE-JKG-Rep: [test] SNR 1.0 RSSI -100 0h direct",
+    "SE-JKG-Rep: SNR 1.0 RSSI -100 0h direct",
+    "test: [test a1b2c3d4] SNR 1.0 RSSI -100 0h direct",
+    "test: [0123ABCD] #a1b2c3d4 SNR -3.5 RSSI -118 8h AA,BB,CC,DD,EE,FF,11,22..",
+  };
+  for (const char* b : bodies) {
+    char text[256];
+    copyText(text, sizeof(text), b);
+    EXPECT_FALSE(autoReplyParseRequest(text, "test").is_trigger) << b;
+  }
+}
+
+TEST(AutoReplyConfig, V9KeepsTheNationalSetting) {
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  EXPECT_EQ(AUTOREPLY_NATIONAL_AUTO, in.national);          // on by default
+  in.national = AUTOREPLY_NATIONAL_NAMED;
+  strcpy(in.national_name, "dk");
+  in.legacy = false;
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  EXPECT_EQ(79u, n);
+  EXPECT_EQ(9, buf[0]);
+  AutoReplyStoredConfig out = decodeFrom(std::vector<uint8_t>(buf, buf + n));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_NAMED, out.national);
+  EXPECT_STREQ("dk", out.national_name);
+  EXPECT_FALSE(out.legacy);
+  in.national = AUTOREPLY_NATIONAL_OFF;
+  n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_OFF, decodeFrom(std::vector<uint8_t>(buf, buf + n)).national);
+}
+
+TEST(AutoReplyConfig, AV8FileTakesTheNationalLaneOn) {
+  std::vector<uint8_t> b = v4Prefix(8, "se-jkp");
+  b.insert(b.end(), {AUTOREPLY_MODE_FLOOD, 1, 0, 10, 0, 120, 0, 16, 1});
+  b.push_back(AUTOREPLY_NATIONAL_OFF);            // a stray byte v8 never defined
+  AutoReplyStoredConfig c = decodeFrom(b);
+  EXPECT_EQ(AUTOREPLY_NATIONAL_AUTO, c.national);
+  EXPECT_TRUE(c.legacy);
+}
+
+TEST(AutoReplyConfig, AV9FileReadByAV8ReleaseKeepsEveryOlderSetting) {
+  // A v8 release reads 64 bytes and the fields it knows: a downgrade loses only the
+  // national setting. Cutting the file at 64 is that read.
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  in.enabled = true; in.hops = 5; strcpy(in.region, "se-jkp"); in.legacy = false;
+  in.slot = 7; in.national = AUTOREPLY_NATIONAL_OFF;
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  ASSERT_GT(n, 64u);
+  AutoReplyStoredConfig out = decodeFrom(std::vector<uint8_t>(buf, buf + 64));
+  EXPECT_TRUE(out.enabled); EXPECT_EQ(5, out.hops); EXPECT_STREQ("se-jkp", out.region);
+  EXPECT_FALSE(out.legacy); EXPECT_EQ(7, out.slot);
+  EXPECT_EQ(AUTOREPLY_NATIONAL_AUTO, out.national);
+}
+
+TEST(AutoReplyConfig, ADamagedNationalSettingTakesTheDefault) {
+  AutoReplyStoredConfig in; autoReplyConfigDefaults(&in);
+  uint8_t buf[AUTOREPLY_CONFIG_MAX_BYTES];
+  size_t n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  buf[n - 1 - (AUTOREPLY_MAX_REGION + 1)] = 0xEE;   // not a setting
+  EXPECT_EQ(AUTOREPLY_NATIONAL_AUTO, decodeFrom(std::vector<uint8_t>(buf, buf + n)).national);
+  in.national = AUTOREPLY_NATIONAL_NAMED;           // named, but no name
+  n = autoReplyConfigEncode(&in, buf, sizeof(buf));
+  EXPECT_EQ(AUTOREPLY_NATIONAL_AUTO, decodeFrom(std::vector<uint8_t>(buf, buf + n)).national);
 }

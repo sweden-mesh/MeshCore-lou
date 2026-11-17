@@ -53,12 +53,14 @@ static inline bool autoReplyDeriveChannel(const char* iata, char* out, size_t ou
 // 3-25 characters. A hashtag key is the hash of the exact name, so 'SE-JKP' would be
 // another channel; folding here makes the stored name the one every client types,
 // and the strict shape turns a typo into an error rather than a silent new channel.
-static inline bool autoReplyRegionName(const char* in, char* out, size_t out_size) {
+// `min_len` is lower only for a national region, which may be a two-letter country.
+static inline bool autoReplyRegionName(const char* in, char* out, size_t out_size,
+                                       size_t min_len = AUTOREPLY_REGION_NAME_MIN) {
   if (out == NULL || out_size == 0) return false;
   out[0] = 0;
   if (in == NULL) return false;
   size_t len = strlen(in);
-  if (len < AUTOREPLY_REGION_NAME_MIN || len > AUTOREPLY_REGION_NAME_MAX || len >= out_size) {
+  if (len < min_len || len > AUTOREPLY_REGION_NAME_MAX || len >= out_size) {
     return false;
   }
   for (size_t i = 0; i < len; i++) {
@@ -79,11 +81,12 @@ static inline bool autoReplyRegionName(const char* in, char* out, size_t out_siz
 // `out` empty, for no region or one that is not a valid name -- a node whose region
 // was stored by an older release, before the shape was enforced, answers on no
 // region channel rather than on a channel nobody could add.
-static inline bool autoReplyRegionChannel(const char* region, char* out, size_t out_size) {
+static inline bool autoReplyRegionChannel(const char* region, char* out, size_t out_size,
+                                          size_t min_len = AUTOREPLY_REGION_NAME_MIN) {
   if (out == NULL || out_size == 0) return false;
   out[0] = 0;
   char name[AUTOREPLY_REGION_NAME_MAX + 1];
-  if (!autoReplyRegionName(region, name, sizeof(name))) return false;
+  if (!autoReplyRegionName(region, name, sizeof(name), min_len)) return false;
   size_t prefix_len = strlen(AUTOREPLY_CHANNEL_PREFIX);
   if (prefix_len + strlen(name) >= out_size) return false;
   memcpy(out, AUTOREPLY_CHANNEL_PREFIX, prefix_len);
@@ -176,6 +179,151 @@ static inline void autoReplyChannelNames(const char* region, const char* iata, b
       || strcmp(legacy_out, region_out) == 0) {
     legacy_out[0] = 0;
   }
+}
+
+// ---- the national lane --------------------------------------------------------
+//
+// A third channel beside the region's and the legacy one: '#test-<national>', where the
+// national region is found in the node's own region table, so a mesh in another country
+// gets its own ('no-osl' -> '#test-no') and no country code is written here. The rule:
+//
+//  1. the topmost parent of the home region whose name the home region starts with --
+//     'se' for 'se-jkp' and 'se0680', and not 'eu' in a '* > eu > se > se-jkp' tree;
+//  2. otherwise the home region's first label ('se' for 'se-jkp'), when a region of that
+//     name is in the table -- a flat table, where every region hangs under '*';
+//  3. otherwise none.
+//
+// The result is always shorter than the home region, so a node whose home is the country
+// itself has no second lane: it already answers on that channel. It is a table name, since
+// it is also the scope a national reply floods in.
+
+// `set autoreply.national auto|off|<region>`, as stored.
+enum {
+  AUTOREPLY_NATIONAL_AUTO = 0,
+  AUTOREPLY_NATIONAL_OFF,
+  AUTOREPLY_NATIONAL_NAMED,
+};
+
+// Where the national region came from, for the replies that show it.
+enum {
+  AUTOREPLY_NATIONAL_NONE = 0,
+  AUTOREPLY_NATIONAL_FROM_TREE,
+  AUTOREPLY_NATIONAL_FROM_LABEL,
+  AUTOREPLY_NATIONAL_FROM_SETTING,
+};
+
+// A country code is two letters, one fewer than a region channel may have.
+#define AUTOREPLY_NATIONAL_NAME_MIN 2
+
+static inline const char* autoReplyNationalSourceName(int source) {
+  switch (source) {
+    case AUTOREPLY_NATIONAL_FROM_TREE:    return "region tree";
+    case AUTOREPLY_NATIONAL_FROM_LABEL:   return "first label";
+    case AUTOREPLY_NATIONAL_FROM_SETTING: return "autoreply.national";
+    default:                              return "none";
+  }
+}
+
+// The table entry with this id, or NULL. `Map` as for autoReplyFindRegion, whose entries
+// also carry `id` and `parent`.
+template <typename Map>
+static inline auto autoReplyRegionById(const Map& map, uint16_t id) -> decltype(map.getByIdx(0)) {
+  for (int i = 0; i < map.getCount(); i++) {
+    if (map.getByIdx(i)->id == id) return map.getByIdx(i);
+  }
+  return NULL;
+}
+
+// The national region for `home` by the rule above, copied into `out` as the table spells
+// it, without a leading '#'. Returns the AUTOREPLY_NATIONAL_FROM_* it came from, or NONE.
+template <typename Map>
+static inline int autoReplyNationalRegion(const Map& map, const char* home, char* out,
+                                          size_t out_size) {
+  if (out == NULL || out_size == 0) return AUTOREPLY_NATIONAL_NONE;
+  out[0] = 0;
+  if (home == NULL) return AUTOREPLY_NATIONAL_NONE;
+  if (home[0] == '#') home++;
+  const size_t home_len = strlen(home);
+  if (home_len == 0) return AUTOREPLY_NATIONAL_NONE;
+
+  const char* found = NULL;
+  int source = AUTOREPLY_NATIONAL_NONE;
+  // Bounded by the table's size, so a damaged table whose parents loop still ends.
+  auto e = autoReplyFindRegion(map, home);
+  for (int steps = 0; e != NULL && e->parent != 0 && steps < map.getCount(); steps++) {
+    e = autoReplyRegionById(map, e->parent);
+    if (e == NULL) break;
+    const char* n = e->name[0] == '#' ? e->name + 1 : e->name;
+    size_t len = strlen(n);
+    if (len > 0 && len < home_len && strncasecmp(home, n, len) == 0) {
+      found = n;                         // walking up, so the last match is the topmost
+      source = AUTOREPLY_NATIONAL_FROM_TREE;
+    }
+  }
+  if (found == NULL) {
+    const char* dash = strchr(home, '-');
+    for (int i = 0; dash != NULL && dash > home && i < map.getCount(); i++) {
+      const char* n = map.getByIdx(i)->name;
+      if (n[0] == '#') n++;
+      if (strlen(n) == (size_t)(dash - home) && strncasecmp(n, home, dash - home) == 0) {
+        found = n;
+        source = AUTOREPLY_NATIONAL_FROM_LABEL;
+        break;
+      }
+    }
+  }
+  if (found == NULL || strlen(found) >= out_size) return AUTOREPLY_NATIONAL_NONE;
+  strcpy(out, found);
+  return source;
+}
+
+// The national region under the node's setting: none when off, the stored name when one
+// was set, and the rule above for auto.
+template <typename Map>
+static inline int autoReplyNationalFor(uint8_t setting, const char* named, const Map& map,
+                                       const char* home, char* out, size_t out_size) {
+  if (out == NULL || out_size == 0) return AUTOREPLY_NATIONAL_NONE;
+  out[0] = 0;
+  if (setting == AUTOREPLY_NATIONAL_OFF) return AUTOREPLY_NATIONAL_NONE;
+  if (setting == AUTOREPLY_NATIONAL_NAMED) {
+    if (named == NULL || named[0] == 0 || strlen(named) >= out_size) {
+      return AUTOREPLY_NATIONAL_NONE;
+    }
+    strcpy(out, named);
+    return AUTOREPLY_NATIONAL_FROM_SETTING;
+  }
+  return autoReplyNationalRegion(map, home, out, out_size);
+}
+
+// '#test-<national>', empty when there is no national region, or when it is a channel the
+// node already answers on (the region's or the legacy one): one channel, answered once.
+static inline void autoReplyNationalChannel(const char* national, const char* region_channel,
+                                            const char* legacy_channel, char* out,
+                                            size_t out_size) {
+  if (!autoReplyRegionChannel(national, out, out_size, AUTOREPLY_NATIONAL_NAME_MIN)) return;
+  if (strcmp(out, region_channel) == 0 || strcmp(out, legacy_channel) == 0) out[0] = 0;
+}
+
+// What `set autoreply.national <arg>` does. `auto` and `off` set `setting` alone; anything
+// else is a region name, folded into `name`, which must be in the table because it is also
+// the scope a national reply floods in. Returns an AUTOREPLY_REGION_* verdict; CLEARED is
+// never one, since an empty argument names nothing and is BAD_NAME.
+template <typename Known>
+static inline int autoReplyNationalVerdict(const char* arg, uint8_t* setting, char* name,
+                                           size_t name_size, Known known) {
+  if (name != NULL && name_size > 0) name[0] = 0;
+  if (arg == NULL) return AUTOREPLY_REGION_BAD_NAME;
+  if (strcasecmp(arg, "auto") == 0 || strcasecmp(arg, "off") == 0) {
+    *setting = tolower((unsigned char)arg[0]) == 'a' ? AUTOREPLY_NATIONAL_AUTO
+                                                     : AUTOREPLY_NATIONAL_OFF;
+    return AUTOREPLY_REGION_SET;
+  }
+  if (!autoReplyRegionName(arg, name, name_size, AUTOREPLY_NATIONAL_NAME_MIN)) {
+    return AUTOREPLY_REGION_BAD_NAME;
+  }
+  if (!known(name)) return AUTOREPLY_REGION_NOT_IN_TABLE;
+  *setting = AUTOREPLY_NATIONAL_NAMED;
+  return AUTOREPLY_REGION_SET;
 }
 
 // The legacy switch as the CLI shows it. A build without the Observer bridge has no
@@ -492,6 +640,7 @@ static inline uint32_t autoReplySlotDelayMs(uint8_t rotated, uint8_t slots,
 //   v6  ... private
 //   v7  ... slot window_start(LE16) window_end(LE16) slots
 //   v8  ... legacy                          from ar-12 region[] also names the channel
+//   v9  ... national national_name[32]      lou-19, the national lane
 //
 // Append-only from v4: a later version adds fields after the ones before it, never
 // between them, so a file written by *newer* firmware is read by the fields this one
@@ -500,8 +649,8 @@ static inline uint32_t autoReplySlotDelayMs(uint8_t rotated, uint8_t slots,
 #ifndef AUTOREPLY_MAX_REGION
   #define AUTOREPLY_MAX_REGION 31
 #endif
-#define AUTOREPLY_CONFIG_VERSION   8
-#define AUTOREPLY_CONFIG_MAX_BYTES 64
+#define AUTOREPLY_CONFIG_VERSION   9
+#define AUTOREPLY_CONFIG_MAX_BYTES 96
 // Whether a `test` addressed privately to this node is answered at all. **On** since
 // 2026-09-20 (operator): "when someone messages the repeater in private the answer should
 // be in private." It was off, so a private request got nothing back -- which reads from
@@ -526,6 +675,11 @@ static inline uint32_t autoReplySlotDelayMs(uint8_t rotated, uint8_t slots,
 // old one goes only when a region switches it off in one planned change.
 #define AUTOREPLY_LEGACY_DEF       true
 
+// Whether the node answers on '#test-<national>' too. Auto (on) by default and for every
+// older config (operator 2026-11-17): the lane is found from the region table, and
+// `set autoreply.national off` ends it without a flashing round.
+#define AUTOREPLY_NATIONAL_DEF     AUTOREPLY_NATIONAL_AUTO
+
 struct AutoReplyStoredConfig {
   bool enabled;
   uint8_t hops;
@@ -538,6 +692,8 @@ struct AutoReplyStoredConfig {
   uint16_t window_end;
   uint8_t slots;
   bool legacy;
+  uint8_t national;
+  char national_name[AUTOREPLY_MAX_REGION + 1];
 };
 
 static inline void autoReplyConfigDefaults(AutoReplyStoredConfig* c) {
@@ -551,6 +707,7 @@ static inline void autoReplyConfigDefaults(AutoReplyStoredConfig* c) {
   c->window_end = AUTOREPLY_WINDOW_END_DEF;
   c->slots = AUTOREPLY_SLOTS_DEF;
   c->legacy = AUTOREPLY_LEGACY_DEF;
+  c->national = AUTOREPLY_NATIONAL_DEF;
 }
 
 // Reads a stored config of any version into `out`, which should hold the defaults on
@@ -587,6 +744,18 @@ static inline bool autoReplyConfigDecode(const uint8_t* buf, size_t len,
       out->slots = buf[at++];
     }
     if (ver >= 8 && AR_HAS(1)) out->legacy = buf[at++] != 0;
+    if (ver >= 9 && AR_HAS(1 + sizeof(out->national_name))) {
+      out->national = buf[at++];
+      memcpy(out->national_name, &buf[at], sizeof(out->national_name));
+      at += sizeof(out->national_name);
+    }
+    out->national_name[sizeof(out->national_name) - 1] = 0;
+    // A setting this version does not know, or a name the setting needs and lacks, is a
+    // damaged file, and takes the default.
+    if (out->national > AUTOREPLY_NATIONAL_NAMED
+        || (out->national == AUTOREPLY_NATIONAL_NAMED && out->national_name[0] == 0)) {
+      out->national = AUTOREPLY_NATIONAL_DEF;
+    }
     // Only a standing mode is stored; anything else is a damaged file and takes the
     // reply every node sends today.
     if (out->mode != AUTOREPLY_MODE_PRIVATE && out->mode != AUTOREPLY_MODE_DIRECT) {
@@ -622,7 +791,7 @@ static inline bool autoReplyConfigDecode(const uint8_t* buf, size_t len,
 // Writes the current version. Returns the bytes written, or 0 if `size` is too small.
 static inline size_t autoReplyConfigEncode(const AutoReplyStoredConfig* c, uint8_t* buf,
                                            size_t size) {
-  const size_t need = 1 + 4 + sizeof(c->region) + 1 + 1 + 6 + 1;
+  const size_t need = 1 + 4 + sizeof(c->region) + 1 + 1 + 6 + 1 + 1 + sizeof(c->national_name);
   if (c == NULL || buf == NULL || size < need) return 0;
   size_t at = 0;
   buf[at++] = AUTOREPLY_CONFIG_VERSION;
@@ -638,6 +807,8 @@ static inline size_t autoReplyConfigEncode(const AutoReplyStoredConfig* c, uint8
   buf[at++] = (uint8_t)(c->window_end & 0xFF);   buf[at++] = (uint8_t)(c->window_end >> 8);
   buf[at++] = c->slots;
   buf[at++] = c->legacy ? 1 : 0;
+  buf[at++] = c->national;
+  memcpy(&buf[at], c->national_name, sizeof(c->national_name)); at += sizeof(c->national_name);
   return at;
 }
 

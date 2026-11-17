@@ -5,16 +5,16 @@
 
 #ifdef WITH_AUTO_REPLY
 
-// Resolve the region an auto-reply should be scoped to: the configured one when
-// set, otherwise whatever scope the request itself arrived under.
+// Resolve the region an auto-reply should be scoped to: `name` when it is set and in the
+// table (the region behind the channel, or the national region for a national reply),
+// otherwise whatever scope the request itself arrived under.
 //
 // Bounding a reply by region rather than by hop count is deliberate. The question
 // this feature exists to answer is how much of the mesh is connected, and a hop
 // cap answers a different one -- how much comes back to whoever asked -- while
 // quietly hiding the far side of the mesh. A region is a stated boundary; a hop
 // count is an accident of where the requester happens to sit.
-bool Fork::autoReplyScope(TransportKey* scope) {
-  const char* name = _auto_reply.replyRegion();
+bool Fork::autoReplyScope(TransportKey* scope, const char* name) {
   if (name == NULL || name[0] == 0) return false;
 
   // Without regard to case first: the name is stored folded, the table may not be.
@@ -24,15 +24,17 @@ bool Fork::autoReplyScope(TransportKey* scope) {
   return _mesh.region_map.getTransportKeysFor(*entry, scope, 1) > 0;
 }
 
-// Every flood auto-reply sends goes out here: in the 'autoreply.region' scope when one is
-// set and in the table, and otherwise by upstream's own rule, which mirrors the scope the
-// request arrived under. Nothing else this repeater floods back -- a login's answer, an
+// Every flood auto-reply sends goes out here: in `scope` -- the region behind the channel,
+// or for a request on the national channel the national region, so a tester in another
+// county hears the answer -- when it is set and in the table, and otherwise by upstream's
+// own rule, which mirrors the scope the request arrived under. Nothing else this repeater floods back -- a login's answer, an
 // ACK, a remote CLI reply -- is scoped by that setting: those are upstream's, and so is
 // the choice of their scope (TODO 22a ruling 11).
-void Fork::sendAutoReplyFlood(mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size) {
-  TransportKey scope;
-  if (autoReplyScope(&scope)) {
-    _mesh.sendFloodScoped(scope, pkt, delay_millis, path_hash_size);
+void Fork::sendAutoReplyFlood(mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size,
+                              const char* scope) {
+  TransportKey key;
+  if (autoReplyScope(&key, scope)) {
+    _mesh.sendFloodScoped(key, pkt, delay_millis, path_hash_size);
   } else {
     _mesh.sendFloodReply(pkt, delay_millis, path_hash_size);
   }
@@ -104,7 +106,7 @@ void Fork::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Group
       _mesh.sendDirect(reply, back, back_len, delay_millis);
     } else {
       MESH_DEBUG_PRINTLN("AutoReply: sending private flood reply in %d ms", (uint32_t)delay_millis);
-      sendAutoReplyFlood(reply, delay_millis, packet->getPathHashSize());
+      sendAutoReplyFlood(reply, delay_millis, packet->getPathHashSize(), target.scope);
     }
     return;
   }
@@ -126,7 +128,7 @@ void Fork::onGroupDataRecv(mesh::Packet* packet, uint8_t type, const mesh::Group
     if (zero_hop) {
       _mesh.sendZeroHop(reply, delay_millis);
     } else {
-      sendAutoReplyFlood(reply, delay_millis, packet->getPathHashSize());
+      sendAutoReplyFlood(reply, delay_millis, packet->getPathHashSize(), target.scope);
     }
   } else {
     MESH_DEBUG_PRINTLN("AutoReply: could not build reply packet, pool empty");
@@ -164,7 +166,9 @@ bool Fork::onPrivateTest(mesh::Packet* packet, const uint8_t* secret, const mesh
   if (route == mesh::REPLY_ROUTE_PATH_RETURN) {
     mesh::Packet* path = _mesh.createPathReturn(sender, secret, packet->path, packet->path_len,
                                                 PAYLOAD_TYPE_RESPONSE, report, report_len);
-    if (path) sendAutoReplyFlood(path, delay_millis, packet->getPathHashSize());
+    if (path) {
+      sendAutoReplyFlood(path, delay_millis, packet->getPathHashSize(), _auto_reply.replyRegion());
+    }
     return true;
   }
   mesh::Packet* reply = _mesh.createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, report, report_len);
@@ -172,7 +176,7 @@ bool Fork::onPrivateTest(mesh::Packet* packet, const uint8_t* secret, const mesh
   if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
     _mesh.sendDirect(reply, client->out_path, client->out_path_len, delay_millis);
   } else {
-    sendAutoReplyFlood(reply, delay_millis, packet->getPathHashSize());
+    sendAutoReplyFlood(reply, delay_millis, packet->getPathHashSize(), _auto_reply.replyRegion());
   }
   return true;
 }
@@ -226,7 +230,7 @@ bool Fork::triggerProbe(const char* id, size_t id_len, uint8_t mode, char* reply
   // originated from MQTT is unrelated to anything and would scope the probe to
   // wherever the last traffic happened to come from.
   TransportKey scope;
-  if (autoReplyScope(&scope)) {
+  if (autoReplyScope(&scope, _auto_reply.replyRegion())) {
     _mesh.sendFloodScoped(scope, pkt, (uint32_t)0, (uint8_t)1);
   } else {
     _mesh.sendFlood(pkt, (uint32_t)0, (uint8_t)1);
@@ -278,7 +282,7 @@ bool Fork::triggerPrivateProbe(const char* pubkey_hex, const char* id, size_t id
   }
 
   TransportKey scope;
-  if (autoReplyScope(&scope)) {
+  if (autoReplyScope(&scope, _auto_reply.replyRegion())) {
     _mesh.sendFloodScoped(scope, pkt, (uint32_t)0, (uint8_t)1);
   } else {
     _mesh.sendFlood(pkt, (uint32_t)0, (uint8_t)1);
@@ -302,7 +306,7 @@ bool Fork::handleAutoReplyCommand(uint32_t sender_timestamp, char* command, char
   if (_auto_reply.enabled() && (memcmp(command, "region default ", 15) == 0 ||
                                 memcmp(command, "region home ", 12) == 0)) {
     _mesh._cli.handleCommand(sender_timestamp, command, reply);
-    char where[2 * AUTOREPLY_MAX_CHANNEL + 12];
+    char where[AUTOREPLY_MAX_WHERE];
     _auto_reply.describeAfterScopeChange(observerIata(), nodeRegion(), where, sizeof(where));
     size_t used = strlen(reply);
     snprintf(&reply[used], AUTOREPLY_MAX_REPLY - used, "; auto-reply %s", where);

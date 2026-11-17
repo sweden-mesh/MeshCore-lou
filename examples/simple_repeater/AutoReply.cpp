@@ -31,9 +31,12 @@ AutoReply::AutoReply()
     _window_start(AUTOREPLY_WINDOW_START_DEF), _window_end(AUTOREPLY_WINDOW_END_DEF),
     _slots(AUTOREPLY_SLOTS_DEF), _mode(AUTOREPLY_MODE_FLOOD), _private(AUTOREPLY_PRIVATE_DEF),
     _slot(AUTOREPLY_SLOT_UNASSIGNED), _legacy(AUTOREPLY_LEGACY_DEF),
+    _national(AUTOREPLY_NATIONAL_DEF), _national_source(AUTOREPLY_NATIONAL_NONE), _regions(NULL),
     _private_limiter(AUTOREPLY_MAX_REPLIES, AUTOREPLY_WINDOW_SECS)
 {
   _region[0] = 0;
+  _national_name[0] = 0;
+  _national_scope[0] = 0;
   _default_scope[0] = 0;
   _from_home = false;
   memset(_private_senders, 0, sizeof(_private_senders));
@@ -57,8 +60,9 @@ bool AutoReply::privateAllowed(const uint8_t* pubkey, const char* id, size_t id_
   return true;
 }
 
-void AutoReply::begin(FILESYSTEM* fs) {
+void AutoReply::begin(FILESYSTEM* fs, RegionMap* regions) {
   _fs = fs;
+  _regions = regions;
   load();
 }
 
@@ -83,23 +87,35 @@ void AutoReply::refreshChannels(const char* iata, const char* default_scope) {
   char region_name[AUTOREPLY_MAX_CHANNEL];
   char legacy_name[AUTOREPLY_MAX_CHANNEL];
   autoReplyChannelNames(region(), iata, _legacy, region_name, legacy_name, sizeof(region_name));
+  _national_source = autoReplyNationalFor(_national, _national_name, *_regions, region(),
+                                          _national_scope, sizeof(_national_scope));
+  char national_name[AUTOREPLY_MAX_CHANNEL];
+  autoReplyNationalChannel(_national_scope, region_name, legacy_name, national_name,
+                           sizeof(national_name));
   deriveLane(_lanes[0], region_name);
   deriveLane(_lanes[1], legacy_name);
+  deriveLane(_lanes[2], national_name);
 }
 
-// "#test-se-jkp (region home) + legacy #test-jkg", either half alone, for the replies that
-// say where the node answers. A region that names no channel (too long for one) is said
-// so, not hidden.
+// "#test-se-jkp (region home) + legacy #test-jkg + national #test-se (region tree)", or
+// whichever of the three the node has, for the replies that say where the node answers.
+// A region that names no channel (too long for one) is said so, not hidden.
 void AutoReply::describeChannels(char* out, size_t size) const {
+  size_t n = 0;
+  out[0] = 0;
   if (_lanes[0].ready()) {
-    int n = snprintf(out, size, "%s (%s)", _lanes[0].name,
-                     _region[0] ? "autoreply.region" : regionSource());
-    if (_lanes[1].ready() && (size_t)n < size) {
-      snprintf(out + n, size - n, " + legacy %s", _lanes[1].name);
-    }
-  } else if (_lanes[1].ready()) {
-    snprintf(out, size, "legacy %s", _lanes[1].name);
-  } else if (region()[0]) {
+    n = snprintf(out, size, "%s (%s)", _lanes[0].name,
+                 _region[0] ? "autoreply.region" : regionSource());
+  }
+  if (_lanes[1].ready() && n < size) {
+    n += snprintf(out + n, size - n, "%slegacy %s", n ? " + " : "", _lanes[1].name);
+  }
+  if (_lanes[2].ready() && n < size) {
+    n += snprintf(out + n, size - n, "%snational %s (%s)", n ? " + " : "", _lanes[2].name,
+                  autoReplyNationalSourceName(_national_source));
+  }
+  if (n > 0) return;
+  if (region()[0]) {
     snprintf(out, size, "no channel - %s names none", region());
   } else {
     snprintf(out, size, "no channel - set region home");
@@ -156,6 +172,8 @@ void AutoReply::toStored(AutoReplyStoredConfig* c) const {
   c->window_end = _window_end;
   c->slots = _slots;
   c->legacy = _legacy;
+  c->national = _national;
+  memcpy(c->national_name, _national_name, sizeof(c->national_name));
 }
 
 void AutoReply::fromStored(const AutoReplyStoredConfig& c) {
@@ -171,6 +189,9 @@ void AutoReply::fromStored(const AutoReplyStoredConfig& c) {
   _window_end = c.window_end;
   _slots = c.slots;
   _legacy = c.legacy;
+  _national = c.national;
+  memcpy(_national_name, c.national_name, sizeof(_national_name));
+  _national_name[sizeof(_national_name) - 1] = 0;
 }
 
 int AutoReply::searchChannelsByHash(const char* iata, const char* default_scope,
@@ -178,10 +199,12 @@ int AutoReply::searchChannelsByHash(const char* iata, const char* default_scope,
                                     int max_matches) {
   refreshChannels(iata, default_scope);
   if (!_enabled) return 0;
-  const uint8_t hashes[2] = { _lanes[0].channel.hash[0], _lanes[1].channel.hash[0] };
-  const bool ready[2] = { _lanes[0].ready(), _lanes[1].ready() };
-  int idx[2];
-  int n = autoReplyMatchingChannels(hashes, ready, 2, hash[0], idx, min(max_matches, 2));
+  const uint8_t hashes[3] = {
+    _lanes[0].channel.hash[0], _lanes[1].channel.hash[0], _lanes[2].channel.hash[0]
+  };
+  const bool ready[3] = { _lanes[0].ready(), _lanes[1].ready(), _lanes[2].ready() };
+  int idx[3];
+  int n = autoReplyMatchingChannels(hashes, ready, 3, hash[0], idx, min(max_matches, 3));
   for (int i = 0; i < n; i++) {
     MESH_DEBUG_PRINTLN("AutoReply: channel '%s' matched", _lanes[idx[i]].name);
     channels[i] = _lanes[idx[i]].channel;
@@ -194,7 +217,7 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
   const char* default_scope = noteNodeRegion(regions);
   refreshChannels(iata, default_scope);
 
-  char where[2 * AUTOREPLY_MAX_CHANNEL + 12];
+  char where[AUTOREPLY_MAX_WHERE];
   describeChannels(where, sizeof(where));
 
   if (memcmp(command, "set autoreply ", 14) == 0) {
@@ -230,6 +253,48 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
 
   if (strcmp(command, "get autoreply.legacy") == 0) {
     sprintf(reply, "> %s", autoReplyLegacyState(_legacy, iata != NULL));
+    return true;
+  }
+
+  if (memcmp(command, "set autoreply.national ", 23) == 0) {
+    // auto finds the country in the region table, off ends the lane, and a name must be a
+    // region of this node's, since national replies flood in it.
+    char name[AUTOREPLY_REGION_NAME_MAX + 1];
+    uint8_t setting = _national;
+    int verdict = autoReplyNationalVerdict(&command[23], &setting, name, sizeof(name),
+        [&regions](const char* n) { return autoReplyFindRegion(regions, n) != NULL; });
+    if (verdict == AUTOREPLY_REGION_BAD_NAME) {
+      strcpy(reply, "Err - use: set autoreply.national auto|off|<region>");
+      return true;
+    }
+    if (verdict == AUTOREPLY_REGION_NOT_IN_TABLE) {
+      sprintf(reply, "Err - %s is not in the region table: region put %s first", name, name);
+      return true;
+    }
+    _national = setting;
+    StrHelper::strncpy(_national_name, name, sizeof(_national_name));
+    save();
+    refreshChannels(iata, default_scope);
+    describeChannels(where, sizeof(where));
+    sprintf(reply, "OK - %s", where);
+    return true;
+  }
+
+  if (strcmp(command, "get autoreply.national") == 0) {
+    // The setting, then what it comes to: the lane, or why there is none.
+    const char* setting = _national == AUTOREPLY_NATIONAL_OFF ? "off"
+                        : _national == AUTOREPLY_NATIONAL_NAMED ? _national_name : "auto";
+    if (_lanes[2].ready()) {
+      sprintf(reply, "> %s: %s (%s)", setting, _lanes[2].name,
+              autoReplyNationalSourceName(_national_source));
+    } else if (_national == AUTOREPLY_NATIONAL_OFF) {
+      strcpy(reply, "> off");
+    } else if (_national_scope[0]) {
+      sprintf(reply, "> %s: none - %s names a channel already answered", setting, _national_scope);
+    } else {
+      sprintf(reply, "> %s: none - no parent or first label of %s in the region table", setting,
+              region()[0] ? region() : "(no region)");
+    }
     return true;
   }
 
@@ -406,21 +471,27 @@ bool AutoReply::handleCommand(const char* iata, RegionMap& regions, const char* 
   }
 
   if (strcmp(command, "get autoreply") == 0) {
-    // The channel, the scope and legacy on one line, so a site check sees all three. The
+    // The scope, legacy and the channels on one line, so a site check sees them all. The
     // scope is the region only when the table has it; otherwise replies take the
-    // request's, and the line says so. Channels last: they are what can be long, and
-    // 160 characters hold the longest region and IATA code.
+    // request's, and the line says so. Where the region came from is in the channels, last:
+    // they are what can be long, and the usual three (#test-se-jkp, #test-jkg, #test-se)
+    // fit in 160 characters. The national lane floods in its own region, which it names.
     // The default scope is in the table by definition; only 'autoreply.region' can name a
     // region since removed from it.
-    const char* scope = !region()[0] ? "request scope"
-                      : !_region[0] ? regionSource()
-                      : autoReplyFindRegion(regions, _region) || regions.findByNamePrefix(_region)
-                        ? "autoreply.region"
-                      : "not in table: request scope";
-    snprintf(reply, 160, "> %s, mode %s, private %s, direct %s, %d hops, region %s (%s), "
+    bool in_table = !_region[0] || autoReplyFindRegion(regions, _region)
+                    || regions.findByNamePrefix(_region);
+    char scope[AUTOREPLY_MAX_REGION + 24];
+    if (!region()[0]) {
+      strcpy(scope, "request");
+    } else if (in_table) {
+      strcpy(scope, region());
+    } else {
+      sprintf(scope, "request (%s not in table)", region());
+    }
+    snprintf(reply, 160, "> %s, mode %s, private %s, direct %s, %d hops, scope %s, "
                          "legacy %s: %s",
              _enabled ? "on" : "off", autoReplyModeName(_mode), _private ? "on" : "off",
-             _direct_flood ? "flood" : "0-hop", _hops, region()[0] ? region() : "-", scope,
+             _direct_flood ? "flood" : "0-hop", _hops, scope,
              autoReplyLegacyState(_legacy, iata != NULL), where);
     return true;
   }
@@ -498,6 +569,7 @@ int AutoReply::buildReply(const mesh::Packet* req, const mesh::GroupChannel& cha
   // A private mode was resolved only if the request carried a key, so the decode
   // cannot fail on length; the key's characters were checked when it was parsed.
   target->mode = mode;
+  target->scope = lane == &_lanes[2] ? _national_scope : region();
   if (mode != AUTOREPLY_MODE_FLOOD) {
     mesh::Utils::fromHex(target->pubkey, PUB_KEY_SIZE, request.pubkey_hex);
   }
