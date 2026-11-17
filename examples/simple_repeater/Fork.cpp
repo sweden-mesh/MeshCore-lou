@@ -81,7 +81,12 @@ bool Fork::handleCommand(uint32_t sender_timestamp, char* command, char* reply, 
 #else
   const bool network_up = false;
 #endif
-  if (sender_timestamp != 0 && forkOpensBoardToRange(command, network_up)) {
+#ifdef NRF52_PLATFORM
+  const bool ble_dfu = true;
+#else
+  const bool ble_dfu = false;
+#endif
+  if (sender_timestamp != 0 && forkOpensBoardToRange(command, network_up, ble_dfu)) {
     strcpy(reply, "Err - serial only: it opens the board to anyone in Wi-Fi/BLE range");
     return true;
   }
