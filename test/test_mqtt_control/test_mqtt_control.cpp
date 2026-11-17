@@ -2333,3 +2333,96 @@ TEST(MeshRoad, TheResponseCarriesTagClockCounterCodeAndAClampedReply) {
             mqttCtrlMeshFormatResponse(out, sizeof(out), 1, 2, 3, MQTTCTRL_ERR_MESH_CLOSED, NULL));
   EXPECT_EQ(MQTTCTRL_ERR_MESH_CLOSED, out[12]);
 }
+
+// ---- mesh only (operator 2026-11-16, plan phase 5) -----------------------------------
+//
+// An image without Wi-Fi and MQTT (an nRF52 board, a non-Observer ESP32 build) has the mesh
+// road as the plane's only road: the same parse, signature, counter, expiry and deny list,
+// always open, the uplink's repairs refused, and its topic named by the word `mesh`.
+
+static const char* MESH_ONLY_SIG =
+    "D093D5E2427719074748634E73F8760E42F0D12772D74C9044D399B03202BF7B"
+    "1E375B1EE4A8BE81B190603638C3DB9DC9B4D54E5749492AF07ED609BCF23E09";
+static const char* MESH_ONLY_TOPIC =
+    "meshcore/mesh/4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4/cmd";
+
+TEST(MeshOnly, TheTopicIsNamedMeshWhateverIataThereIs) {
+  EXPECT_STREQ("mesh", mqttCtrlMeshRegion(false, NULL));
+  EXPECT_STREQ("mesh", mqttCtrlMeshRegion(false, "TST"));
+  EXPECT_STREQ("TST", mqttCtrlMeshRegion(true, "TST"));
+  EXPECT_EQ(NULL, mqttCtrlMeshRegion(true, NULL));          // an Observer with no region stays silent
+  char topic[MQTTCTRL_MAX_TOPIC + 1];
+  ASSERT_TRUE(mqttCtrlBuildTopic(mqttCtrlMeshRegion(false, NULL),
+                                 "4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4",
+                                 "cmd", topic, sizeof(topic)));
+  EXPECT_STREQ(MESH_ONLY_TOPIC, topic);
+  // Signed for that topic, a request verifies there and nowhere else.
+  std::vector<uint8_t> v = meshRequest(7, 1795000000, "get name", MESH_ONLY_TOPIC);
+  MqttCtrlMeshRequest req;
+  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
+  EXPECT_TRUE(meshVerifies(req, MESH_ONLY_TOPIC));
+  EXPECT_FALSE(meshVerifies(req, MESH_TOPIC));
+  // The vector in planning/firmware/otm-wire-format-20261117.md, "Mesh only".
+  char sig[MQTTCTRL_SIG_HEX_LEN + 1];
+  for (int i = 0; i < MQTTCTRL_SIG_BYTES; i++) sprintf(&sig[i * 2], "%02X", req.env.signature[i]);
+  EXPECT_STREQ(MESH_ONLY_SIG, sig);
+}
+
+TEST(MeshOnly, TheRoadListensWhileThePlaneIsOnAndIsAlwaysOpen) {
+  for (uint8_t mode : { MQTTCTRL_MESH_AUTO, MQTTCTRL_MESH_ON, MQTTCTRL_MESH_OFF }) {
+    EXPECT_TRUE(mqttCtrlMeshListening(true, false, mode)) << (int)mode;
+    EXPECT_FALSE(mqttCtrlMeshListening(false, false, mode)) << (int)mode;
+    EXPECT_TRUE(mqttCtrlMeshRoadOpen(false, mode, 0, 1000)) << (int)mode;
+  }
+  // With an uplink, as before: off is silent, auto waits for the slot to be down 15 min.
+  EXPECT_FALSE(mqttCtrlMeshListening(true, true, MQTTCTRL_MESH_OFF));
+  EXPECT_TRUE(mqttCtrlMeshListening(true, true, MQTTCTRL_MESH_AUTO));
+  EXPECT_FALSE(mqttCtrlMeshRoadOpen(true, MQTTCTRL_MESH_AUTO, 0, 1000));
+  EXPECT_TRUE(mqttCtrlMeshRoadOpen(true, MQTTCTRL_MESH_AUTO, 1000, 1000 + MQTTCTRL_MESH_AUTO_AFTER_MS));
+}
+
+TEST(MeshOnly, ACommandIsAcceptedWithNoUplink) {
+  const uint32_t now = 1795000000 - 60;
+  Held h("v1|9|1795000000|get name");
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 0, now, true, false));
+  Held r("v1|9|1795000000|reboot");
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&r.env, 0, now, false, false));
+  Held t("v1|9|1795000000|trigger test");
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&t.env, 0, now, true, false));
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthoriseMesh(&t.env, 0, now, false, false));
+}
+
+TEST(MeshOnly, TheUplinksRepairsAndItsUpdateAreRefused) {
+  const char* refused[] = {
+    "set wifi.ssid HomeNet", "set wifi.pwd hunter2", "set mqtt.cmd on",
+    "set mqtt.cmd on mqtt-meshcore.louie.se", "ota update", "ota check", "mqtt.cmd ping",
+    "OTA UPDATE",
+  };
+  const uint32_t now = 1795000000 - 60;
+  for (const char* c : refused) {
+    EXPECT_FALSE(mqttCtrlMeshCommandAllowed(c, strlen(c), true, false)) << c;
+    std::string text = std::string("v1|9|1795000000|") + c;
+    Held h(text.c_str());
+    EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthoriseMesh(&h.env, 0, now, true, false)) << c;
+  }
+  // With an uplink the same commands travel as before.
+  for (const char* c : refused) EXPECT_TRUE(mqttCtrlMeshCommandAllowed(c, strlen(c), true)) << c;
+  EXPECT_FALSE(mqttCtrlMeshCommandAllowed("ota updatex", 11, true, false));
+}
+
+TEST(MeshOnly, CounterExpiryAndDenyListAreUnchanged) {
+  // Every known command: what the plane admits, less what needs an uplink.
+  for (const char* c : known_commands) {
+    const size_t n = strlen(c);
+    EXPECT_EQ(allowed(c) && !mqttCtrlNeedsUplink(c, n), mqttCtrlMeshCommandAllowed(c, n, true, false)) << c;
+    EXPECT_EQ(allowedWithoutAutoReply(c) && !mqttCtrlNeedsUplink(c, n),
+              mqttCtrlMeshCommandAllowed(c, n, false, false)) << c;
+  }
+  const uint32_t unset = 1715770351 + 3600;
+  Held h("v1|5|1795000000|get name");
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, unset, true, false));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, unset, true, false));
+  EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthoriseMesh(&h.env, 4, 1795000001, true, false));
+  EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&h.env, 4, 1795000000 - MQTTCTRL_MAX_FUTURE_SECS - 1,
+                                                       true, false));
+}

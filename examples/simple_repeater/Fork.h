@@ -10,7 +10,9 @@
   #include <helpers/OtaAutoLogic.h>
 #endif
 #ifdef WITH_MQTT_COMMAND
-  #include <helpers/bridges/MQTTBridge.h>
+  #ifdef WITH_MQTT_BRIDGE
+    #include <helpers/bridges/MQTTBridge.h>
+  #endif
   #include "MqttControl.h"
 #endif
 
@@ -69,14 +71,32 @@ class Fork {
 #endif
 #ifdef WITH_MQTT_COMMAND
   MqttControl _mqtt_control;
-  // The bridge delivers to a sink and the queue runs commands through a runner; this
-  // member is both, so neither interface is a base of MyMesh.
-  struct ControlLink : public MqttCommandRunner, public MQTTBridge::ControlSink {
+  // The queue runs commands through a runner and, with the Observer bridge, the bridge
+  // delivers to a sink; this member is both, so neither interface is a base of MyMesh.
+  struct ControlLink : public MqttCommandRunner
+#ifdef WITH_MQTT_BRIDGE
+                     , public MQTTBridge::ControlSink
+#endif
+  {
     Fork& fork;
     explicit ControlLink(Fork& f) : fork(f) { }
+#ifdef WITH_MQTT_BRIDGE
     void onControlMessage(const char* topic, const uint8_t* payload, size_t len) override;
+#endif
     void runCommand(uint32_t sender_timestamp, char* command, char* reply) override;
   } _control_link { *this };
+  uint32_t _mesh_down_since = 0;               // millis() the command slot went down, 0 while up
+  uint32_t _mesh_ok = 0;                       // commands run over the mesh road
+  uint32_t _mesh_refused = 0;                  // ... and requests on it that ran nothing
+
+  bool handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply);
+  void describeMqttControl(char* reply);
+  bool onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                     const uint8_t* data, size_t len);
+  void answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                         uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply);
+#endif
+#if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
   // Owned here so the bridge's subscription list outlives every reconnect.
   char _ctrl_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
   char _ctrl_broadcast[MQTTCTRL_MAX_TOPIC + 1] = {0};
@@ -90,25 +110,16 @@ class Fork {
   uint32_t _ctrl_unverified = 0;               // commands refused before the key vouched for them
   uint8_t _ctrl_last_unverified = 0;           // ... and the last one's MqttCtrlResult
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
-  uint32_t _mesh_down_since = 0;               // millis() the command slot went down, 0 while up
-  uint32_t _mesh_ok = 0;                       // commands run over the mesh road
-  uint32_t _mesh_refused = 0;                  // ... and requests on it that ran nothing
 
-  bool handleMqttCommand(uint32_t sender_timestamp, char* command, char* reply);
   void setupMqttControl(MQTTBridge* bridge);
   void autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply);
   void pingMqttControl(char* reply);
-  void describeMqttControl(char* reply);
   void formatNodeStats(char* reply);
   void loopMqttPing();
   void refreshMqttControlV2Key();
   void loopMqttControl();
   void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                 const char* reply);
-  bool onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
-                     const uint8_t* data, size_t len);
-  void answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
-                         uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply);
 #endif
 
 public:

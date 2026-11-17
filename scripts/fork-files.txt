@@ -19,6 +19,12 @@ src/helpers/AutoReplyLogic.h
 src/helpers/ForkText.h
 src/helpers/MQTTSlotAuth.h
 src/helpers/MqttControlLogic.h
+# The Observer's own pure headers MqttControlLogic.h includes, so a mesh-only command plane
+# builds on core (OTM-5). The Observer owns them; a rebase that changes them is synced here.
+src/helpers/MQTTConnectionPolicy.h
+src/helpers/MQTTObserverValidation.h
+src/helpers/MQTTPacketFilter.h
+src/helpers/MQTTReplyFormat.h
 src/helpers/MqttControlV2.h
 src/helpers/OtaAutoLogic.h
 src/helpers/OtaVerifyLogic.h

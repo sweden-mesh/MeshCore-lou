@@ -6,8 +6,15 @@
 #include <helpers/ForkText.h>
 #include <helpers/IdentityStore.h>
 #include <helpers/MqttControlLogic.h>
-#include <helpers/MqttControlV2.h>
 #include <helpers/TxtDataHelpers.h>
+#ifdef WITH_MQTT_BRIDGE
+  #include <helpers/MQTTPresets.h>
+  #include <helpers/MqttControlV2.h>
+  #define MQTTCTRL_SLOTS  RUNTIME_MQTT_SLOTS
+#else
+  // Mesh only: no slot is listened on, and the one a file names is kept as it was written.
+  #define MQTTCTRL_SLOTS  255
+#endif
 
 
 // One staged command, copied out of the MQTT event task so nothing expensive
@@ -66,6 +73,7 @@ class MqttControl {
   // keeps its settings in /ota now; the bytes are carried as read, so an image that
   // rolls back to one of those releases still finds what it wrote.
   uint8_t _ota_legacy[2];
+#ifdef WITH_MQTT_BRIDGE
   MqttControlStaged _staged;
   // The v2 key for this node's own command topic (TODO 17a): derived once per command
   // key, at boot and when the key changes, and kept in RAM only.
@@ -73,6 +81,7 @@ class MqttControl {
   bool _v2_ready;
   char _v2_key_for[PUB_KEY_SIZE * 2 + 1];      // the command key it was derived from
   char _v2_topic[MQTTCTRL_MAX_TOPIC + 1];      // the only topic a v2 command may arrive on
+#endif
   MqttCtrlBudget _commands;
   MqttCtrlBudget _transmits;
   uint8_t _mesh_mode;         // MqttCtrlMeshMode
@@ -94,6 +103,13 @@ public:
   // `set mqtt.cmd on` with no slot configured chooses one (MyMesh::autoSetupMqttControl).
   void setSlotAndEnable(uint8_t slot) { _slot = slot; _enabled = true; save(); }
   const char* pubkey() const { return _pubkey; }
+  uint8_t meshMode() const { return _mesh_mode; }
+  void setMeshMode(uint8_t mode) { _mesh_mode = mode; save(); }
+
+  // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
+  static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);
+
+#ifdef WITH_MQTT_BRIDGE
   // The command key the v2 key was derived from, "" when none.
   const char* v2KeyFor() const { return _v2_key_for; }
   void setV2Key(const uint8_t key[MQTTV2_KEY_LEN], const char* key_for, const char* topic) {
@@ -103,11 +119,7 @@ public:
     _v2_ready = key_for[0] != 0;
   }
   const uint8_t* v2Key() const { return _v2_key; }
-  uint8_t meshMode() const { return _mesh_mode; }
-  void setMeshMode(uint8_t mode) { _mesh_mode = mode; save(); }
 
-  // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
-  static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);
   static bool buildBroadcastTopic(const char* iata, char* out, size_t out_size);
   static bool buildResultTopic(const char* iata, const char* node_hex,
                                char* out, size_t out_size);
@@ -140,9 +152,10 @@ public:
   MqttCtrlResult drain(const mesh::Identity& owner, uint32_t now,
                        MqttCommandRunner* runner, char* reply, size_t reply_size,
                        MqttCtrlOutcome* out = NULL);
+#endif
 
   // The same, for a command that came over the mesh (mqttCtrlMeshParse) addressed to
-  // 'topic', this node's own command topic. 'open' is mqttCtrlMeshOpen now. 'answer' says
+  // 'topic', this node's own command topic. 'open' is mqttCtrlMeshRoadOpen now. 'answer' says
   // whether the outcome may go back over the air: only once the key has vouched for the
   // command, its counter is new and the mesh budget allowed it, so that nobody who heard a
   // request can make the node transmit by sending it again.

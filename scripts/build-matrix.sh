@@ -5,7 +5,7 @@
 #   scripts/build-matrix.sh [-c "ar rc arrc"] [-b "env ..."] [-r lou-14] [-o DIR] [-n]
 #
 #   -c  combinations, the codes as/ar/rc run together in that order. Default: ar rc arrc on
-#       fork/observer, ar on fork/core.
+#       fork/observer, ar on fork/core. rc on a board without the Observer bridge is mesh only.
 #   -b  boards (env names). Default: every *_repeater_observer_mqtt env on fork/observer,
 #       scripts/boards-core.txt on fork/core. "all": every *_repeater_observer_mqtt env on
 #       fork/observer, every *_repeater env on fork/core -- the sweep for which boards fit.
@@ -73,7 +73,6 @@ flags_for() {
     rest="${rest:2}"
   done
   case "$combo" in as|ar|rc|asar|asrc|arrc|asarrc) ;; *) return 1 ;; esac
-  [ "$BASE" = core ] && [[ "$combo" == *rc* ]] && return 1
   echo "${flags# }"
 }
 

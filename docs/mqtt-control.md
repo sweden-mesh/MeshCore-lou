@@ -399,6 +399,25 @@ answered `mesh-closed` (code 19). `get mqtt.cmd.mesh` says which, and `get mqtt.
 answers nothing, over the mesh as over MQTT. A firmware without the road reads `0xC1` as a
 login whose password no one can type, and answers nothing.
 
+### Mesh only: boards without Wi-Fi
+
+An `rc` or `arrc` image built without the Observer bridge -- an nRF52 board, or an ESP32 built
+as a plain repeater -- has no Wi-Fi and no MQTT, and the mesh road is its only road. Everything
+above holds, with these differences:
+
+- **The topic is `meshcore/mesh/{own key}/cmd`.** Such an image has no `mqtt.iata`, so the
+  region in the topic it rebuilds is always the word `mesh`, and that is what a sender signs
+  for a node it knows as mesh only. `get mqtt.cmd` says `mesh only`.
+- **The road is always open** while `set mqtt.cmd on`: there is no MQTT to wait for, so
+  `mqtt.cmd.mesh` does not exist there, and a mode carried over in `/mqttcontrol` from an
+  Observer image is ignored.
+- **What only an uplink means is refused** as `not-allowed` (14): the repair allowance, which
+  repairs an uplink there is none of, and `ota check`, `ota update` and `mqtt.cmd ping`. The
+  deny list applies in full.
+
+Set it up on the console: `set mqtt.cmd.pubkey <64 hex>` (serial only, as everywhere), then
+`set mqtt.cmd on`.
+
 ## What is not defended
 
 - **Confidentiality, for `v1` and broadcasts.** A `v2` command and its `r3` result are sealed end

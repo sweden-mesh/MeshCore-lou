@@ -3,7 +3,6 @@
 #include "MqttControl.h"
 #include <helpers/OtaAutoLogic.h>
 
-#include <helpers/MQTTPresets.h>
 #include <helpers/TxtDataHelpers.h>
 
 #define MQTTCTRL_CONFIG_FILE  "/mqttcontrol"
@@ -42,7 +41,9 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 // MqttControlLogic.h is the independent second guard on the same door.
 MqttControl::MqttControl()
   : _fs(NULL), _enabled(false), _counter(0), _slot(0),
+#ifdef WITH_MQTT_BRIDGE
     _v2_ready(false),
+#endif
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW),
     _mesh_mode(MQTTCTRL_MESH_AUTO)
@@ -50,12 +51,14 @@ MqttControl::MqttControl()
   _pubkey[0] = 0;
   _ota_legacy[0] = 0;
   _ota_legacy[1] = OTA_AUTO_CHECK_HOURS_DEFAULT;
+#ifdef WITH_MQTT_BRIDGE
   _v2_key_for[0] = 0;
   _v2_topic[0] = 0;
   _staged.pending = false;
   _staged.payload_len = 0;
   _staged.topic[0] = 0;
   _staged.payload[0] = 0;
+#endif
 }
 
 void MqttControl::begin(FILESYSTEM* fs) {
@@ -75,7 +78,7 @@ void MqttControl::load() {
   // The byte layout, every version of it, is mqttCtrlConfigDecode's (MqttControlLogic.h).
   MqttCtrlStoredConfig c;
   toStored(&c);
-  if (!mqttCtrlConfigDecode(buf, len, RUNTIME_MQTT_SLOTS, &c)) return;
+  if (!mqttCtrlConfigDecode(buf, len, MQTTCTRL_SLOTS, &c)) return;
   _enabled = c.enabled;
   _counter = c.counter;
   _slot = c.slot;
@@ -114,6 +117,8 @@ bool MqttControl::buildTopic(const char* iata, const char* node_hex,
                              char* out, size_t out_size) {
   return buildOne(iata, node_hex, "cmd", out, out_size);
 }
+
+#ifdef WITH_MQTT_BRIDGE
 
 bool MqttControl::buildBroadcastTopic(const char* iata, char* out, size_t out_size) {
   return buildOne(iata, "all", "cmd", out, out_size);
@@ -188,6 +193,7 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
   _staged.pending = false;
   return result;
 }
+#endif
 
 // Everything after the key has vouched for a command, on either road.
 MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, const char* topic, bool mesh,
@@ -204,7 +210,7 @@ MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, const char* top
     out->command[n] = 0;
   }
 
-  MqttCtrlResult result = mesh ? mqttCtrlAuthoriseMesh(&env, _counter, now, FORK_AUTO_REPLY)
+  MqttCtrlResult result = mesh ? mqttCtrlAuthoriseMesh(&env, _counter, now, FORK_AUTO_REPLY, FORK_UPLINK)
                                : mqttCtrlAuthorise(&env, _counter, now, FORK_AUTO_REPLY);
   if (result != MQTTCTRL_OK) return result;
 
@@ -292,6 +298,7 @@ bool MqttControl::handleCommand(uint32_t sender_timestamp, int slot_count,
     return true;
   }
 
+#ifdef WITH_MQTT_BRIDGE
   // Read once at boot, when the bridge registers its subscriptions; a live change
   // would have to move them between clients from another core, for a setting that
   // changes about once in a node's life.
@@ -312,6 +319,7 @@ bool MqttControl::handleCommand(uint32_t sender_timestamp, int slot_count,
     else sprintf(reply, "> %d", _slot);
     return true;
   }
+#endif
 
   if (memcmp(command, "set mqtt.cmd ", 13) == 0) {
     bool on = false;
