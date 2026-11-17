@@ -76,6 +76,7 @@ allowed|set ota.auto on
 allowed|set ota.check.hours 12
 allowed|mqtt.cmd ping
 denied|set autoreply.legacy off
+allowed|ota update
 denied|set prv.key 00
 denied|set public.key 00
 denied|set mqtt.cmd off
@@ -96,7 +97,6 @@ denied|get mqtt1.password
 denied|get mqtt6.token
 denied|erase
 denied|start webconfig
-denied|ota update
 denied|poweroff
 denied|shutdown
 denied|set bootloader.ver 2

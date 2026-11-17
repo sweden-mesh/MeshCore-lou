@@ -1059,6 +1059,35 @@ TEST(BroadcastGuard, ABroadcastParameterChangeIsStillAllowed) {
   EXPECT_TRUE(mqttCtrlIsTransmitCommand("trigger test", 12));
 }
 
+TEST(BroadcastGuard, AnUpdateMayNotBeAddressedToEveryNode) {
+  // `ota update` restarts the node: one publish to all/cmd would take the region off the
+  // air together, all of it on an image no node had yet shown to work. Per node it goes.
+  const char* cmd = "ota update";
+  EXPECT_TRUE(allowed(cmd));
+  EXPECT_FALSE(mqttCtrlIsTransmitCommand(cmd, strlen(cmd)));      // not an airtime cost...
+  EXPECT_TRUE(mqttCtrlBroadcastRefused(cmd, strlen(cmd)));        // ...refused all the same
+  EXPECT_EQ(MQTTCTRL_ERR_BROADCAST_TRANSMIT,
+            mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(cmd, strlen(cmd)), "meshcore/JKG/all/cmd"));
+  EXPECT_EQ(MQTTCTRL_OK,
+            mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(cmd, strlen(cmd)), "meshcore/JKG/a1b2c3d4/cmd"));
+  EXPECT_TRUE(mqttCtrlBroadcastRefused("trigger test", 12));
+  EXPECT_FALSE(mqttCtrlBroadcastRefused("ota check", 9));
+  EXPECT_FALSE(mqttCtrlBroadcastRefused("region put se-jkp *", 19));
+}
+
+TEST(RateLimit, AnUpdateSpendsTheCommandBudget) {
+  // Not a transmit, so it costs one of the ten commands an hour like any setting, and
+  // the eleventh in the hour is refused however validly it is signed.
+  const char* cmd = "ota update";
+  bool transmit = mqttCtrlIsTransmitCommand(cmd, strlen(cmd));
+  EXPECT_TRUE(mqttCtrlSpendsCommandBudget(transmit));
+  EXPECT_FALSE(mqttCtrlSpendsTransmitBudget(transmit));
+  MqttCtrlBudget commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS);
+  const uint32_t now = 1795000000;
+  for (int i = 0; i < MQTTCTRL_CMD_MAX; i++) EXPECT_TRUE(commands.allow(now + i));
+  EXPECT_EQ(MQTTCTRL_ERR_RATE_LIMITED, mqttCtrlRateResult(transmit, commands.allow(now + 60), true));
+}
+
 TEST(BroadcastGuard, TheRefusalHasItsOwnAppendedCode) {
   EXPECT_EQ((int)MQTTCTRL_ERR_BROADCAST_TRANSMIT, 18);
   EXPECT_NE(MQTTCTRL_ERR_BROADCAST_TRANSMIT, MQTTCTRL_ERR_NOT_ALLOWED);
@@ -1190,11 +1219,17 @@ TEST(Denylist, RebootIsAdmittedAndTheRestOfTheDestructiveGroupIsNot) {
   EXPECT_FALSE(allowed("set password hunter2"));
 }
 
-TEST(Denylist, OtaCheckIsAReadAndOtaUpdateWaitsForASignedImage) {
+TEST(Denylist, OtaCheckAndOtaUpdateAreAdmittedBareOnly) {
+  // `ota update` since the image is signed and the old one comes back when the new one
+  // never proves itself (operator, 2026-11-17). Exact, as the CLI's memcmp is not:
+  // `ota updatex` would reach the update's handler.
   EXPECT_TRUE(allowed("ota check"));
   EXPECT_FALSE(allowed("ota check x"));
-  EXPECT_FALSE(allowed("ota update"));
+  EXPECT_TRUE(allowed("ota update"));
+  EXPECT_FALSE(allowed("ota update now"));
+  EXPECT_FALSE(allowed("ota updatex"));
   EXPECT_FALSE(allowed("ota"));
+  EXPECT_FALSE(allowed("ota branch dev"));
 }
 
 TEST(Denylist, PositionAndRoleStayLocal) {
@@ -1918,13 +1953,13 @@ TEST(SignedResult, AnR1OrAShortLineIsNotSplitAsSigned) {
   EXPECT_EQ(0u, mqttCtrlFormatSignedResult(out, 100, "meshcore/JKG/x/res", 1, 0, "ver", "v", testSigner, NULL));   // no room for a signature
 }
 
-TEST(Denylist, TheAutomaticUpdateSettingsTravelAndTheManualFlashStillDoesNot) {
+TEST(Denylist, TheAutomaticUpdateSettingsTravelAndSoDoesTheUpdateItself) {
   EXPECT_TRUE(allowed("set ota.auto on"));
   EXPECT_TRUE(allowed("set ota.check.hours 12"));
   EXPECT_TRUE(allowed("get ota"));
   EXPECT_TRUE(allowed("get ota.auto"));
   EXPECT_TRUE(allowed("ota check"));
-  EXPECT_FALSE(allowed("ota update"));
+  EXPECT_TRUE(allowed("ota update"));
 }
 
 // ---- the cross-check fixture for mccontrol (ar-11) ------------------------------------
@@ -1953,12 +1988,12 @@ static const char* const known_commands[] = {
   "set mqtt2.username mcoar", "set mqtt2.password x", "set mqtt3.preset custom",
   "set name Foo", "reboot", "clkreboot", "clear stats", "neighbor.remove 4AC61A7F",
   "powersaving on", "gps on", "set ota.auto on", "set ota.check.hours 12",
-  "mqtt.cmd ping", "set autoreply.legacy off",
+  "mqtt.cmd ping", "set autoreply.legacy off", "ota update",
   // the denied groups
   "set prv.key 00", "set public.key 00", "set mqtt.cmd off", "set mqtt.cmd.slot 2", "get mqtt.cmd.pubkey",
   "set wifi.pwd x", "get wifi.ssid", "password x", "get guest.password", "set alert.psk 00",
   "get bridge.secret", "get snmp.community", "get mqtt.owner", "set owner.info x", "get tls.x",
-  "get prv.key", "get mqtt1.password", "get mqtt6.token", "erase", "start webconfig", "ota update",
+  "get prv.key", "get mqtt1.password", "get mqtt6.token", "erase", "start webconfig",
   "poweroff", "shutdown", "set bootloader.ver 2", "set lat 57.78", "get lon", "set role repeater",
   "set repeat off", "set freq 869.6", "set radio.rxgain 1", "set tx 20", "set extra.sf 1",
   "set dutycycle 10", "tempradio 869 62.5 8 8", "advert", "alert test", "set advert.interval 1",
@@ -2154,7 +2189,7 @@ TEST(MeshRoad, TheRepairAllowanceIsTheMeshRoadsAlone) {
     "get wifi.ssid", "set mqtt.cmd off", "set mqtt.cmd.slot 2", "set mqtt.cmd.pubkey 00",
     "set mqtt.cmd.mesh on", "set mqtt.cmd onx", "get mqtt.cmd.pubkey", "set prv.key 00",
     "get prv.key", "erase", "set password x", "set freq 869.6", "set radio 1", "set lat 1",
-    "set role x", "set repeat off", "advert", "time 1900000000", "ota update", "log",
+    "set role x", "set repeat off", "advert", "time 1900000000", "log",
     "SET WIFI.PWD x", "Set wifi.ssid x", "start ota", "get mqtt1.password",
   };
   for (const char* c : still) EXPECT_FALSE(mqttCtrlMeshCommandAllowed(c, strlen(c), true)) << c;
@@ -2164,6 +2199,16 @@ TEST(MeshRoad, TheRepairAllowanceIsTheMeshRoadsAlone) {
   }
   // ... and in an image without auto-reply, its triggers stay out on both.
   EXPECT_FALSE(mqttCtrlMeshCommandAllowed("trigger test", 12, false));
+}
+
+TEST(MeshRoad, AnUpdateTravelsAsOnTheBrokerAndTheNodeChecksItsOwnLink) {
+  // No allowance of its own: the plane's rules admit it, so the mesh road does, and the
+  // road reaches one node only, so the broadcast refusal has nothing to add. The download
+  // is over Wi-Fi, and the CLI answers "ERR: wifi not connected" without one, so a node
+  // whose Wi-Fi is the reason the road opened says so and stays as it is.
+  EXPECT_TRUE(mqttCtrlMeshCommandAllowed("ota update", 10, true));
+  EXPECT_TRUE(mqttCtrlMeshCommandAllowed("ota update", 10, false));
+  EXPECT_FALSE(mqttCtrlMeshCommandAllowed("ota updatex", 11, true));
 }
 
 TEST(MeshRoad, ARepairArrivingOverMqttIsRefused) {

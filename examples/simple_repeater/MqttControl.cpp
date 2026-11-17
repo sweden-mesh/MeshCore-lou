@@ -214,7 +214,7 @@ MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, const char* top
   bool transmit = mqttCtrlIsTransmitCommand(env.command, env.command_len);
 
   // Stateless, so it runs before the limiters spend anything.
-  result = mqttCtrlTransmitTopicResult(transmit, topic);
+  result = mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(env.command, env.command_len), topic);
   if (result != MQTTCTRL_OK) return result;
 
   // One limiter is asked, never both: a limiter spends when asked, and the two
