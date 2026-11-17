@@ -1132,9 +1132,13 @@ static inline bool mqttCtrlMeshAllowance(const char* command, size_t len) {
 // 'uplink' says whether this image has Wi-Fi and MQTT (WITH_MQTT_BRIDGE). Without them the
 // mesh road is the plane's only road (operator 2026-11-16, plan phase 5) and the deny list
 // applies in full: the allowance repairs an uplink there is none of, and `ota check`,
-// `ota update` and `mqtt.cmd ping` need one. Refused as not-allowed, as a trigger is on an
-// image without auto-reply, rather than left to the CLI to answer "unknown".
+// `ota update`, `mqtt.cmd ping` and the broker slots' settings (`set mqttN.<leaf>`) need one.
+// Refused as not-allowed, as a trigger is on an image without auto-reply, rather than left to
+// the CLI to answer "unknown".
 static inline bool mqttCtrlNeedsUplink(const char* command, size_t len) {
+  const size_t hlen = strlen("set mqtt");
+  if (len > hlen + 1 && strncasecmp(command, "set mqtt", hlen) == 0 &&
+      command[hlen] >= '0' && command[hlen] <= '9' && command[hlen + 1] == '.') return true;
   return mqttCtrlExactCommand(command, len, "ota check") || mqttCtrlExactCommand(command, len, "ota update") ||
          mqttCtrlExactCommand(command, len, "mqtt.cmd ping");
 }
