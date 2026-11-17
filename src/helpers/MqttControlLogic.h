@@ -711,10 +711,10 @@ static inline bool mqttCtrlCommandDenied(const char* command, size_t len) {
     "set owner.info", "get owner.info",
     "set tls", "get tls", "tls.bundletest", "get prv.key",
     // destructive, or no way back from the road. `reboot` and `clkreboot` are
-    // admitted (operator, 2026-10-08): settings need them to apply. `ota check`
-    // is admitted; `ota update` waits for a signed image and rollback
-    // (planning/firmware/TODO.md section 11).
-    "erase", "start", "ota update", "poweroff", "shutdown", "set bootloader.ver",
+    // admitted (operator, 2026-10-08): settings need them to apply, and so are
+    // `ota check` and `ota update` (operator, 2026-11-17): the image is signed and
+    // the old one comes back if the new one never proves itself.
+    "erase", "start", "poweroff", "shutdown", "set bootloader.ver",
     // position and role: position is evidence the whole mesh relies on, and
     // `repeat off` is how a leaked key silences a region in ten commands. The
     // position read stays out too: whether a node publishes where it is belongs
@@ -788,6 +788,7 @@ static inline bool mqttCtrlCommandAllowed(const char* command, size_t len, bool 
     { "memory", true },
     { "clear stats", true },       // resets counters, nothing else
     { "ota check", true },         // reports the available build; flashes nothing
+    { "ota update", true },        // one node at a time: never on the broadcast topic
     { "mqtt.cmd ping", true },     // a ping to the broker and back; nothing on the air
   };
   for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++) {
@@ -944,6 +945,14 @@ static inline bool mqttCtrlTopicIsBroadcast(const char* topic) {
 static inline MqttCtrlResult mqttCtrlTransmitTopicResult(bool is_transmit, const char* topic) {
   if (is_transmit && mqttCtrlTopicIsBroadcast(topic)) return MQTTCTRL_ERR_BROADCAST_TRANSMIT;
   return MQTTCTRL_OK;
+}
+
+// What the broadcast topic refuses: a transmit, and `ota update`, which restarts every
+// node it reaches. One publish would take a whole region off the air at once, and put
+// the same image on all of it before any one node had shown that image works. Answered
+// with the transmit's code, since the reason is the same: one publish, every node.
+static inline bool mqttCtrlBroadcastRefused(const char* command, size_t len) {
+  return mqttCtrlIsTransmitCommand(command, len) || mqttCtrlExactCommand(command, len, "ota update");
 }
 
 // The sender_timestamp an MQTT command executes with. **Never 0.**
