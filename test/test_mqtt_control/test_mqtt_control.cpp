@@ -1075,6 +1075,19 @@ TEST(BroadcastGuard, AnUpdateMayNotBeAddressedToEveryNode) {
   EXPECT_FALSE(mqttCtrlBroadcastRefused("region put se-jkp *", 19));
 }
 
+TEST(BroadcastGuard, ARebootGoesToOneNodeNeverToEveryNode) {
+  // One publish to all/cmd would restart the whole region together (operator, 2026-11-17).
+  const char* cmd = "reboot";
+  EXPECT_TRUE(allowed(cmd));
+  EXPECT_FALSE(mqttCtrlIsTransmitCommand(cmd, strlen(cmd)));
+  EXPECT_TRUE(mqttCtrlBroadcastRefused(cmd, strlen(cmd)));
+  EXPECT_EQ(MQTTCTRL_ERR_BROADCAST_TRANSMIT,
+            mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(cmd, strlen(cmd)), "meshcore/JKG/all/cmd"));
+  EXPECT_EQ(MQTTCTRL_OK,
+            mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(cmd, strlen(cmd)), "meshcore/JKG/a1b2c3d4/cmd"));
+  EXPECT_TRUE(mqttCtrlMeshCommandAllowed(cmd, strlen(cmd), true));   // the mesh road reaches one node
+}
+
 TEST(RateLimit, AnUpdateSpendsTheCommandBudget) {
   // Not a transmit, so it costs one of the ten commands an hour like any setting, and
   // the eleventh in the hour is refused however validly it is signed.
