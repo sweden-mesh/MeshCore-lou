@@ -166,14 +166,19 @@ jobs:
       - name: Hashes, and every Observer image has its unsigned manifest
         working-directory: candidate
         run: |
-          missing=0
+          # nullglob: a trial that builds no Observer image has neither images nor manifests.
+          shopt -s nullglob
+          missing=0 manifests=(*.unsigned.json)
           for img in *_observer_mqtt-*.bin; do
             case "$img" in *-merged.bin) continue ;; esac
-            ls *.unsigned.json | xargs grep -l "\"fileName\": \"$img\"" >/dev/null || { echo "no manifest for $img"; missing=1; }
+            [ ${#manifests[@]} -gt 0 ] && grep -lF "\"fileName\": \"$img\"" "${manifests[@]}" >/dev/null \
+              || { echo "no manifest for $img"; missing=1; }
           done
           [ $missing -eq 0 ]
-          sha256sum * > SHA256SUMS
-          echo "$(ls | wc -l) files, $(ls *.unsigned.json | wc -l) unsigned manifests"
+          files=(*)
+          [ ${#files[@]} -gt 0 ] || { echo "no images"; exit 1; }
+          sha256sum "${files[@]}" > SHA256SUMS
+          echo "$(ls | wc -l) files, ${#manifests[@]} unsigned manifests"
       - uses: actions/upload-artifact@v4
         with:
           name: candidate-${{ inputs.revision }}
