@@ -7,6 +7,7 @@
 #   scripts/ci-plan.sh <observer-checkout> <core-checkout>
 #   scripts/ci-plan.sh --from <observer-plan> <core-plan>   from saved dry runs instead
 #   BOARDS=all scripts/ci-plan.sh ...   every repeater board of both bases (the sweep)
+#   BOARDS="env ..." scripts/ci-plan.sh ...   those boards, each in the base that has it
 #   -> [{"base":"observer","env":"Heltec_v3_repeater_observer_mqtt","combo":"arrc",
 #        "name":"Heltec_v3_repeater_observer_mqtt-arrc"}, ...,
 #       {"base":"core","env":"RAK_4631_repeater","combo":"ar rc arrc",
@@ -17,14 +18,32 @@ FROM=0
 [ "${1:-}" = --from ] && { FROM=1; shift; }
 OBS="${1:?observer checkout}"
 CORE="${2:?core checkout}"
-B=()
-[ -n "${BOARDS:-}" ] && B=(-b "$BOARDS")
+# A named list of boards is cut, per base, to the boards that base builds (its BOARDS=all,
+# from build.sh list; or the boards of a saved dry run), so a trial naming one board of each
+# base builds each in its own base only.
 plan() {
-  if [ $FROM -eq 1 ]; then cat "$1"; else (cd "$1" && bash scripts/build-matrix.sh -n "${B[@]}"); fi
+  local src="$1" base="$2" b=() have keep="" skip="" e
+  if [ -n "${BOARDS:-}" ] && [ "$BOARDS" != all ]; then
+    if [ $FROM -eq 1 ]; then have=$(awk '{print $1}' "$src"); else have=$(cd "$src" && bash scripts/build-matrix.sh -n -c ar -b all | awk '{print $1}'); fi
+    for e in $BOARDS; do
+      if grep -qxF -- "$e" <<< "$have"; then keep="$keep $e"; else skip="$skip $e"; fi
+    done
+    [ -n "$skip" ] && echo "$base: skipped$skip, not a board of this base" >&2
+    [ -z "$keep" ] && return 0
+    b=(-b "${keep# }")
+  elif [ -n "${BOARDS:-}" ]; then
+    b=(-b "$BOARDS")
+  fi
+  if [ $FROM -eq 1 ]; then
+    awk -v keep="$keep" 'BEGIN { n = split(keep, k); for (i = 1; i <= n; i++) want[k[i]] = 1 }
+                         n == 0 || ($1 in want)' "$src"
+  else
+    (cd "$src" && bash scripts/build-matrix.sh -n "${b[@]}")
+  fi
 }
 {
-  plan "$OBS" | awk '{print "observer", $1, $2}'
-  plan "$CORE" | awk '{print "core", $1, $2}'
+  plan "$OBS" observer | awk '{print "observer", $1, $2}'
+  plan "$CORE" core | awk '{print "core", $1, $2}'
 } | python3 -c '
 import json, sys
 jobs = {}
