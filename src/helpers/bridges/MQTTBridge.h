@@ -886,6 +886,14 @@ public:
     if (topic == NULL || topic[0] == 0 || payload == NULL || len == 0) return false;
     return publishToSlot(_control_slot, topic, payload, len, false, qos);
   }
+  // The one retained message the plane keeps on its slot (mcc3's alive), and the will that
+  // clears it when the link dies: an empty retained message on the same topic. Call
+  // setControlWill before begin(); the topic is the caller's and must outlive the bridge.
+  bool publishControlRetained(const char* topic, const char* payload, size_t len, uint8_t qos) {
+    if (topic == NULL || topic[0] == 0 || payload == NULL || len == 0) return false;
+    return publishToSlot(_control_slot, topic, payload, len, true, qos);
+  }
+  void setControlWill(const char* topic) { _control_will = topic; }
 
   // The control slot: connected, every subscription granted since it connected
   // (SUBACK), and how it reaches the broker ("mqtts, jwt").
@@ -910,6 +918,7 @@ private:
   char _client_tag[MQTT_SLOT_CLIENT_TAG_LEN + 1] = {0};
 #endif
   const char* const* _control_topics = NULL;
+  const char* _control_will = NULL;
   size_t _control_topic_count = 0;
   int _control_slot = -1;
 };

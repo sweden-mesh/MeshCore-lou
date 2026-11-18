@@ -94,17 +94,29 @@ class Fork {
 
   bool handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* command, char* reply);
   void describeMqttControl(char* reply);
+  void refreshMcc3Keys();
   bool onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                      const uint8_t* data, size_t len);
+  void onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                         const uint8_t* data, size_t len);
   void answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
-                         uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply);
+                         uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply,
+                         bool sealed);
 #endif
 #if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
-  // Owned here so the bridge's subscription list outlives every reconnect.
+  // Owned here so the bridge's subscription list outlives every reconnect: mcc/cmd/<key>,
+  // and in lou-20 the old scheme's per-node topic beside it while the node has a region.
+  char _mcc3_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
+  char _alive_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
   char _ctrl_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
-  char _ctrl_broadcast[MQTTCTRL_MAX_TOPIC + 1] = {0};
   char _ctrl_result[MQTTCTRL_MAX_TOPIC + 1] = {0};
   const char* _ctrl_topics[2];
+  MqttCtrlAliveClock _alive = {};
+  uint32_t _alive_sequence = 0;
+  // What alive says that is worth telling at once when it changes (mqttCtrlAliveNudge).
+  char _alive_key_for[PUB_KEY_SIZE * 2 + 1] = {0};
+  char _alive_region[MCC3_ALIVE_MAX_REGION + 2] = {0};
+  uint16_t _alive_minutes = 0;
   MqttCtrlPing _ping = {};
   bool _ping_started = false;                 // the command just run armed a ping
   bool _ping_remote = false;                  // a ping that came over the plane is waiting
@@ -121,6 +133,8 @@ class Fork {
   void loopMqttPing();
   void refreshMqttControlV2Key();
   void loopMqttControl();
+  void loopAlive();
+  const char* homeRegion();
   void publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                 const char* reply);
 #endif

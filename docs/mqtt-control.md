@@ -138,6 +138,55 @@ Observer's own client ids and `get mqtt.stats` line.
 The slot is read at boot, when the subscriptions are made. It cannot be set remotely: a signed
 `set mqtt.cmd.slot 0` would leave a node that only a serial cable could bring back.
 
+## mcc3: keyed by the node, sealed to its owner (lou-20)
+
+From lou-20 the plane has a second scheme beside the one below, **mcc3**, and lou-21 will keep
+only mcc3. No region anywhere: not in a topic, a key, a signature or a gate, so a node whose
+`mqtt.iata` is unset is still on the plane, and an owner sees all of its nodes wherever they
+are. The byte contract is mccontrol-spec's `docs/wire-format-mcc3.md` (v0.2.0); its vectors
+are this tree's `test/data/mcc3-vectors.json`, rebuilt byte for byte by `test/test_mqtt_v3`.
+
+```
+mcc/cmd/{NODE}      commands to this node; the only topic it subscribes to under mcc/
+mcc/r/{RID}         results, on the reply id the sealed command names (random per mccontrol session)
+mcc/alive/{NODE}    the node's alive message, retained; the slot's will empties it
+mcc/ping/{NODE}     `mqtt.cmd ping`; the broker answers `pong|<nonce>` on mcc/cmd/{NODE}
+```
+
+There is no broadcast topic of any kind: a county act is one sealed command per node. In lou-20
+the old scheme's `meshcore/{IATA}/all/cmd` is not subscribed either; its per-node topic is,
+while `mqtt.iata` is set (below).
+
+- **Keys.** `S` = X25519 of the node's identity and the command key (`set mqtt.cmd.pubkey`),
+  and three keys from it by HKDF-SHA256 with info `mcc3/cmd/`, `mcc3/mesh/` and `mcc3/alive/`
+  + the node's key in hex. Derived once per command key, kept in RAM.
+- **A command** is ChaCha20-Poly1305 under the first, padded to one of two sizes, and holds the
+  command key's Ed25519 signature over the node's key, the road, the flags, counter, expiry,
+  reply id and command. The node opens the AEAD, then checks the signature: a command for one
+  node verifies on no other, and an MQTT one is never taken as a mesh one. Then the counter,
+  expiry, deny list and rate limits exactly as below. Everything before the signature is
+  silent (counted in `get mqtt.cmd` as unverified); every outcome after it is answered, sealed
+  under a fresh random nonce, on `mcc/r/{RID}`.
+- **The flags byte** is reserved for delegation, which is not defined yet: a node refuses any
+  envelope whose flags are not zero, silently, as `bad-version`.
+- **Over the mesh** the request is sub-type `0xC2`, always 136 bytes, its command at most 57
+  bytes; it is encrypted (ChaCha20, no tag) and its integrity is the signature inside. The
+  response is sealed to the owner: the companion that carries either reads neither. The road's
+  rules, budget and allowance are those of the v1 road below.
+- **Alive.** At the first connect (after 0-120 s), then every `alive.interval` minutes times a
+  fresh draw of 0.5-1.5, and 5-60 s after a reconnect, a new command key, a new `region home`
+  or a new interval, the node publishes one retained message, sealed to its owner and always
+  252 characters: its boot counter and sequence, uptime, clock, last counter, interval, which
+  schemes and features it has, the mesh road's mode, the command key's fingerprint and how it
+  was set, its version, `region home` and name. It is the owner's only way to find its nodes;
+  anyone else learns that the node is on the plane and nothing more. None without a command
+  key. `set alive.interval <5-1440>` (minutes, default 15), `get alive.interval`; admitted
+  over the plane.
+
+lou-20 speaks both schemes: mcc3 always, and the old v1/v2 on `meshcore/{IATA}/{NODE}/cmd` with
+`r2`/`r3` on `/res`, and the `0xC1` mesh road, as before, so a tool that does not know mcc3 yet
+still reaches the node. Bit 0 of the alive message's flags says the old topic is subscribed.
+
 ## Topics
 
 ```

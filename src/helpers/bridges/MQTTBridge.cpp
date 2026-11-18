@@ -1761,6 +1761,7 @@ bool MQTTBridge::ensureSlotClient(int index) {
     slot.client->onSuback([this](int /*msg_id*/, const uint8_t* codes, int len) {
       _control_subscribed = mqttSubackGranted(codes, len);
     });
+    if (_control_will != NULL) slot.client->setWill(_control_will, 1, true, "", 0);
   }
 
   slot.client->onConnect([this, index](bool sessionPresent) {
@@ -3518,7 +3519,9 @@ bool MQTTBridge::isSlotReady(int index, char* reason_buf, size_t reason_size) co
         if (reason_buf) snprintf(reason_buf, reason_size, "set mqtt%d.token <your_token>", index + 1);
         return false;
       }
-    } else if (slot.preset->topic_style == MQTT_TOPIC_MESHCORE) {
+    } else if (slot.preset->topic_style == MQTT_TOPIC_MESHCORE && index != _control_slot) {
+      // The command plane's slot needs no region (mcc3); without one it publishes nothing
+      // else, since every meshcore/ topic needs it (mqttBuildPublicationTopic).
       if (!isIATAValid()) {
         if (reason_buf) snprintf(reason_buf, reason_size, "set mqtt.iata <airport_code>");
         return false;
@@ -3536,7 +3539,7 @@ bool MQTTBridge::isSlotReady(int index, char* reason_buf, size_t reason_size) co
     }
   } else {
     // Custom slot without a topic template uses meshcore format, needs IATA
-    if (_obs->mqtt_slot_topic[index][0] == '\0' && !isIATAValid()) {
+    if (_obs->mqtt_slot_topic[index][0] == '\0' && !isIATAValid() && index != _control_slot) {
       if (reason_buf) snprintf(reason_buf, reason_size, "set mqtt.iata <airport_code> or set mqtt%d.topic <template>", index + 1);
       return false;
     }

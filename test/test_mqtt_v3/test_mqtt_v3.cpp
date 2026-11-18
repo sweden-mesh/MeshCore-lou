@@ -480,6 +480,25 @@ TEST(Mcc3Mesh, TheHeadIsCheckedBeforeAnythingIsDecrypted) {
   EXPECT_FALSE(mcc3MeshIsRequest(req.data(), req.size()));
 }
 
+TEST(Mcc3Mesh, AFieldWithNoZeroLeftIsRefusedEvenWhenSigned) {
+  // 58 command bytes, properly signed by the owner: the field must end in a zero.
+  const Mcc3Keys node = nodeKeys(NODE, OWNER.pub);
+  const std::string cmd(58, 'z');
+  uint8_t req[MCC3_MESH_REQUEST] = {0};
+  req[4] = MCC3_MESH_SUBTYPE;
+  mqttCtrlMeshPutU32(&req[6], 9);
+  uint8_t* plain = req + MCC3_MESH_HEAD;
+  mqttCtrlMeshPutU32(plain, 1795000000);
+  uint8_t msg[MCC3_MAX_SIGNED];
+  size_t m = mcc3SignedBytes(NODE.pub, MCC3_ROAD_MESH, 0, 9, 1795000000, NULL, cmd.c_str(), cmd.size(), msg);
+  signWith((void*)&OWNER, plain + 4, msg, m);
+  memcpy(plain + 4 + MCC3_SIG_LEN, cmd.data(), cmd.size());
+  mcc3MeshStream(node.mesh, 9, plain, MCC3_MESH_REQUEST - MCC3_MESH_HEAD, plain);
+  Mcc3Command c;
+  EXPECT_EQ(MQTTCTRL_ERR_COMMAND_CHARS,
+            mcc3MeshOpen(&node, NODE.pub, 0, req, sizeof(req), verifyWith, (void*)OWNER.pub, &c));
+}
+
 TEST(Mcc3Mesh, TheStreamIsTheAeadCiphertextWithoutItsTag) {
   const Mcc3Keys node = nodeKeys(NODE, OWNER.pub);
   uint8_t plain[126], a[126], b[126 + 16], nonce[12] = {0};
