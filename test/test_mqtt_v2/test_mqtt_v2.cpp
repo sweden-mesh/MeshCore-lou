@@ -350,6 +350,52 @@ TEST(Result, AForgedOrTamperedResultDoesNotOpen) {
   EXPECT_FALSE(mqttV2OpenResult(key, moved.c_str(), &counter, text));
 }
 
+TEST(Result, OnlyACommandThatRanIsAnsweredSealed) {
+  // The result nonce is the command's counter, and only a command that ran consumes it.
+  // Walk a node through the counters a sender and an attacker can put in front of it --
+  // a replay of a command that ran, a command refused and later resent, an expired one
+  // -- and seal every result the node would seal: no counter, so no nonce, comes twice.
+  uint8_t key[32];
+  nodeKey(key);
+  struct Step { uint32_t counter; const char* text; uint32_t now; };
+  const Step steps[] = {
+    {20, "get name", EXPIRY - 60},          // runs
+    {20, "get name", EXPIRY - 60},          // the same bytes replayed: refused
+    {21, "set prv.key 00", EXPIRY - 60},    // denied, the counter not consumed
+    {21, "get name", EXPIRY - 60},          // 21 again, now a command that runs
+    {21, "get name", EXPIRY - 60},          // and replayed
+    {22, "get name", EXPIRY + 60},          // expired
+    {22, "get name", EXPIRY - 60},          // resent in time: runs
+  };
+  uint32_t persisted = 19;
+  std::vector<uint32_t> sealed;
+  std::vector<std::string> keystreams;
+  for (const Step& s : steps) {
+    MqttCtrlEnvelope env;
+    char text[MQTTV2_CMD_PAD_LARGE + 1];
+    std::string p = command(s.counter, s.text);
+    ASSERT_EQ(MQTTCTRL_OK, mqttV2OpenCommand(key, p.data(), p.size(), &env, text));
+    MqttCtrlResult r = mqttCtrlAuthorise(&env, persisted, s.now, true);
+    if (r == MQTTCTRL_OK) persisted = env.counter;
+    if (!mqttV2SealsResult(r)) continue;
+    sealed.push_back(env.counter);
+    uint8_t zeros[MQTTV2_RES_PAD_SMALL] = {0}, out[MQTTV2_RES_PAD_SMALL + MQTTV2_TAG_LEN];
+    mqttV2Seal(key, MQTTV2_DIR_RESULT, env.counter, "x", zeros, sizeof(zeros), out);
+    keystreams.push_back(hex(out, sizeof(zeros)));
+  }
+  EXPECT_EQ((std::vector<uint32_t>{20, 21, 22}), sealed);
+  for (size_t i = 0; i < keystreams.size(); i++) {
+    for (size_t j = i + 1; j < keystreams.size(); j++) EXPECT_NE(keystreams[i], keystreams[j]);
+  }
+  // every refusal a node can give an authentic command goes unsealed
+  for (MqttCtrlResult r : {MQTTCTRL_ERR_REPLAY, MQTTCTRL_ERR_EXPIRED, MQTTCTRL_ERR_FUTURE,
+                           MQTTCTRL_ERR_NO_CLOCK, MQTTCTRL_ERR_NOT_ALLOWED, MQTTCTRL_ERR_RATE_LIMITED,
+                           MQTTCTRL_ERR_TOO_LONG}) {
+    EXPECT_FALSE(mqttV2SealsResult(r)) << r;
+  }
+  EXPECT_TRUE(mqttV2SealsResult(MQTTCTRL_OK));
+}
+
 // ---- the shared fixture --------------------------------------------------------------
 
 static void add(std::string& out, const char* fmt, ...) __attribute__((format(printf, 2, 3)));

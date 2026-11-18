@@ -286,9 +286,9 @@ void Fork::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome
                                       const char* reply) {
   if (_mesh.bridge == NULL || _ctrl_result[0] == 0) return;
 
-  // A sealed command is answered sealed (r3): code, command and reply readable only by
-  // the command key's holder. Its tag stands where r2's signature does.
-  if (outcome.v2) {
+  // A sealed command that ran is answered sealed (r3): code, command and reply readable
+  // only by the command key's holder. Its tag stands where r2's signature does.
+  if (outcome.v2 && mqttV2SealsResult(result)) {
     static char sealed[MQTTV2_MAX_RESULT];   // loop task only; too big for its stack
     size_t n = mqttV2BuildResult(_mqtt_control.v2Key(), outcome.counter, (int)result,
                                  outcome.command, reply, sealed, sizeof(sealed));
@@ -299,10 +299,11 @@ void Fork::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome
   // A refusal runs no command and leaves the reply empty; the code field still
   // says why, which is what lets a requester tell "refused" from "never arrived".
   // Signed with this node's identity key (r2, ar-11): a result is published where
-  // anyone can write, and the signature is what makes it this node's word.
+  // anyone can write, and the signature is what makes it this node's word. A refused
+  // v2 command is answered here too, without its command, which came sealed.
   char payload[MQTTCTRL_MAX_RESULT];
   size_t n = mqttCtrlFormatSignedResult(payload, sizeof(payload), _ctrl_result, outcome.counter,
-                                        (int)result, outcome.command, reply,
+                                        (int)result, outcome.v2 ? "" : outcome.command, reply,
                                         [](void* ctx, uint8_t sig[64], const uint8_t* msg, size_t len) {
                                           ((mesh::LocalIdentity*)ctx)->sign(sig, msg, (int)len);
                                         }, &_mesh.self_id);

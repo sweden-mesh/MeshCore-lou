@@ -226,8 +226,11 @@ is strictly increasing and persisted before the command runs, so no nonce repeat
 padded to 64 or 160 bytes, results to 256 or 512, so length does not name the command. The node
 opens the AEAD first and drops a forgery before any other work; then the counter, expiry,
 rate limits and deny list apply to the opened text exactly as for v1. The outer signature is
-for the broker. A v2 command is answered with an `r3`; a v1 command with `r2`, as before.
-Broadcasts stay v1. A tool sends v2 only to a node whose `ver` is ar-13 or later.
+for the broker. A v2 command that ran is answered with an `r3`; a v1 command with `r2`, as
+before. A v2 command the node refuses (replay, expired, rate limit, deny list) is answered with an
+`r2` whose command field is empty (lou-19): a refusal does not consume the counter, so an `r3`
+for it could repeat the nonce of an earlier or later `r3` under the same counter. The `r2` shows
+the counter and the refusal code, never the sealed command. Broadcasts stay v1. A tool sends v2 only to a node whose `ver` is ar-13 or later.
 
 ## The envelope
 

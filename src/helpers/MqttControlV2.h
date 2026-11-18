@@ -25,7 +25,8 @@
 //
 // A result reuses its command's counter under the other direction, and the counter is
 // strictly increasing and persisted before the command runs, so no nonce repeats under
-// one key, across reboots too. The outer signature is the broker's to check; the node
+// one key, across reboots too -- as long as only a command that consumed its counter is
+// answered sealed (mqttV2SealsResult). The outer signature is the broker's to check; the node
 // opens the AEAD first, which already proves the holder of the operator's key, and drops
 // a forgery before any other work.
 //
@@ -257,6 +258,15 @@ static inline MqttCtrlResult mqttV2OpenCommand(const uint8_t key[MQTTV2_KEY_LEN]
 }
 
 // ---- the result -----------------------------------------------------------------------
+
+// Whether a v2 command's result goes sealed. Only a command that ran has consumed its
+// counter; a refusal (replay, expired, rate-limited, not allowed) leaves the counter where
+// it was, so the same counter can be refused again or run later, and a second r3 under it
+// would reuse the result nonce. A refusal is answered as an r2 instead, signed by the node
+// and with the command left out, because the command came sealed.
+static inline bool mqttV2SealsResult(MqttCtrlResult result) {
+  return result == MQTTCTRL_OK;
+}
 
 // r3|<counter>|<b64url(ct||tag)>; the reply is cut so the plaintext fits 512.
 static inline size_t mqttV2BuildResult(const uint8_t key[MQTTV2_KEY_LEN], uint32_t counter,
