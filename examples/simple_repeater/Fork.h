@@ -115,7 +115,6 @@ class Fork {
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
 
   void setupMqttControl(MQTTBridge* bridge);
-  void noteCommandKey(MQTTBridge* bridge);
   void autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply);
   void pingMqttControl(char* reply);
   void formatNodeStats(char* reply);

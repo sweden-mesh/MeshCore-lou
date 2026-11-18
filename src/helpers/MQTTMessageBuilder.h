@@ -69,8 +69,6 @@ public:
    * @param internal_heap Internal heap free bytes (optional, -1 to omit)
    * @param repeat Repeat/forwarding status ("on" or "off"); nullptr omits the field
    * @param conn_health MQTT slot connection health; defaults omit every field
-   * @param cmd_key The command key's first 8 hex characters; nullptr omits it
-   * @param cmd_key_via How that key was set ("admin" or "usb"); nullptr omits it
    * @return Length of JSON string, or 0 on error
    */
   static int buildStatusMessage(
@@ -97,9 +95,7 @@ public:
     int packets_sent = -1,
     int packets_received = -1,
     const char* repeat = nullptr,
-    const MQTTConnHealth& conn_health = MQTTConnHealth(),
-    const char* cmd_key = nullptr,
-    const char* cmd_key_via = nullptr
+    const MQTTConnHealth& conn_health = MQTTConnHealth()
   );
 
   /**

@@ -1051,8 +1051,8 @@ static inline const char* mqttCtrlKeyViaName(uint8_t via) {
   return via == MQTTCTRL_KEY_VIA_ADMIN ? "admin" : "usb";
 }
 
-// The key's first 8 hex characters, what a remote admin and the status topic see. "" when
-// no key is set. 'out' holds MQTTCTRL_KEY_FINGERPRINT_LEN + 1.
+// The key's first 8 hex characters, what a remote admin sees. "" when no key is set. 'out'
+// holds MQTTCTRL_KEY_FINGERPRINT_LEN + 1.
 #define MQTTCTRL_KEY_FINGERPRINT_LEN  8
 
 static inline void mqttCtrlKeyFingerprint(const char* pubkey, char* out) {

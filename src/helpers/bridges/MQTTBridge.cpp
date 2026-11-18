@@ -3235,7 +3235,7 @@ void MQTTBridge::publishStatusToSlot(int index) {
     tx_air_secs, rx_air_secs, recv_errors, internal_heap_free,
     packets_sent, packets_received,
     _prefs->disable_fwd ? "off" : "on",
-    collectConnHealth(), statusCommandKey(), statusCommandKeyVia()
+    collectConnHealth()
   );
 
   if (len > 0) {
@@ -3249,22 +3249,6 @@ void MQTTBridge::publishStatusToSlot(int index) {
       MQTT_DEBUG_PRINTLN("MQTT%d status publish failed", index + 1);
     }
   }
-}
-
-const char* MQTTBridge::statusCommandKey() const {
-#ifdef WITH_MQTT_COMMAND
-  return _cmd_key[0] ? _cmd_key : nullptr;
-#else
-  return nullptr;
-#endif
-}
-
-const char* MQTTBridge::statusCommandKeyVia() const {
-#ifdef WITH_MQTT_COMMAND
-  return _cmd_key[0] ? _cmd_key_via : nullptr;
-#else
-  return nullptr;
-#endif
 }
 
 MQTTConnHealth MQTTBridge::collectConnHealth() const {
@@ -4169,7 +4153,7 @@ bool MQTTBridge::publishStatus() {
     tx_air_secs, rx_air_secs, recv_errors, internal_heap_free,
     packets_sent, packets_received,
     _prefs->disable_fwd ? "off" : "on",
-    collectConnHealth(), statusCommandKey(), statusCommandKeyVia()
+    collectConnHealth()
   );
 
   if (len > 0) {

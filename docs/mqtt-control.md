@@ -98,11 +98,11 @@ key, so a board on a mast needs no climb (lou-19). Only while no key is set: rep
 clearing one stays with serial. And only once the admin password is not the default
 `password`, is at least 8 characters and is not the guest password; the reply says which rule
 failed. Over admin, `get mqtt.cmd.pubkey` shows the key's first 8 hex characters and `set via
-admin` or `set via usb`, and every status message carries the same as `cmd_key` and
-`cmd_key_via`, so an owner can see a key appear. The plane itself never reaches the key: it is
-told apart from a remote admin by an explicit flag on the admin login's path, never by the
-clock, and the deny list refuses it as well. Every password login is throttled: a sender key
-that gives a wrong password 5 times is refused for 10 minutes.
+admin` or `set via usb`. The status message carries neither: it goes to every slot, the public
+brokers among them, where a key's fingerprint would group nodes by owner. The plane itself
+never reaches the key: it is told apart from a remote admin by an explicit flag on the admin
+login's path, never by the clock, and the deny list refuses it as well. Every password login is
+throttled: a sender key that gives a wrong password 5 times is refused for 10 minutes.
 
 ## Which broker
 

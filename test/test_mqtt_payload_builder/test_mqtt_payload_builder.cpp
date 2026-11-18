@@ -93,26 +93,38 @@ TEST(MQTTPayloadBuilder, StatusIncludesRepeatAndEveryRequestedStatistic) {
   EXPECT_EQ(47, stats["packets_received"].as<int>());
 }
 
-TEST(MQTTPayloadBuilder, StatusCarriesTheCommandKeyOnlyWhenSupplied) {
+static bool namesTheCommandKey(JsonVariantConst v) {
+  if (v.is<JsonObjectConst>()) {
+    for (JsonPairConst kv : v.as<JsonObjectConst>()) {
+      std::string name = kv.key().c_str();
+      if (name.find("cmd") != std::string::npos || name.find("key") != std::string::npos) return true;
+      if (namesTheCommandKey(kv.value())) return true;
+    }
+  }
+  return false;
+}
+
+// The status message goes to every slot, the public Observer brokers among them, and a
+// command-key fingerprint there groups nodes by owner. It stays with `get mqtt.cmd.pubkey`.
+TEST(MQTTPayloadBuilder, StatusNeverCarriesTheCommandKey) {
   JsonDocument scratch;
   char buffer[1024];
+  MQTTConnHealth health;
+  health.slots_up = 2;
+  health.slots_total = 3;
+  health.worst_outage_secs = 18432;
+  health.heap_largest = 16116;
+  health.connect_failures = 57;
+  health.slots_breaker = 1;
   int len = MQTTPayloadBuilder::buildStatusMessage(
       scratch, "node", "id", "model", "firmware", "radio", "client", "online",
-      kTimestamp, buffer, sizeof(buffer), -1, -1, -1, -1, -999, -1, -1, -1, -1, -1, -1,
-      "on", MQTTConnHealth(), "1a2b3c4d", "admin");
+      kTimestamp, buffer, sizeof(buffer), 4200, 86400, 3, 6, -112,
+      11, 22, 4, 180864, 31, 47, "on", health);
   ASSERT_GT(len, 0);
   JsonDocument parsed;
   ASSERT_FALSE(deserializeJson(parsed, buffer));
-  EXPECT_STREQ("1a2b3c4d", parsed["cmd_key"].as<const char*>());
-  EXPECT_STREQ("admin", parsed["cmd_key_via"].as<const char*>());
-
-  len = MQTTPayloadBuilder::buildStatusMessage(
-      scratch, "node", "id", "model", "firmware", "radio", "client", "online",
-      kTimestamp, buffer, sizeof(buffer));
-  ASSERT_GT(len, 0);
-  ASSERT_FALSE(deserializeJson(parsed, buffer));
-  EXPECT_FALSE(parsed["cmd_key"].is<JsonVariant>());
-  EXPECT_FALSE(parsed["cmd_key_via"].is<JsonVariant>());
+  ASSERT_TRUE(parsed["stats"].is<JsonObject>());
+  EXPECT_FALSE(namesTheCommandKey(parsed.as<JsonVariantConst>())) << buffer;
 }
 
 TEST(MQTTPayloadBuilder, StatusReportsConnectionHealthWhenSupplied) {
