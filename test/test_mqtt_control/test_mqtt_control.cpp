@@ -2465,6 +2465,79 @@ static const char* MESH_ONLY_SIG =
 static const char* MESH_ONLY_TOPIC =
     "meshcore/mesh/4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4/cmd";
 
+// ---- alive (mcc3, lou-20) -------------------------------------------------------------
+
+TEST(Alive, TheIntervalIsFiveMinutesToADayAndHasNoOff) {
+  uint16_t m = 0;
+  EXPECT_TRUE(mqttCtrlAliveParseMinutes("5", &m));
+  EXPECT_EQ(5, m);
+  EXPECT_TRUE(mqttCtrlAliveParseMinutes("1440", &m));
+  EXPECT_EQ(1440, m);
+  for (const char* bad : { "4", "1441", "0", "off", "", "15 ", "-5", "99999999999" }) {
+    EXPECT_FALSE(mqttCtrlAliveParseMinutes(bad, &m)) << bad;
+  }
+  EXPECT_EQ(15, mqttCtrlAliveMinutes(0));
+  EXPECT_EQ(60, mqttCtrlAliveMinutes(60));
+  // Admitted over the plane, so the owner tunes it remotely; the plane's own settings are not.
+  const char* set = "set alive.interval 30";
+  EXPECT_TRUE(mqttCtrlCommandAllowed(set, strlen(set), false));
+  EXPECT_TRUE(mqttCtrlMeshCommandAllowed(set, strlen(set), false));
+}
+
+TEST(Alive, AFirstConnectWaitsUpToTwoMinutesAReconnectFiveToSixtySeconds) {
+  MqttCtrlAliveClock c = {};
+  const uint32_t t0 = 1000;
+  mqttCtrlAliveLink(&c, false, t0, 0);
+  EXPECT_FALSE(mqttCtrlAliveDue(&c, t0 + 10000000));            // never while down
+  mqttCtrlAliveLink(&c, true, t0, 120000);                      // the top of 0..120 s
+  EXPECT_FALSE(mqttCtrlAliveDue(&c, t0 + 119999));
+  EXPECT_TRUE(mqttCtrlAliveDue(&c, t0 + 120000));
+  mqttCtrlAliveLink(&c, true, t0 + 200000, 0);                  // still up: nothing moves
+  EXPECT_TRUE(mqttCtrlAliveDue(&c, t0 + 120000));
+
+  MqttCtrlAliveClock d = {};
+  mqttCtrlAliveLink(&d, true, t0, 0);
+  EXPECT_TRUE(mqttCtrlAliveDue(&d, t0));                        // the bottom: at once
+  mqttCtrlAliveSent(&d, t0, 900, 0);
+  mqttCtrlAliveLink(&d, false, t0 + 1000, 0);
+  EXPECT_FALSE(mqttCtrlAliveDue(&d, t0 + 10000000));
+  mqttCtrlAliveLink(&d, true, t0 + 2000, 0);                    // reconnect: 5 s at least
+  EXPECT_FALSE(mqttCtrlAliveDue(&d, t0 + 2000 + 4999));
+  EXPECT_TRUE(mqttCtrlAliveDue(&d, t0 + 2000 + 5000));
+  mqttCtrlAliveLink(&d, false, t0 + 3000, 0);
+  mqttCtrlAliveLink(&d, true, t0 + 4000, 55000);                // ... and 60 s at most
+  EXPECT_FALSE(mqttCtrlAliveDue(&d, t0 + 4000 + 59999));
+  EXPECT_TRUE(mqttCtrlAliveDue(&d, t0 + 4000 + 60000));
+}
+
+TEST(Alive, TheNextIsHalfToOneAndAHalfIntervalsAwayAcrossTheWrap) {
+  MqttCtrlAliveClock c = {};
+  const uint32_t t0 = 0xFFFFFFFFu - 100000;                    // millis() about to wrap
+  mqttCtrlAliveLink(&c, true, t0, 0);
+  mqttCtrlAliveSent(&c, t0, 900, 0);                            // U(0.5, 1.5) at its bottom
+  EXPECT_FALSE(mqttCtrlAliveDue(&c, t0 + 449999));
+  EXPECT_TRUE(mqttCtrlAliveDue(&c, t0 + 450000));
+  mqttCtrlAliveSent(&c, t0, 900, 900000);                       // ... and its top
+  EXPECT_FALSE(mqttCtrlAliveDue(&c, t0 + 1349999));
+  EXPECT_TRUE(mqttCtrlAliveDue(&c, t0 + 1350000));
+  mqttCtrlAliveSent(&c, t0, 1440 * 60, 0xFFFFFFFFu);            // a day fits in 32 bits of ms
+  EXPECT_FALSE(mqttCtrlAliveDue(&c, t0 + 1440UL * 30000UL - 1));
+}
+
+TEST(Alive, AChangeBringsTheNextOneCloserButNeverPutsItOff) {
+  MqttCtrlAliveClock c = {};
+  mqttCtrlAliveLink(&c, true, 0, 0);
+  mqttCtrlAliveSent(&c, 0, 900, 0);                             // due at 450 s
+  mqttCtrlAliveNudge(&c, 1000, 0);                              // a key change: 5 s from now
+  EXPECT_FALSE(mqttCtrlAliveDue(&c, 5999));
+  EXPECT_TRUE(mqttCtrlAliveDue(&c, 6000));
+  mqttCtrlAliveNudge(&c, 2000, 55000);                          // 60 s from now is later: kept
+  EXPECT_TRUE(mqttCtrlAliveDue(&c, 6000));
+  MqttCtrlAliveClock down = {};
+  mqttCtrlAliveNudge(&down, 0, 0);                              // down: the reconnect sends one
+  EXPECT_FALSE(mqttCtrlAliveDue(&down, 100000));
+}
+
 TEST(MeshOnly, TheTopicIsNamedMeshWhateverIataThereIs) {
   EXPECT_STREQ("mesh", mqttCtrlMeshRegion(false, NULL));
   EXPECT_STREQ("mesh", mqttCtrlMeshRegion(false, "TST"));

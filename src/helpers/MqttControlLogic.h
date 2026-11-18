@@ -1382,18 +1382,27 @@ static inline size_t mqttCtrlMeshFormatResponse(uint8_t* out, size_t room, uint3
 
 // /mqttcontrol, the plane's settings file. Append-only, as /autoreply is: version 1 was
 // on/off and the counter; 2 added the slot and the command key; 3 two automatic-OTA bytes
-// that releases up to ar-13 kept here; 4 the mesh road's mode; 5 how the key was set. OTA
-// keeps its bytes in /ota now, and they are carried exactly as read, so an image that rolls
-// back to ar-13 still finds what it wrote. A build without the plane neither reads nor
-// writes this file, so it survives untouched.
+// that releases up to ar-13 kept here; 4 the mesh road's mode; 5 how the key was set; 6 the
+// alive interval and the boot counter alive messages are ordered by. OTA keeps its bytes in
+// /ota now, and they are carried exactly as read, so an image that rolls back to ar-13 still
+// finds what it wrote; an older image reads the fields it knows and ignores the rest. A
+// build without the plane neither reads nor writes this file, so it survives untouched.
 //
 //   ver | enabled | counter (4, native order) | slot | key (64 hex + NUL) | ota (2) | mesh | via
+//       | alive minutes (2, 0 = the default) | boot counter (4)
 #define MQTTCTRL_CONFIG_VER_1   1
-#define MQTTCTRL_CONFIG_VER     5
+#define MQTTCTRL_CONFIG_VER     6
 #define MQTTCTRL_CONFIG_KEY_LEN 65
 #define MQTTCTRL_CONFIG_LEN_3   (1 + 1 + 4 + 1 + MQTTCTRL_CONFIG_KEY_LEN + 2)
 #define MQTTCTRL_CONFIG_LEN_4   (MQTTCTRL_CONFIG_LEN_3 + 1)
-#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_4 + 1)
+#define MQTTCTRL_CONFIG_LEN_5   (MQTTCTRL_CONFIG_LEN_4 + 1)
+#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_5 + 2 + 4)
+
+// The alive message (mcc3, IATA-2 design §3): every `alive.interval` minutes, 5..1440,
+// default 15, and no `off`: alive is the owner's only discovery.
+#define MQTTCTRL_ALIVE_MIN_MINUTES      5
+#define MQTTCTRL_ALIVE_MAX_MINUTES      1440
+#define MQTTCTRL_ALIVE_DEFAULT_MINUTES  15
 
 struct MqttCtrlStoredConfig {
   bool enabled;
@@ -1403,6 +1412,8 @@ struct MqttCtrlStoredConfig {
   uint8_t ota_legacy[2];
   uint8_t mesh_mode;                         // MqttCtrlMeshMode; 0, the default, is auto
   uint8_t key_via;                           // MqttCtrlKeyVia; a key older than v5 was USB's
+  uint16_t alive_minutes;                    // 0 is the default
+  uint32_t boot;                             // +1 every boot of an image with the uplink
 };
 
 static inline void mqttCtrlConfigDefaults(MqttCtrlStoredConfig* c) {
@@ -1427,10 +1438,16 @@ static inline bool mqttCtrlConfigDecode(const uint8_t* buf, size_t len, int slot
   }
   if (ver >= 3 && len >= MQTTCTRL_CONFIG_LEN_3) memcpy(c->ota_legacy, &buf[7 + MQTTCTRL_CONFIG_KEY_LEN], 2);
   if (ver >= 4 && len >= MQTTCTRL_CONFIG_LEN_4) c->mesh_mode = buf[MQTTCTRL_CONFIG_LEN_3];
-  if (ver >= 5 && len >= MQTTCTRL_CONFIG_LEN) c->key_via = buf[MQTTCTRL_CONFIG_LEN_4];
+  if (ver >= 5 && len >= MQTTCTRL_CONFIG_LEN_5) c->key_via = buf[MQTTCTRL_CONFIG_LEN_4];
+  if (ver >= 6 && len >= MQTTCTRL_CONFIG_LEN) {
+    memcpy(&c->alive_minutes, &buf[MQTTCTRL_CONFIG_LEN_5], 2);
+    memcpy(&c->boot, &buf[MQTTCTRL_CONFIG_LEN_5 + 2], 4);
+  }
   if (c->mesh_mode > MQTTCTRL_MESH_OFF) c->mesh_mode = MQTTCTRL_MESH_AUTO;
   if (c->key_via > MQTTCTRL_KEY_VIA_ADMIN) c->key_via = MQTTCTRL_KEY_VIA_USB;
   if (c->slot > slot_count) c->slot = 0;
+  if (c->alive_minutes != 0 && (c->alive_minutes < MQTTCTRL_ALIVE_MIN_MINUTES ||
+                                c->alive_minutes > MQTTCTRL_ALIVE_MAX_MINUTES)) c->alive_minutes = 0;
   return true;
 }
 
@@ -1444,5 +1461,59 @@ static inline size_t mqttCtrlConfigEncode(const MqttCtrlStoredConfig* c, uint8_t
   memcpy(&buf[7 + MQTTCTRL_CONFIG_KEY_LEN], c->ota_legacy, 2);
   buf[MQTTCTRL_CONFIG_LEN_3] = c->mesh_mode;
   buf[MQTTCTRL_CONFIG_LEN_4] = c->key_via;
+  memcpy(&buf[MQTTCTRL_CONFIG_LEN_5], &c->alive_minutes, 2);
+  memcpy(&buf[MQTTCTRL_CONFIG_LEN_5 + 2], &c->boot, 4);
   return MQTTCTRL_CONFIG_LEN;
+}
+
+// `set alive.interval <minutes>`.
+static inline bool mqttCtrlAliveParseMinutes(const char* text, uint16_t* out) {
+  uint32_t v = 0;
+  if (text == NULL || out == NULL || !mqttCtrlParseU32(text, strlen(text), &v)) return false;
+  if (v < MQTTCTRL_ALIVE_MIN_MINUTES || v > MQTTCTRL_ALIVE_MAX_MINUTES) return false;
+  *out = (uint16_t)v;
+  return true;
+}
+
+static inline uint16_t mqttCtrlAliveMinutes(uint16_t stored) {
+  return stored == 0 ? MQTTCTRL_ALIVE_DEFAULT_MINUTES : stored;
+}
+
+// When the next alive message goes. A first connect waits 0-120 s and a reconnect 5-60 s
+// (the will cleared the topic when the link died); after each message the next is due in
+// interval x U(0.5, 1.5), drawn afresh, so a fleet that rebooted together drifts apart
+// instead of announcing itself in step. A change worth telling -- the command key, `region
+// home`, the interval -- brings the next one to within 5-60 s. `rnd` is a fresh random draw
+// per call; all times are millis() and survive its wrap.
+struct MqttCtrlAliveClock {
+  uint32_t due_ms;
+  bool up;              // the plane's slot, as last seen
+  bool ever_up;         // since boot
+};
+
+static inline uint32_t mqttCtrlAliveDraw(uint32_t lo_ms, uint32_t hi_ms, uint32_t rnd) {
+  return lo_ms + rnd % (hi_ms - lo_ms + 1);
+}
+
+static inline void mqttCtrlAliveLink(MqttCtrlAliveClock* c, bool up, uint32_t now_ms, uint32_t rnd) {
+  if (up && !c->up) {
+    c->due_ms = now_ms + (c->ever_up ? mqttCtrlAliveDraw(5000, 60000, rnd) : mqttCtrlAliveDraw(0, 120000, rnd));
+    c->ever_up = true;
+  }
+  c->up = up;
+}
+
+static inline void mqttCtrlAliveNudge(MqttCtrlAliveClock* c, uint32_t now_ms, uint32_t rnd) {
+  if (!c->up) return;                      // the reconnect sends one anyway
+  const uint32_t at = now_ms + mqttCtrlAliveDraw(5000, 60000, rnd);
+  if ((int32_t)(at - c->due_ms) < 0) c->due_ms = at;
+}
+
+static inline bool mqttCtrlAliveDue(const MqttCtrlAliveClock* c, uint32_t now_ms) {
+  return c->up && (int32_t)(now_ms - c->due_ms) >= 0;
+}
+
+static inline void mqttCtrlAliveSent(MqttCtrlAliveClock* c, uint32_t now_ms, uint32_t interval_s, uint32_t rnd) {
+  const uint32_t ms = interval_s * 1000UL;
+  c->due_ms = now_ms + ms / 2 + rnd % (ms + 1);
 }

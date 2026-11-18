@@ -209,7 +209,7 @@ TEST(ControlConfig, HowTheKeyWasSetIsVersion5AndAnOlderKeyWasUsbs) {
   c.mesh_mode = MQTTCTRL_MESH_OFF;
   uint8_t buf[MQTTCTRL_CONFIG_LEN];
   ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mqttCtrlConfigEncode(&c, buf, sizeof(buf)));
-  EXPECT_EQ(5, buf[0]);
+  EXPECT_LE(5, buf[0]);
   MqttCtrlStoredConfig back;
   mqttCtrlConfigDefaults(&back);
   ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
@@ -230,6 +230,57 @@ TEST(ControlConfig, HowTheKeyWasSetIsVersion5AndAnOlderKeyWasUsbs) {
   buf[MQTTCTRL_CONFIG_LEN_4] = 9;
   ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
   EXPECT_EQ(MQTTCTRL_KEY_VIA_USB, back.key_via);
+}
+
+TEST(ControlConfig, TheAliveIntervalAndTheBootCounterAreVersion6) {
+  MqttCtrlStoredConfig c;
+  mqttCtrlConfigDefaults(&c);
+  EXPECT_EQ(0, c.alive_minutes);
+  EXPECT_EQ(MQTTCTRL_ALIVE_DEFAULT_MINUTES, mqttCtrlAliveMinutes(c.alive_minutes));
+  strcpy(c.pubkey, KEY);
+  c.key_via = MQTTCTRL_KEY_VIA_ADMIN;
+  c.counter = 77;
+  c.alive_minutes = 60;
+  c.boot = 0x01020304;
+  uint8_t buf[MQTTCTRL_CONFIG_LEN];
+  ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mqttCtrlConfigEncode(&c, buf, sizeof(buf)));
+  EXPECT_EQ(6, buf[0]);
+  EXPECT_EQ((size_t)MQTTCTRL_CONFIG_LEN_5 + 6, (size_t)MQTTCTRL_CONFIG_LEN);
+  MqttCtrlStoredConfig back;
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(60, back.alive_minutes);
+  EXPECT_EQ(0x01020304u, back.boot);
+  EXPECT_EQ(MQTTCTRL_KEY_VIA_ADMIN, back.key_via);
+  EXPECT_EQ(77u, back.counter);
+
+  // What lou-19 reads of it: the first 76 bytes, every field it knows.
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_5, 6, &back));
+  EXPECT_EQ(MQTTCTRL_KEY_VIA_ADMIN, back.key_via);
+  EXPECT_EQ(77u, back.counter);
+  EXPECT_EQ(0, back.alive_minutes);
+
+  // A v5 file, as lou-19 writes it: the default interval, boot counter 0.
+  buf[0] = 5;
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_5, 6, &back));
+  EXPECT_EQ(0, back.alive_minutes);
+  EXPECT_EQ(0u, back.boot);
+  EXPECT_EQ(MQTTCTRL_KEY_VIA_ADMIN, back.key_via);
+
+  // An interval outside 5..1440 reads as the default.
+  buf[0] = 6;
+  for (uint16_t bad : { 4, 1441, 65535 }) {
+    memcpy(&buf[MQTTCTRL_CONFIG_LEN_5], &bad, 2);
+    ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+    EXPECT_EQ(0, back.alive_minutes) << bad;
+  }
+  for (uint16_t good : { 5, 15, 1440 }) {
+    memcpy(&buf[MQTTCTRL_CONFIG_LEN_5], &good, 2);
+    ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+    EXPECT_EQ(good, back.alive_minutes);
+  }
 }
 
 int main(int argc, char** argv) {

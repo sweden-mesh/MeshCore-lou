@@ -72,24 +72,91 @@ void Fork::autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply) {
 // re-subscribe from on every reconnect. Nothing is allocated per message or per
 // reconnect: docs/mbedtls-tls-footprint.md records a measured largest-free-block
 // ratchet on this exact path, so the buffers are members and stay that way.
+//
+// mcc3 (lou-20) needs no region: the node's own mcc/cmd/<key>, the ping on mcc/ping/<key>,
+// alive on mcc/alive/<key> with the slot's will clearing it. The old scheme is kept beside
+// it while the node has a region, on its own per-node topic only: the broadcast topic is
+// gone (IATA-2: no broadcast of any kind).
 void Fork::setupMqttControl(MQTTBridge* bridge) {
-  const char* iata = observerIata();
-  if (iata == NULL || iata[0] == 0) return;      // no region, no control plane
   if (_mqtt_control.slot() == 0) return;         // no slot to listen on
 
   char node_hex[PUB_KEY_SIZE * 2 + 1];
   mesh::Utils::toHex(node_hex, _mesh.self_id.pub_key, PUB_KEY_SIZE);   // the whole key names the node (2026-10-08)
 
-  if (!MqttControl::buildTopic(iata, node_hex, _ctrl_topic, sizeof(_ctrl_topic))) return;
-  if (!MqttControl::buildBroadcastTopic(iata, _ctrl_broadcast, sizeof(_ctrl_broadcast))) return;
-  MqttControl::buildResultTopic(iata, node_hex, _ctrl_result, sizeof(_ctrl_result));
+  if (!mcc3Topic("cmd", node_hex, _mcc3_topic, sizeof(_mcc3_topic))
+      || !mcc3Topic("alive", node_hex, _alive_topic, sizeof(_alive_topic))
+      || !mcc3Topic("ping", node_hex, _ctrl_ping_topic, sizeof(_ctrl_ping_topic))) return;
+  size_t topics = 0;
+  _ctrl_topics[topics++] = _mcc3_topic;
 
-  mqttCtrlBuildTopic(iata, node_hex, "ping", _ctrl_ping_topic, sizeof(_ctrl_ping_topic));
-
-  _ctrl_topics[0] = _ctrl_topic;
-  _ctrl_topics[1] = _ctrl_broadcast;
+  const char* iata = observerIata();
+  if (iata != NULL && iata[0] != 0 && MqttControl::buildTopic(iata, node_hex, _ctrl_topic, sizeof(_ctrl_topic))) {
+    MqttControl::buildResultTopic(iata, node_hex, _ctrl_result, sizeof(_ctrl_result));
+    _ctrl_topics[topics++] = _ctrl_topic;
+  }
   refreshMqttControlV2Key();
-  bridge->setControlSink(&_control_link, _ctrl_topics, 2, _mqtt_control.slot() - 1);
+  refreshMcc3Keys();
+  bridge->setControlWill(_alive_topic);
+  bridge->setControlSink(&_control_link, _ctrl_topics, topics, _mqtt_control.slot() - 1);
+}
+
+// The node's region home for its alive message, "" when none.
+const char* Fork::homeRegion() {
+  const RegionEntry* home = _mesh.region_map.getHomeRegion();
+  if (home == NULL) return "";
+  const char* name = home->name[0] == '#' ? home->name + 1 : home->name;
+  return strcmp(name, "*") == 0 ? "" : name;
+}
+
+// The alive message (IATA-2 design §3): sealed to the owner, retained on mcc/alive/<key>,
+// the owner's only way to find its nodes. None while there is no command key, since there
+// is nobody to seal it to; the will clears it when the link dies.
+void Fork::loopAlive() {
+  if (_alive_topic[0] == 0 || !_mqtt_control.isEnabled()) return;
+  const uint32_t now = millis();
+  const bool up = _mesh.bridge->controlSlotConnected();
+  mqttCtrlAliveLink(&_alive, up, now, _mesh.getRNG()->nextInt(0, 0x7FFFFFFF));
+
+  const char* key = _mqtt_control.pubkey();
+  const char* region = homeRegion();
+  const uint16_t minutes = _mqtt_control.aliveMinutes();
+  if (strcmp(key, _alive_key_for) != 0 || strcmp(region, _alive_region) != 0 || minutes != _alive_minutes) {
+    StrHelper::strncpy(_alive_key_for, key, sizeof(_alive_key_for));
+    StrHelper::strncpy(_alive_region, region, sizeof(_alive_region));
+    _alive_minutes = minutes;
+    mqttCtrlAliveNudge(&_alive, now, _mesh.getRNG()->nextInt(0, 0x7FFFFFFF));
+  }
+  if (!mqttCtrlAliveDue(&_alive, now)) return;
+  mqttCtrlAliveSent(&_alive, now, minutes * 60UL, _mesh.getRNG()->nextInt(0, 0x7FFFFFFF));
+
+  refreshMcc3Keys();
+  const Mcc3Keys* keys = _mqtt_control.mcc3Keys();
+  if (keys == NULL) return;
+
+  const uint32_t clock = _mesh.getRTCClock()->getCurrentTime();
+  const bool clock_set = clock >= MQTTConnectionPolicy::kSyncedClockEpoch;
+  const char* version = strstr(FIRMWARE_VERSION, "lou-");
+  Mcc3Alive a;
+  a.boot = _mqtt_control.boots();
+  a.sequence = ++_alive_sequence;
+  a.uptime = _mesh._ms->getMillis() / 1000;
+  a.clock = clock_set ? clock : 0;
+  a.last_counter = _mqtt_control.counter();
+  a.interval = minutes * 60UL;
+  a.flags = (_ctrl_topic[0] ? MCC3_ALIVE_OLD_SCHEME : 0) | (FORK_UPLINK ? MCC3_ALIVE_UPLINK : 0)
+            | (FORK_AUTO_REPLY ? MCC3_ALIVE_AUTO_REPLY : 0) | (clock_set ? MCC3_ALIVE_CLOCK_SET : 0);
+  a.mesh = mcc3AliveMeshMode(_mqtt_control.meshMode());
+  for (int i = 0; i < 4; i++) a.fingerprint[i] = (uint8_t)mqttCtrlHexByte(key[2 * i], key[2 * i + 1]);
+  a.via = _mqtt_control.keyVia();
+  a.version = version != NULL ? version : FIRMWARE_VERSION;
+  a.region = region;
+  a.name = _mesh._prefs.node_name;
+
+  uint8_t nonce[MCC3_NONCE_LEN];
+  _mesh.getRNG()->random(nonce, sizeof(nonce));
+  char payload[MCC3_ALIVE_B64 + 1];
+  size_t n = mcc3BuildAlive(keys->alive, nonce, &a, payload, sizeof(payload));
+  if (n > 0) _mesh.bridge->publishControlRetained(_alive_topic, payload, n, MQTTCTRL_RESULT_QOS);
 }
 
 // `mqtt.cmd ping`: the broker echoes a ping on our own /ping as a pong on our own /cmd,
@@ -197,8 +264,10 @@ void Fork::describeMqttControl(char* reply) {
 // stall the network stack's own thread.
 void Fork::loopMqttControl() {
   refreshMqttControlV2Key();
+  refreshMcc3Keys();
   const bool up = _mesh.bridge != NULL && _mesh.bridge->controlSlotConnected();
   _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
+  if (_mesh.bridge != NULL) loopAlive();
   if (!_mqtt_control.hasPending()) return;
 
   // A staged command is always resolved -- run or discarded -- never left in the
@@ -284,7 +353,25 @@ void Fork::refreshMqttControlV2Key() {
 
 void Fork::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                       const char* reply) {
-  if (_mesh.bridge == NULL || _ctrl_result[0] == 0) return;
+  if (_mesh.bridge == NULL) return;
+
+  // mcc3: every outcome the key vouched for, sealed under a fresh nonce, on the reply topic
+  // the command named. Code, command and reply are the owner's alone.
+  if (outcome.mcc3) {
+    const Mcc3Keys* keys = _mqtt_control.mcc3Keys();
+    char topic[MQTTCTRL_MAX_TOPIC + 1];
+    if (keys == NULL || !mcc3ResultTopic(outcome.rid, topic, sizeof(topic))) return;
+    const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
+    uint8_t nonce[MCC3_NONCE_LEN];
+    _mesh.getRNG()->random(nonce, sizeof(nonce));
+    static char sealed[MCC3_MAX_RESULT];   // loop task only; too big for its stack
+    size_t n = mcc3BuildResult(keys->cmd, nonce, outcome.counter, (int)result,
+                               now >= MQTTConnectionPolicy::kSyncedClockEpoch ? now : 0,
+                               outcome.command, reply, sealed, sizeof(sealed));
+    if (n > 0) _mesh.bridge->publishControlResult(topic, sealed, n, MQTTCTRL_RESULT_QOS);
+    return;
+  }
+  if (_ctrl_result[0] == 0) return;
 
   // A sealed command that ran is answered sealed (r3): code, command and reply readable
   // only by the command key's holder. Its tag stands where r2's signature does.
@@ -401,6 +488,10 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
 // as a build without the road is.
 bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                          const uint8_t* data, size_t len) {
+  if (mcc3MeshIsRequest(data, len)) {
+    onMcc3MeshCommand(packet, secret, sender, data, len);
+    return true;
+  }
   if (!mqttCtrlMeshIsRequest(data, len)) return false;
   if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) return true;
 
@@ -426,14 +517,69 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
   if (result == MQTTCTRL_OK) _mesh_ok++;
   else _mesh_refused++;
   MESH_DEBUG_PRINTLN("MqttControl: mesh result %d, reply '%s'", (uint32_t)result, reply);
-  if (answer) answerMeshCommand(packet, secret, sender, req.tag, req.env.counter, result, reply);
+  if (answer) answerMeshCommand(packet, secret, sender, req.tag, req.env.counter, result, reply, false);
   return true;
+}
+
+// The mcc3 mesh road (0xC2, lou-20): the same road, the request encrypted to this node and
+// signed inside, the response sealed to the owner, so the companion carrying either reads
+// neither. Every refusal before the signature and the answer budget is silent.
+void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
+                             const uint8_t* data, size_t len) {
+  if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) return;
+  refreshMcc3Keys();
+  mesh::Identity owner;
+  const Mcc3Keys* keys = mesh::Utils::fromHex(owner.pub_key, PUB_KEY_SIZE, _mqtt_control.pubkey())
+                           ? _mqtt_control.mcc3Keys() : NULL;
+  Mcc3Command cmd;
+  MqttCtrlResult result = mcc3MeshOpen(keys, _mesh.self_id.pub_key, _mqtt_control.counter(), data, len,
+                                       [](void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t n) {
+                                         return ((const mesh::Identity*)ctx)->verify(sig, msg, (int)n);
+                                       }, &owner, &cmd);
+  if (result != MQTTCTRL_OK) {
+    _mesh_refused++;
+    return;
+  }
+
+  char reply[MQTTCTRL_MAX_REPLY];
+  bool answer = false;
+  const bool open = mqttCtrlMeshRoadOpen(FORK_UPLINK, _mqtt_control.meshMode(), _mesh_down_since, millis());
+  result = _mqtt_control.meshCommand(cmd, _mesh.getRTCClock()->getCurrentTime(), open, &_control_link,
+                                     reply, &answer);
+  if (result == MQTTCTRL_OK) _mesh_ok++;
+  else _mesh_refused++;
+  MESH_DEBUG_PRINTLN("MqttControl: mcc3 mesh result %d, reply '%s'", (uint32_t)result, reply);
+  if (answer) answerMeshCommand(packet, secret, sender, cmd.tag, cmd.counter, result, reply, true);
+}
+
+// The mcc3 keys (IATA-2): X25519 of this node's identity and the command key, through HKDF
+// with this node's key. Derived when the key they were made from is not the one now set --
+// at boot, after `set mqtt.cmd.pubkey` -- and never otherwise.
+void Fork::refreshMcc3Keys() {
+  const char* owner_hex = _mqtt_control.pubkey();
+  if (strcmp(owner_hex, _mqtt_control.mcc3KeyFor()) == 0) return;
+  Mcc3Keys keys;
+  memset(&keys, 0, sizeof(keys));
+  uint8_t owner[PUB_KEY_SIZE];
+  if (mqttCtrlOwnerReady(owner_hex) == MQTTCTRL_OK && mesh::Utils::fromHex(owner, PUB_KEY_SIZE, owner_hex)) {
+    uint8_t shared[PUB_KEY_SIZE];
+    char node_hex[PUB_KEY_SIZE * 2 + 1];
+    _mesh.self_id.calcSharedSecret(shared, owner);
+    mesh::Utils::toHex(node_hex, _mesh.self_id.pub_key, PUB_KEY_SIZE);
+    mcc3DeriveKeys(shared, node_hex, &keys);
+    memset(shared, 0, sizeof(shared));
+    _mqtt_control.setMcc3Keys(keys, owner_hex, _mesh.self_id.pub_key);
+  } else {
+    _mqtt_control.setMcc3Keys(keys, "", _mesh.self_id.pub_key);
+  }
+  memset(&keys, 0, sizeof(keys));
 }
 
 // Back the way upstream answers a login (chooseReplyRoute): a flooded request gets its path
 // returned with the answer, a direct one goes back along a stored path, or floods.
 void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
-                             uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply) {
+                             uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply,
+                             bool sealed) {
   const uint32_t delay_millis = 300;   // upstream's SERVER_RESPONSE_DELAY
   ClientInfo* client = _mesh.acl.getClient(sender.pub_key, PUB_KEY_SIZE);
   bool have_out_path = client != NULL && client->out_path_len != OUT_PATH_UNKNOWN;
@@ -442,8 +588,16 @@ void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
 
   uint8_t data[MQTTCTRL_MESH_RESP_HEAD + MQTTCTRL_MAX_REPLY];
   size_t room = min(mqttCtrlMeshResponseRoom(path_return, packet->getPathByteLen()), sizeof(data));
-  size_t n = mqttCtrlMeshFormatResponse(data, room, tag, _mesh.getRTCClock()->getCurrentTime(),
-                                        counter, (int)result, reply);
+  const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
+  size_t n;
+  if (sealed) {
+    uint8_t nonce[MCC3_NONCE_LEN];
+    _mesh.getRNG()->random(nonce, sizeof(nonce));
+    n = mcc3MeshBuildResponse(_mqtt_control.mcc3Keys()->cmd, nonce, tag, counter, (int)result,
+                              now >= MQTTConnectionPolicy::kSyncedClockEpoch ? now : 0, reply, room, data);
+  } else {
+    n = mqttCtrlMeshFormatResponse(data, room, tag, now, counter, (int)result, reply);
+  }
   if (n == 0) return;
 
   if (path_return) {

@@ -6,10 +6,10 @@
 #include <helpers/ForkText.h>
 #include <helpers/IdentityStore.h>
 #include <helpers/MqttControlLogic.h>
+#include <helpers/MqttControlV3.h>
 #include <helpers/TxtDataHelpers.h>
 #ifdef WITH_MQTT_BRIDGE
   #include <helpers/MQTTPresets.h>
-  #include <helpers/MqttControlV2.h>
   #define MQTTCTRL_SLOTS  RUNTIME_MQTT_SLOTS
 #else
   // Mesh only: no slot is listened on, and the one a file names is kept as it was written.
@@ -57,10 +57,12 @@ struct MqttCommandRunner {
 struct MqttCtrlOutcome {
   bool authentic;                            // signature verified; safe to publish
   bool v2;                                   // came sealed (v2), so is answered sealed (r3)
+  bool mcc3;                                 // came on mcc/cmd, so is answered sealed on mcc/r/<rid>
   uint32_t counter;                          // the request's counter
+  uint8_t rid[MCC3_RID_LEN];                 // mcc3: the reply id the command named
   char command[MQTTCTRL_MAX_COMMAND + 1];    // echoed back, NUL-terminated
 
-  MqttCtrlOutcome() : authentic(false), v2(false), counter(0) { command[0] = 0; }
+  MqttCtrlOutcome() : authentic(false), v2(false), mcc3(false), counter(0) { command[0] = 0; }
 };
 
 class MqttControl {
@@ -74,6 +76,14 @@ class MqttControl {
   // keeps its settings in /ota now; the bytes are carried as read, so an image that
   // rolls back to one of those releases still finds what it wrote.
   uint8_t _ota_legacy[2];
+  uint16_t _alive_minutes;    // 0 = the default
+  uint32_t _boot;             // boots of an image with the uplink, persisted
+  // mcc3 (IATA-2): the node's three keys with its command key, derived once per key and
+  // kept in RAM only, on every image -- the mesh road needs them too.
+  Mcc3Keys _mcc3;
+  bool _mcc3_ready;
+  char _mcc3_key_for[PUB_KEY_SIZE * 2 + 1];    // the command key they were derived from
+  uint8_t _node_key[PUB_KEY_SIZE];
 #ifdef WITH_MQTT_BRIDGE
   MqttControlStaged _staged;
   // The v2 key for this node's own command topic (TODO 17a): derived once per command
@@ -107,6 +117,18 @@ public:
   uint8_t keyVia() const { return _key_via; }
   uint8_t meshMode() const { return _mesh_mode; }
   void setMeshMode(uint8_t mode) { _mesh_mode = mode; save(); }
+  uint16_t aliveMinutes() const { return mqttCtrlAliveMinutes(_alive_minutes); }
+  uint32_t boots() const { return _boot; }
+
+  const char* mcc3KeyFor() const { return _mcc3_key_for; }
+  void setMcc3Keys(const Mcc3Keys& keys, const char* key_for, const uint8_t* node_key) {
+    _mcc3 = keys;
+    StrHelper::strncpy(_mcc3_key_for, key_for, sizeof(_mcc3_key_for));
+    memcpy(_node_key, node_key, PUB_KEY_SIZE);
+    _mcc3_ready = key_for[0] != 0;
+  }
+  // NULL while there is no command key to seal to.
+  const Mcc3Keys* mcc3Keys() const { return _mcc3_ready ? &_mcc3 : NULL; }
 
   // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
   static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);
@@ -122,7 +144,6 @@ public:
   }
   const uint8_t* v2Key() const { return _v2_key; }
 
-  static bool buildBroadcastTopic(const char* iata, char* out, size_t out_size);
   static bool buildResultTopic(const char* iata, const char* node_hex,
                                char* out, size_t out_size);
 
@@ -163,6 +184,9 @@ public:
   // request can make the node transmit by sending it again.
   MqttCtrlResult meshCommand(const mesh::Identity& owner, const char* topic,
                              const MqttCtrlMeshRequest& req, uint32_t now, bool open,
+                             MqttCommandRunner* runner, char* reply, bool* answer);
+  // The same for an mcc3 request (0xC2), which mcc3MeshOpen has already opened and verified.
+  MqttCtrlResult meshCommand(const Mcc3Command& cmd, uint32_t now, bool open,
                              MqttCommandRunner* runner, char* reply, bool* answer);
 
   // 'slot_count' bounds 'set mqtt.cmd.slot'; see mqttCtrlParseSlot. 'caller' says who may

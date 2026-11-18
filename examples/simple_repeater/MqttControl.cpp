@@ -41,6 +41,7 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 // MqttControlLogic.h is the independent second guard on the same door.
 MqttControl::MqttControl()
   : _fs(NULL), _enabled(false), _counter(0), _slot(0), _key_via(MQTTCTRL_KEY_VIA_USB),
+    _alive_minutes(0), _boot(0), _mcc3_ready(false),
 #ifdef WITH_MQTT_BRIDGE
     _v2_ready(false),
 #endif
@@ -51,6 +52,8 @@ MqttControl::MqttControl()
   _pubkey[0] = 0;
   _ota_legacy[0] = 0;
   _ota_legacy[1] = OTA_AUTO_CHECK_HOURS_DEFAULT;
+  _mcc3_key_for[0] = 0;
+  memset(_node_key, 0, sizeof(_node_key));
 #ifdef WITH_MQTT_BRIDGE
   _v2_key_for[0] = 0;
   _v2_topic[0] = 0;
@@ -64,6 +67,12 @@ MqttControl::MqttControl()
 void MqttControl::begin(FILESYSTEM* fs) {
   _fs = fs;
   load();
+#ifdef WITH_MQTT_BRIDGE
+  // Alive messages are ordered by (boot, sequence), so the boot counter moves before any
+  // can go out; a message from an earlier boot then reads as older whatever its sequence.
+  _boot++;
+  save();
+#endif
 }
 
 void MqttControl::load() {
@@ -86,6 +95,8 @@ void MqttControl::load() {
   memcpy(_ota_legacy, c.ota_legacy, sizeof(_ota_legacy));
   _mesh_mode = c.mesh_mode;
   _key_via = c.key_via;
+  _alive_minutes = c.alive_minutes;
+  _boot = c.boot;
 }
 
 void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
@@ -96,6 +107,8 @@ void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
   memcpy(c->ota_legacy, _ota_legacy, sizeof(c->ota_legacy));
   c->mesh_mode = _mesh_mode;
   c->key_via = _key_via;
+  c->alive_minutes = _alive_minutes;
+  c->boot = _boot;
 }
 
 void MqttControl::save() {
@@ -122,10 +135,6 @@ bool MqttControl::buildTopic(const char* iata, const char* node_hex,
 
 #ifdef WITH_MQTT_BRIDGE
 
-bool MqttControl::buildBroadcastTopic(const char* iata, char* out, size_t out_size) {
-  return buildOne(iata, "all", "cmd", out, out_size);
-}
-
 bool MqttControl::buildResultTopic(const char* iata, const char* node_hex,
                                    char* out, size_t out_size) {
   return buildOne(iata, node_hex, "res", out, out_size);
@@ -151,15 +160,36 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
                                   MqttCommandRunner* runner, char* reply, size_t reply_size,
                                   MqttCtrlOutcome* out) {
   if (reply != NULL && reply_size > 0) reply[0] = 0;
-  if (out != NULL) { out->authentic = false; out->v2 = false; out->counter = 0; out->command[0] = 0; }
+  if (out != NULL) {
+    out->authentic = false; out->v2 = false; out->mcc3 = false; out->counter = 0; out->command[0] = 0;
+  }
   if (!_staged.pending) return MQTTCTRL_OK;
 
   MqttCtrlResult result = MQTTCTRL_OK;
   MqttCtrlEnvelope env;
   char v2_text[MQTTV2_CMD_PAD_LARGE + 1];
+  Mcc3Command mcc3;
 
   do {
-    if (mqttV2IsEnvelope(_staged.payload, _staged.payload_len)) {
+    if (mcc3IsCommandTopic(_staged.topic)) {
+      // mcc3: the AEAD under K_cmd, then the owner's signature inside it; the topic is
+      // this node's own, the only mcc/ topic it subscribes to.
+      if (!_mcc3_ready) { result = MQTTCTRL_ERR_NO_OWNER_KEY; break; }
+      result = mcc3OpenCommand(&_mcc3, _node_key, _staged.payload, _staged.payload_len,
+                               [](void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len) {
+                                 return ((const mesh::Identity*)ctx)->verify(sig, msg, (int)len);
+                               }, (void*)&owner, &mcc3);
+      if (result != MQTTCTRL_OK) break;
+      memset(&env, 0, sizeof(env));
+      env.counter = mcc3.counter;
+      env.expiry = mcc3.expiry;
+      env.command = mcc3.command;
+      env.command_len = mcc3.command_len;
+      if (out != NULL) {
+        out->mcc3 = true;
+        memcpy(out->rid, mcc3.rid, MCC3_RID_LEN);
+      }
+    } else if (mqttV2IsEnvelope(_staged.payload, _staged.payload_len)) {
       // Sealed (v2): only on this node's own topic -- a broadcast stays v1 -- and the
       // AEAD opened before anything else is believed. The tag proves the holder of the
       // command key, which is what the v1 signature check proves below.
@@ -267,6 +297,22 @@ MqttCtrlResult MqttControl::meshCommand(const mesh::Identity& owner, const char*
   return execute(req.env, topic, true, now, runner, reply, NULL);
 }
 
+MqttCtrlResult MqttControl::meshCommand(const Mcc3Command& cmd, uint32_t now, bool open,
+                                        MqttCommandRunner* runner, char* reply, bool* answer) {
+  reply[0] = 0;
+  *answer = false;
+  if (!_mesh_answers.allow(now)) return MQTTCTRL_ERR_RATE_LIMITED;
+  *answer = true;
+  if (!open) return MQTTCTRL_ERR_MESH_CLOSED;
+  MqttCtrlEnvelope env;
+  memset(&env, 0, sizeof(env));
+  env.counter = cmd.counter;
+  env.expiry = cmd.expiry;
+  env.command = cmd.command;
+  env.command_len = cmd.command_len;
+  return execute(env, "", true, now, runner, reply, NULL);
+}
+
 bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
                                 const char* guest_password, int slot_count,
                                 const char* command, char* reply) {
@@ -335,6 +381,24 @@ bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
   if (strcmp(command, "get mqtt.cmd.slot") == 0) {
     if (_slot == 0) strcpy(reply, "> 0 (none)");
     else sprintf(reply, "> %d", _slot);
+    return true;
+  }
+
+  if (memcmp(command, "set alive.interval ", 19) == 0) {
+    uint16_t minutes;
+    if (!mqttCtrlAliveParseMinutes(&command[19], &minutes)) {
+      sprintf(reply, "Err - use: set alive.interval %d-%d (minutes)", MQTTCTRL_ALIVE_MIN_MINUTES,
+              MQTTCTRL_ALIVE_MAX_MINUTES);
+      return true;
+    }
+    _alive_minutes = minutes;
+    save();
+    strcpy(reply, "OK");
+    return true;
+  }
+
+  if (strcmp(command, "get alive.interval") == 0) {
+    sprintf(reply, "> %d min", aliveMinutes());
     return true;
   }
 #endif

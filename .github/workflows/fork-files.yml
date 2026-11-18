@@ -21,3 +21,5 @@ jobs:
         run: |
           git fetch --no-tags origin fork/observer fork/core
           bash scripts/fork-check.sh origin/fork/observer origin/fork/core
+      - name: The mcc3 vectors are mccontrol-spec's, and the suite's header is made from them
+        run: python3 scripts/mcc3-vectors.py --check
