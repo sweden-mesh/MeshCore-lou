@@ -438,6 +438,9 @@ TEST(Mcc3Vectors, EveryAliveIsRebuiltAndOpens) {
     EXPECT_EQ(v.opened_region, o.region);
     EXPECT_EQ(v.opened_name, o.name);
   }
+  // Bit 4 says the node relays; only the third vector's node does.
+  EXPECT_EQ(0, MCC3_ALIVE[0].flags & MCC3_ALIVE_RELAY);
+  EXPECT_EQ(MCC3_ALIVE_RELAY, MCC3_ALIVE[2].flags & MCC3_ALIVE_RELAY);
 }
 
 TEST(Mcc3Vectors, EveryRefusalGivesItsOutcome) {

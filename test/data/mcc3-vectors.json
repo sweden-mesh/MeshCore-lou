@@ -436,6 +436,7 @@
     "mesh": 2,
     "fingerprint": "ED54A59F",
     "via": 0,
+    "relay": false,
     "version": "lou-20",
     "region": "se-jkp",
     "name": "SE-JKG-LOUTEST"
@@ -472,11 +473,49 @@
     "mesh": 0,
     "fingerprint": "ED54A59F",
     "via": 1,
+    "relay": false,
     "version": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
     "region": "",
     "name": "SE-JKG-ÖÖÖÖÖÖÖÖÖÖÖÖ"
    },
    "payload": "QUFCQ0RFRkdISUpLTOengD72fWbGUPgG8WbNEOd2rX79pJnEKLnDTM6kQVAucvtrlKtU6gs_XRaq1Ff5Hxh3RlGaQJ61s-IHn-tAAqTYd6XbFIdb9K5cEmqlTDHeg2cxidMzXB0hr7k7vp3t9G8karPHrIRu3mfYw-0QsvsV-EP2OdG8L4VlkdrQpvXRFqS6AQ5g1NTZ_AGIcBUy01qDP0ODsvt-JNJIiejlCvCJT16LhYCc73RrudRmxo93"
+  },
+  {
+   "name": "relaying on: flags bit 4",
+   "fields": {
+    "boot": 3,
+    "sequence": 2,
+    "uptime": 3600,
+    "clock": 1795000000,
+    "last_counter": 7,
+    "interval": 900,
+    "flags": 27,
+    "mesh": 2,
+    "fingerprint": "ED54A59F",
+    "via": 0,
+    "version": "lou-20",
+    "region": "se-jkp",
+    "name": "SE-JKG-LOUTEST"
+   },
+   "nonce": "42434445464748494A4B4C4D",
+   "topic": "mcc/alive/4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4",
+   "opened": {
+    "boot": 3,
+    "sequence": 2,
+    "uptime": 3600,
+    "clock": 1795000000,
+    "last_counter": 7,
+    "interval": 900,
+    "flags": 27,
+    "mesh": 2,
+    "fingerprint": "ED54A59F",
+    "via": 0,
+    "relay": true,
+    "version": "lou-20",
+    "region": "se-jkp",
+    "name": "SE-JKG-LOUTEST"
+   },
+   "payload": "QUJDREVGR0hJSktMTcKsgZgRwCG-jnmCHsNnrGFJCZCDxwZD2DVED2U1jdau0qGsEspyB_l84v4hY0VC-JgaFLxOrv2pVKeWFbl1K9IlA2-aT_WICCmLsLs_iTU3Ii3qc1nFTabPBfsAVW22JGZafnc-QkfZcUntIIotQtREI5bAXY_qvEYyW1Dolovk90B9e38Mnyg55P1ikIKJyt-7_96uc5d0GbRVomR5hATDB90zdMcTMDe3tFQ7gv7H"
   }
  ],
  "refusals": [

@@ -14,7 +14,7 @@ import pathlib
 import sys
 
 SPEC_TAG = "v0.3.0"
-SPEC_SHA256 = "9cc930feae8919fbe3258faa28c19d3a890b5c857027511ba8802d17c493efd3"
+SPEC_SHA256 = "1b726fcb2a00ed42a3b93f676ef1cc10d1f56a1b3653513ee23613d91ddd86e7"
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "test/data/mcc3-vectors.json"
