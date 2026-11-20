@@ -1,7 +1,7 @@
 // The command plane's side of the repeater: its topics on the bridge, the queue a
 // signed command waits in, the result it publishes, `mqtt.cmd ping`, and the mesh road.
 // Compiled only with WITH_MQTT_COMMAND; without the Observer bridge only the mesh road
-// is (mesh only). MyMesh reaches it through Fork.
+// is (mesh only). The relay is in MqttRelayHooks.cpp. MyMesh reaches it through Fork.
 #include "MyMesh.h"
 
 #ifdef WITH_MQTT_COMMAND
@@ -144,7 +144,8 @@ void Fork::loopAlive() {
   a.last_counter = _mqtt_control.counter();
   a.interval = minutes * 60UL;
   a.flags = (_ctrl_topic[0] ? MCC3_ALIVE_OLD_SCHEME : 0) | (FORK_UPLINK ? MCC3_ALIVE_UPLINK : 0)
-            | (FORK_AUTO_REPLY ? MCC3_ALIVE_AUTO_REPLY : 0) | (clock_set ? MCC3_ALIVE_CLOCK_SET : 0);
+            | (FORK_AUTO_REPLY ? MCC3_ALIVE_AUTO_REPLY : 0) | (clock_set ? MCC3_ALIVE_CLOCK_SET : 0)
+            | (_mqtt_control.relayMode() == MQTTCTRL_RELAY_OWN ? MCC3_ALIVE_RELAY : 0);
   a.mesh = mcc3AliveMeshMode(_mqtt_control.meshMode());
   for (int i = 0; i < 4; i++) a.fingerprint[i] = (uint8_t)mqttCtrlHexByte(key[2 * i], key[2 * i + 1]);
   a.via = _mqtt_control.keyVia();
@@ -268,6 +269,7 @@ void Fork::loopMqttControl() {
   const bool up = _mesh.bridge != NULL && _mesh.bridge->controlSlotConnected();
   _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
   if (_mesh.bridge != NULL) loopAlive();
+  loopRelay();
   if (!_mqtt_control.hasPending()) return;
 
   // A staged command is always resolved -- run or discarded -- never left in the
@@ -290,6 +292,11 @@ void Fork::loopMqttControl() {
     _ctrl_unverified++;
     _ctrl_last_unverified = MQTTCTRL_ERR_NO_OWNER_KEY;
     MESH_DEBUG_PRINTLN("MqttControl: mqtt.cmd.pubkey unreadable, command discarded");
+    return;
+  }
+
+  if (_mqtt_control.forwardPending()) {
+    relayForward();
     return;
   }
 
@@ -470,6 +477,20 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
     strcpy(reply, "OK");
     return true;
   }
+  if (strcmp(command, "get mqtt.relay") == 0) {
+    describeRelay(reply);
+    return true;
+  }
+  if (memcmp(command, "set mqtt.relay ", 15) == 0) {
+    uint8_t mode;
+    if (!mqttCtrlRelayParseMode(&command[15], &mode)) {
+      strcpy(reply, "Err - use: set mqtt.relay off|own");
+      return true;
+    }
+    _mqtt_control.setRelayMode(mode);
+    strcpy(reply, "OK");
+    return true;
+  }
   if (mqttCtrlTouchesSlot(command, _mqtt_control.slot())) {
     sprintf(reply, "Err - slot %d is the command plane's: move it with set mqtt.cmd.slot first (not over the plane)",
             _mqtt_control.slot());
@@ -517,7 +538,7 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
   if (result == MQTTCTRL_OK) _mesh_ok++;
   else _mesh_refused++;
   MESH_DEBUG_PRINTLN("MqttControl: mesh result %d, reply '%s'", (uint32_t)result, reply);
-  if (answer) answerMeshCommand(packet, secret, sender, req.tag, req.env.counter, result, reply, false);
+  if (answer) answerMeshCommand(packet, secret, sender, req.tag, req.env.counter, result, reply, false, false);
   return true;
 }
 
@@ -549,7 +570,10 @@ void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   if (result == MQTTCTRL_OK) _mesh_ok++;
   else _mesh_refused++;
   MESH_DEBUG_PRINTLN("MqttControl: mcc3 mesh result %d, reply '%s'", (uint32_t)result, reply);
-  if (answer) answerMeshCommand(packet, secret, sender, cmd.tag, cmd.counter, result, reply, true);
+  if (answer) {
+    answerMeshCommand(packet, secret, sender, cmd.tag, cmd.counter, result, reply, true,
+                      (cmd.flags & MCC3_MESH_FLAG_ZERO_HOP) != 0);
+  }
 }
 
 // The mcc3 keys (IATA-2): X25519 of this node's identity and the command key, through HKDF
@@ -576,15 +600,17 @@ void Fork::refreshMcc3Keys() {
 }
 
 // Back the way upstream answers a login (chooseReplyRoute): a flooded request gets its path
-// returned with the answer, a direct one goes back along a stored path, or floods.
+// returned with the answer, a direct one goes back along a stored path, or floods. With
+// `zero_hop`, which the sender asks for when it heard this node directly, the answer is one
+// transmission with no path, however the request came.
 void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                              uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply,
-                             bool sealed) {
+                             bool sealed, bool zero_hop) {
   const uint32_t delay_millis = 300;   // upstream's SERVER_RESPONSE_DELAY
   ClientInfo* client = _mesh.acl.getClient(sender.pub_key, PUB_KEY_SIZE);
   bool have_out_path = client != NULL && client->out_path_len != OUT_PATH_UNKNOWN;
   auto route = mesh::chooseReplyRoute(packet->isRouteFlood(), false, have_out_path);
-  const bool path_return = route == mesh::REPLY_ROUTE_PATH_RETURN;
+  const bool path_return = !zero_hop && route == mesh::REPLY_ROUTE_PATH_RETURN;
 
   uint8_t data[MQTTCTRL_MESH_RESP_HEAD + MQTTCTRL_MAX_REPLY];
   size_t room = min(mqttCtrlMeshResponseRoom(path_return, packet->getPathByteLen()), sizeof(data));
@@ -608,7 +634,9 @@ void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   }
   mesh::Packet* out = _mesh.createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, data, n);
   if (out == NULL) return;
-  if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
+  if (zero_hop) {
+    _mesh.sendZeroHop(out, delay_millis);
+  } else if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
     _mesh.sendDirect(out, client->out_path, client->out_path_len, delay_millis);
   } else {
     _mesh.sendFloodReply(out, delay_millis, packet->getPathHashSize());

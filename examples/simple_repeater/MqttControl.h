@@ -96,6 +96,7 @@ class MqttControl {
   MqttCtrlBudget _commands;
   MqttCtrlBudget _transmits;
   uint8_t _mesh_mode;         // MqttCtrlMeshMode
+  uint8_t _relay_mode;        // MqttCtrlRelayMode
   MqttCtrlMeshBudget _mesh_answers;
 
   void load();
@@ -117,6 +118,8 @@ public:
   uint8_t keyVia() const { return _key_via; }
   uint8_t meshMode() const { return _mesh_mode; }
   void setMeshMode(uint8_t mode) { _mesh_mode = mode; save(); }
+  uint8_t relayMode() const { return _relay_mode; }
+  void setRelayMode(uint8_t mode) { _relay_mode = mode; save(); }
   uint16_t aliveMinutes() const { return mqttCtrlAliveMinutes(_alive_minutes); }
   uint32_t boots() const { return _boot; }
 
@@ -157,6 +160,15 @@ public:
   // clears only when it is disposed of, so every path that declines to run one
   // must call this or the slot latches and drops everything after it.
   void discard() { _staged.pending = false; }
+
+  // A forward for the relay shares this node's mcc/cmd topic with its commands and is told
+  // from one by its kind byte. takeForward opens the staged one under K_fwd and resolves
+  // the slot whatever the verdict; nothing it holds reaches the CLI.
+  bool forwardPending() const {
+    return _staged.pending && mcc3IsCommandTopic(_staged.topic)
+           && mcc3PayloadKind(_staged.payload, _staged.payload_len) == MCC3_KIND_FORWARD;
+  }
+  MqttCtrlResult takeForward(Mcc3Forward* out);
 
   // Called on the loop task. Verifies the staged command against 'owner' and runs
   // it through 'mesh' if it passes, writing a human-readable outcome into 'reply'

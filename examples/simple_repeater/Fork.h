@@ -101,7 +101,7 @@ class Fork {
                          const uint8_t* data, size_t len);
   void answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                          uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply,
-                         bool sealed);
+                         bool sealed, bool zero_hop);
 #endif
 #if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
   // Owned here so the bridge's subscription list outlives every reconnect: mcc/cmd/<key>,
@@ -125,6 +125,26 @@ class Fork {
   uint32_t _ctrl_unverified = 0;               // commands refused before the key vouched for them
   uint8_t _ctrl_last_unverified = 0;           // ... and the last one's MqttCtrlResult
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
+  // The relay (MqttRelayHooks.cpp): one forward at a time waits for its target's answer,
+  // and the target is a peer of this node only while it does.
+  Mcc3Relay _relay;
+  struct RelayWait {
+    mesh::Identity target;
+    uint8_t secret[PUB_KEY_SIZE];
+    uint8_t rid[MCC3_RID_LEN];               // where the result goes
+    uint32_t tag;                            // what the answer must begin with
+    uint32_t counter;
+    uint8_t sent;                            // MCC3_SENT_DIRECT or MCC3_SENT_FLOOD
+    unsigned long since;                     // millis() the request went out
+  } _relay_wait;
+
+  void relayForward();
+  bool sendRelayRequest(const Mcc3Forward& fwd);
+  void publishRelayResult(const uint8_t* rid, Mcc3ForwardResult& result);
+  void onRelayResponse(mesh::Packet* packet, uint8_t path_len, const uint8_t* path,
+                       const uint8_t* data, size_t len);
+  void loopRelay();
+  void describeRelay(char* reply);
 
   void setupMqttControl(MQTTBridge* bridge);
   void autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply);
@@ -174,6 +194,26 @@ public:
 #else
   int searchChannelsByHash(const uint8_t*, mesh::GroupChannel[], int) { return 0; }
   void onGroupDataRecv(mesh::Packet*, uint8_t, const mesh::GroupChannel&, uint8_t*, size_t) { }
+#endif
+
+  // The relay's target as a peer: Mesh::searchPeersByHash, getPeerSharedSecret,
+  // onPeerDataRecv and onPeerPathRecv. RELAY_PEER stands in MyMesh's matching_peer_indexes
+  // for it, above every client index and the neighbour-discovery overlay's. Each returns
+  // true when the peer was the relay's and upstream must not look it up.
+  static const int RELAY_PEER = 2000;
+#if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
+  bool isRelayPeer(const uint8_t* hash);
+  bool relayPeerSecret(uint8_t* dest_secret, int peer_idx);
+  bool onRelayPeerData(mesh::Packet* packet, uint8_t type, int peer_idx, const uint8_t* data, size_t len);
+  bool onRelayPeerPath(mesh::Packet* packet, int peer_idx, const uint8_t* path, uint8_t path_len,
+                       uint8_t extra_type, const uint8_t* extra, uint8_t extra_len);
+#else
+  bool isRelayPeer(const uint8_t*) { return false; }
+  bool relayPeerSecret(uint8_t*, int) { return false; }
+  bool onRelayPeerData(mesh::Packet*, uint8_t, int, const uint8_t*, size_t) { return false; }
+  bool onRelayPeerPath(mesh::Packet*, int, const uint8_t*, uint8_t, uint8_t, const uint8_t*, uint8_t) {
+    return false;
+  }
 #endif
 
   // An anonymous request, before upstream reads it as a login or a query. Returns true

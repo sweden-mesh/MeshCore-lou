@@ -143,7 +143,7 @@ The slot is read at boot, when the subscriptions are made. It cannot be set remo
 From lou-20 the plane has a second scheme beside the one below, **mcc3**, and lou-21 will keep
 only mcc3. No region anywhere: not in a topic, a key, a signature or a gate, so a node whose
 `mqtt.iata` is unset is still on the plane, and an owner sees all of its nodes wherever they
-are. The byte contract is mccontrol-spec's `docs/wire-format-mcc3.md` (v0.2.0); its vectors
+are. The byte contract is mccontrol-spec's `docs/wire-format-mcc3.md` (v0.3.0); its vectors
 are this tree's `test/data/mcc3-vectors.json`, rebuilt byte for byte by `test/test_mqtt_v3`.
 
 ```
@@ -158,8 +158,8 @@ the old scheme's `meshcore/{IATA}/all/cmd` is not subscribed either; its per-nod
 while `mqtt.iata` is set (below).
 
 - **Keys.** `S` = X25519 of the node's identity and the command key (`set mqtt.cmd.pubkey`),
-  and three keys from it by HKDF-SHA256 with info `mcc3/cmd/`, `mcc3/mesh/` and `mcc3/alive/`
-  + the node's key in hex. Derived once per command key, kept in RAM.
+  and four keys from it by HKDF-SHA256 with info `mcc3/cmd/`, `mcc3/mesh/`, `mcc3/alive/` and
+  `mcc3/fwd/` + the node's key in hex. Derived once per command key, kept in RAM.
 - **A command** is ChaCha20-Poly1305 under the first, padded to one of two sizes, and holds the
   command key's Ed25519 signature over the node's key, the road, the flags, counter, expiry,
   reply id and command. The node opens the AEAD, then checks the signature: a command for one
@@ -168,7 +168,8 @@ while `mqtt.iata` is set (below).
   silent (counted in `get mqtt.cmd` as unverified); every outcome after it is answered, sealed
   under a fresh random nonce, on `mcc/r/{RID}`.
 - **The flags byte** is reserved for delegation, which is not defined yet: a node refuses any
-  envelope whose flags are not zero, silently, as `bad-version`.
+  envelope whose flags are not zero, silently, as `bad-version`. One bit is defined, on the
+  mesh road only: `0x02`, answer with zero hops (see "Relaying" below).
 - **Over the mesh** the request is sub-type `0xC2`, always 136 bytes, its command at most 57
   bytes; it is encrypted (ChaCha20, no tag) and its integrity is the signature inside. The
   response is sealed to the owner: the companion that carries either reads neither. The road's
@@ -492,6 +493,56 @@ as the deny list admits them, so a broken Observer feed can be repaired over the
 
 Set it up on the console: `set mqtt.cmd.pubkey <64 hex>` (serial only, as everywhere), then
 `set mqtt.cmd on`.
+
+## Relaying: one node's MQTT for another node's command (lou-20)
+
+A node without Wi-Fi, or whose Wi-Fi is down, can only be reached over the mesh, and until now
+that took a companion radio near it. From lou-20 an Observer node of the same owner can do the
+sending. That node is the **relay**; the node the command is for is the **target**.
+
+mccontrol builds the mesh-road request for the target as before (`0xC2`, or `0xC1` for a lou-19
+target), and wraps it in a **forward** to the relay, on the relay's own `mcc/cmd/{NODE}`. The
+relay sends the request to the target as its own anonymous request, waits up to 120 s for the
+answer, and publishes a **forward result** on the `mcc/r/{RID}` the forward named. Forward and
+result are sealed under a fourth key, HKDF info `mcc3/fwd/` + the relay's key, from the same
+`S`. The relay cannot read a `0xC2` request or its response: they are sealed between the target
+and its owner.
+
+A forward runs nothing on the relay. It never reaches the CLI, so the deny list and the command
+counter are not involved. This is the plane's second sanctioned transmit, beside `trigger`.
+
+- **The switch.** `set mqtt.relay off|own`, `get mqtt.relay`. The default is `own`: the relay
+  serves the holder of its own command key and nobody else. A node without a command key never
+  relays. The owner may switch it over the plane; it is not under `mqtt.cmd`, so the deny list
+  admits it. Observer `rc` and `arrc` images only.
+- **The budget.** 10 forwards an hour, at most 2 of them floods, one waiting at a time. Fixed.
+  A request that could not be sent spends nothing.
+- **The route** is the owner's choice per forward: direct along a path the forward carries (no
+  path means one transmission, for a target the relay hears itself), a flood in the relay's
+  `region home`, or a flood in its default scope. A flood in `region home` uses the default
+  scope when there is no home, and both are un-scoped when the relay has no scope at all.
+- **Replay.** A forward carries a counter and an expiry at most 300 s ahead of the relay's
+  clock. The relay keeps the last counter in RAM and refuses a forward while its clock is
+  unset. After a reboot a forward from the last 300 s could be sent once more; the target's own
+  counter then refuses it.
+- **The result** says what happened: `answered` with the target's response, `no-answer` (sent,
+  nothing came back; the target may still have run the command), or why nothing was sent:
+  `off`, `expired`, `replay`, `bad-body`, `busy`, `rate-limited`, `clock-unset`, `send-failed`.
+  With an answer come its SNR at the relay and, when the answer returned a path, that path,
+  which mccontrol can send direct along next time.
+- `get mqtt.relay` answers `> own, forwarded 3, answered 2, refused 1, 7 of 10 left this hour
+  (2 of 2 floods)`, counted since boot, or `> off`. Bit 4 of the alive message's flags says the
+  node relays.
+
+Anything that is not a forward of the owner's is dropped in silence and counted in
+`get mqtt.cmd` as unverified, as a command is.
+
+**The zero-hop flag** is for the target, on every lou-20 image. Flags bit `0x02` in a `0xC2`
+request, inside the signature, says: answer with one transmission and no path. The target then
+answers directly to the sender, however the request arrived. mccontrol sets it only when the
+relay hears the target directly and sends with no hops, so the whole exchange is two
+transmissions. If the link works one way only, the answer is lost although the command ran.
+Any other flag bit is still refused.
 
 ## What is not defended
 

@@ -12,6 +12,7 @@ examples/simple_repeater/Fork.cpp
 examples/simple_repeater/Fork.h
 examples/simple_repeater/ForkOta.cpp
 examples/simple_repeater/MqttCommandHooks.cpp
+examples/simple_repeater/MqttRelayHooks.cpp
 examples/simple_repeater/MqttControl.cpp
 examples/simple_repeater/MqttControl.h
 include/ForkFeatures.h
