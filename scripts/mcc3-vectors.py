@@ -13,8 +13,8 @@ import json
 import pathlib
 import sys
 
-SPEC_TAG = "v0.2.0"
-SPEC_SHA256 = "901f6ac21c368af7a21994bba5db6de8d78145fe7bef05544c8a39df328ed4bb"
+SPEC_TAG = "v0.3.0"
+SPEC_SHA256 = "1b726fcb2a00ed42a3b93f676ef1cc10d1f56a1b3653513ee23613d91ddd86e7"
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "test/data/mcc3-vectors.json"
@@ -51,9 +51,9 @@ def render(d):
         "struct Mcc3VecResult { const char* name; uint32_t counter; int code; uint32_t clock; "
         "const char* command; const char* reply; const char* reply_opened; const char* nonce; "
         "const char* topic; size_t bytes; const char* payload; };",
-        "struct Mcc3VecMeshRequest { const char* name; uint32_t counter, expiry; const char* command; "
-        "uint32_t companion_tag; const char* nonce; const char* signed_hex; const char* signature; "
-        "const char* plaintext; const char* request; const char* app_sends; };",
+        "struct Mcc3VecMeshRequest { const char* name; uint32_t counter, expiry; uint8_t flags; "
+        "const char* command; uint32_t companion_tag; const char* nonce; const char* signed_hex; "
+        "const char* signature; const char* plaintext; const char* request; const char* app_sends; };",
         "struct Mcc3VecMeshResponse { const char* name; uint32_t companion_tag, counter; int code; "
         "uint32_t clock; const char* reply; const char* nonce; const char* response; };",
         "struct Mcc3VecAlive { const char* name; uint32_t boot, sequence, uptime, clock, last_counter, "
@@ -61,9 +61,17 @@ def render(d):
         "const char* region; const char* name_field; const char* opened_version; "
         "const char* opened_region; const char* opened_name; const char* nonce; const char* topic; "
         "const char* payload; };",
+        "struct Mcc3VecForward { const char* name; uint32_t counter, expiry; uint8_t flags; const char* rid; "
+        "const char* target; uint8_t route, path_len; const char* path; const char* path_field; "
+        "uint8_t body_len; const char* body; const char* nonce; const char* topic; "
+        "const char* reply_topic; size_t bytes; const char* payload; };",
+        "struct Mcc3VecForwardResult { const char* name; uint32_t counter; uint8_t status; "
+        "const char* status_name; uint32_t clock; uint8_t sent; int snr; uint8_t path_len; "
+        "const char* path; const char* response; const char* nonce; const char* topic; size_t bytes; "
+        "const char* payload; };",
         "struct Mcc3VecRefusal { const char* name; const char* kind; bool by_node; const char* node_seed; "
         "const char* command_key; const char* key_cmd; const char* key_mesh; const char* key_alive; "
-        "long last_counter; const char* input; const char* outcome; };",
+        "const char* key_fwd; long last_counter; const char* input; const char* outcome; };",
         "struct Mcc3VecNotBuilt { bool mesh; const char* command; };",
         "",
         "static const char* const MCC3_SEED_COMMAND = %s;" % c_str(k["seeds"]["command"]),
@@ -78,7 +86,7 @@ def render(d):
         "static const char* const MCC3_SHARED_NODE_SIDE = %s;" % c_str(k["shared_secret_from_node_side"]),
     ]
     for who in ("owner", "node_side", "other_node", "other_owner"):
-        for name in ("cmd", "mesh", "alive"):
+        for name in ("cmd", "mesh", "alive", "fwd"):
             lines.append("static const char* const MCC3_K_%s_%s = %s;"
                          % (who.upper(), name.upper(), c_str(k[who][name])))
     lines.append("")
@@ -99,8 +107,8 @@ def render(d):
 
     lines.append("static const Mcc3VecMeshRequest MCC3_MESH_REQUESTS[] = {")
     for v in d["mesh_requests"]:
-        lines.append(row(c_str(v["name"]), "%uu" % v["counter"], "%uu" % v["expiry"], c_str(v["command"]),
-                         "%uu" % v["companion_tag"], c_str(v["nonce"]), c_str(v["signed"]),
+        lines.append(row(c_str(v["name"]), "%uu" % v["counter"], "%uu" % v["expiry"], str(v.get("flags", 0)),
+                         c_str(v["command"]), "%uu" % v["companion_tag"], c_str(v["nonce"]), c_str(v["signed"]),
                          c_str(v["signature"]), c_str(v["plaintext"]), c_str(v["request"]),
                          c_str(v["app_sends"])))
     lines.append("};")
@@ -109,6 +117,25 @@ def render(d):
     for v in d["mesh_responses"]:
         lines.append(row(c_str(v["name"]), "%uu" % v["companion_tag"], "%uu" % v["counter"], str(v["code"]),
                          "%uu" % v["clock"], c_str(v["reply"]), c_str(v["nonce"]), c_str(v["response"])))
+    lines.append("};")
+
+    # A result's SNR and path length are null for none: the wire's 0x80 and 0xFF.
+    lines.append("static const Mcc3VecForward MCC3_FORWARDS[] = {")
+    for v in d["forwards"]:
+        lines.append(row(c_str(v["name"]), "%uu" % v["counter"], "%uu" % v["expiry"], str(v["flags"]),
+                         c_str(v["rid"]), c_str(v["target"]), str(v["route"]), str(v["path_len"]),
+                         c_str(v["path"]), c_str(v["path_field"]), str(v["body_len"]), c_str(v["body"]),
+                         c_str(v["nonce"]), c_str(v["topic"]), c_str(v["reply_topic"]), str(v["bytes"]),
+                         c_str(v["payload"])))
+    lines.append("};")
+
+    lines.append("static const Mcc3VecForwardResult MCC3_FORWARD_RESULTS[] = {")
+    for v in d["forward_results"]:
+        lines.append(row(c_str(v["name"]), "%uu" % v["counter"], str(v["status"]), c_str(v["status_name"]),
+                         "%uu" % v["clock"], str(v["sent"]), str(-128 if v["snr"] is None else v["snr"]),
+                         str(255 if v["path_len"] is None else v["path_len"]), c_str(v["path"]),
+                         c_str(v["response"]), c_str(v["nonce"]), c_str(v["topic"]), str(v["bytes"]),
+                         c_str(v["payload"])))
     lines.append("};")
 
     lines.append("static const Mcc3VecAlive MCC3_ALIVE[] = {")
@@ -128,7 +155,8 @@ def render(d):
         lines.append(row(c_str(v["name"]), c_str(v["kind"]), "true" if v["opened_by"] == "node" else "false",
                          c_str(v.get("node_seed", "")), c_str(v.get("command_key", "")),
                          c_str(keys.get("cmd", "")), c_str(keys.get("mesh", "")), c_str(keys.get("alive", "")),
-                         "%dL" % v.get("last_counter", -1), c_str(v["input"]), c_str(v["outcome"])))
+                         c_str(keys.get("fwd", "")), "%dL" % v.get("last_counter", -1), c_str(v["input"]),
+                         c_str(v["outcome"])))
     lines.append("};")
 
     lines.append("static const Mcc3VecNotBuilt MCC3_NOT_BUILT[] = {")

@@ -2411,6 +2411,100 @@ TEST(MeshRoad, ModesParseAndDescribe) {
   EXPECT_STREQ(", mesh auto ok 2 refused 5", out);
 }
 
+// ---- the relay (lou-20) ---------------------------------------------------------------
+
+TEST(Relay, ModesParseAndDescribe) {
+  uint8_t m = 9;
+  ASSERT_TRUE(mqttCtrlRelayParseMode("off", &m)); EXPECT_EQ(MQTTCTRL_RELAY_OFF, m);
+  ASSERT_TRUE(mqttCtrlRelayParseMode("own", &m)); EXPECT_EQ(MQTTCTRL_RELAY_OWN, m);
+  for (const char* bad : { "on", "listed", "anyone", "OWN", "own ", "" }) {
+    EXPECT_FALSE(mqttCtrlRelayParseMode(bad, &m)) << bad;
+  }
+  EXPECT_EQ(MQTTCTRL_RELAY_OWN, m);
+  EXPECT_FALSE(mqttCtrlRelayParseMode(NULL, &m));
+  EXPECT_EQ(0, (int)MQTTCTRL_RELAY_OWN);           // a file older than the setting reads as own
+
+  char out[MQTTCTRL_MAX_REPLY];
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OFF, 5, 4, 1, 3, 1, out, sizeof(out));
+  EXPECT_STREQ("> off", out);
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 0, 0, 0, 0, 0, out, sizeof(out));
+  EXPECT_STREQ("> own, forwarded 0, answered 0, refused 0, 10 of 10 left this hour (2 of 2 floods)", out);
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 12, 9, 3, 4, 1, out, sizeof(out));
+  EXPECT_STREQ("> own, forwarded 12, answered 9, refused 3, 6 of 10 left this hour (1 of 2 floods)", out);
+  // Nine direct ones sent: one forward is left, so one flood is, not two.
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 9, 9, 0, 9, 0, out, sizeof(out));
+  EXPECT_STREQ("> own, forwarded 9, answered 9, refused 0, 1 of 10 left this hour (1 of 2 floods)", out);
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 10, 2, out, sizeof(out));
+  EXPECT_LT(strlen(out), (size_t)MQTTCTRL_MAX_REPLY - 1);
+  EXPECT_NE(nullptr, strstr(out, "0 of 10 left this hour (0 of 2 floods)"));
+}
+
+TEST(Relay, TheOwnerSwitchesItOverThePlaneAndNothingUnderMqttCmdOpens) {
+  // `mqtt.relay` is outside `mqtt.cmd`, so the deny list admits it on both roads, with or
+  // without auto-reply, and needs no exception.
+  for (const char* c : { "set mqtt.relay own", "set mqtt.relay off", "get mqtt.relay" }) {
+    EXPECT_FALSE(mqttCtrlCommandDenied(c, strlen(c))) << c;
+    EXPECT_TRUE(mqttCtrlCommandAllowed(c, strlen(c), true)) << c;
+    EXPECT_TRUE(mqttCtrlCommandAllowed(c, strlen(c), false)) << c;
+    EXPECT_TRUE(mqttCtrlMeshCommandAllowed(c, strlen(c), true)) << c;
+    EXPECT_FALSE(mqttCtrlIsTransmitCommand(c, strlen(c))) << c;
+  }
+  // The plane's own settings stay where they were, the name the research first gave it too.
+  for (const char* c : { "set mqtt.cmd off", "set mqtt.cmd.relay own", "set mqtt.cmd.relay off",
+                         "set mqtt.cmd.mesh on", "set mqtt.cmd.slot 2", "set mqtt.cmd.pubkey 00",
+                         "get mqtt.cmd.pubkey" }) {
+    EXPECT_TRUE(mqttCtrlCommandDenied(c, strlen(c))) << c;
+    EXPECT_FALSE(mqttCtrlCommandAllowed(c, strlen(c), true)) << c;
+  }
+}
+
+TEST(Relay, TheBudgetIsTenAnHourTwoOfThemFloodsAndAskingSpendsNothing) {
+  MqttCtrlRelayBudget b;
+  const uint32_t t = 1795000000;
+  int forwards = -1, floods = -1;
+  b.spent(t, &forwards, &floods);
+  EXPECT_EQ(0, forwards);
+  EXPECT_EQ(0, floods);
+  for (int i = 0; i < 100; i++) EXPECT_TRUE(b.allows(t, true));
+  b.spent(t, &forwards, &floods);
+  EXPECT_EQ(0, forwards);
+
+  b.spend(t, true);
+  b.spend(t + 1, true);
+  EXPECT_FALSE(b.allows(t + 2, true));
+  EXPECT_TRUE(b.allows(t + 2, false));
+  for (int i = 0; i < 8; i++) {
+    ASSERT_TRUE(b.allows(t + 10 + i, false)) << i;
+    b.spend(t + 10 + i, false);
+  }
+  EXPECT_FALSE(b.allows(t + 20, false));
+  EXPECT_FALSE(b.allows(t + 20, true));
+  b.spent(t + 20, &forwards, &floods);
+  EXPECT_EQ(10, forwards);
+  EXPECT_EQ(2, floods);
+
+  // No span of an hour holds more, wherever it starts: the first comes free at exactly +3600.
+  EXPECT_FALSE(b.allows(t + 3599, false));
+  EXPECT_TRUE(b.allows(t + 3600, false));
+  EXPECT_TRUE(b.allows(t + 3600, true));           // the flood that left the hour frees a flood
+  b.spend(t + 3600, false);
+  EXPECT_FALSE(b.allows(t + 3600, false));
+  b.spent(t + 3600, &forwards, &floods);
+  EXPECT_EQ(10, forwards);
+  EXPECT_EQ(1, floods);
+  EXPECT_TRUE(b.allows(t + 3601, true));
+  b.spend(t + 3601, true);
+  EXPECT_FALSE(b.allows(t + 3609, false));
+  EXPECT_TRUE(b.allows(t + 3610, false));
+
+  // A clock stepped backwards mints nothing: what is remembered is pulled back to now.
+  MqttCtrlRelayBudget c;
+  for (int i = 0; i < 10; i++) c.spend(t + i, false);
+  EXPECT_FALSE(c.allows(t - 86400, false));
+  EXPECT_FALSE(c.allows(t - 86400 + 3599, false));
+  EXPECT_TRUE(c.allows(t - 86400 + 3600, false));
+}
+
 TEST(MeshRoad, OneAnswerAMinuteAndTenAnHour) {
   MqttCtrlMeshBudget b;
   uint32_t t = 1000;

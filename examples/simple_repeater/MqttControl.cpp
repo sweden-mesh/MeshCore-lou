@@ -47,7 +47,7 @@ MqttControl::MqttControl()
 #endif
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW),
-    _mesh_mode(MQTTCTRL_MESH_AUTO)
+    _mesh_mode(MQTTCTRL_MESH_AUTO), _relay_mode(MQTTCTRL_RELAY_OWN)
 {
   _pubkey[0] = 0;
   _ota_legacy[0] = 0;
@@ -97,6 +97,7 @@ void MqttControl::load() {
   _key_via = c.key_via;
   _alive_minutes = c.alive_minutes;
   _boot = c.boot;
+  _relay_mode = c.relay_mode;
 }
 
 void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
@@ -109,6 +110,7 @@ void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
   c->key_via = _key_via;
   c->alive_minutes = _alive_minutes;
   c->boot = _boot;
+  c->relay_mode = _relay_mode;
 }
 
 void MqttControl::save() {
@@ -222,6 +224,12 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
     result = execute(env, _staged.topic, false, now, runner, reply, out);
   } while (false);
 
+  _staged.pending = false;
+  return result;
+}
+
+MqttCtrlResult MqttControl::takeForward(Mcc3Forward* out) {
+  MqttCtrlResult result = mcc3OpenForward(mcc3Keys(), _staged.payload, _staged.payload_len, out);
   _staged.pending = false;
   return result;
 }

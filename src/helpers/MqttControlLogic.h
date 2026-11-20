@@ -1380,23 +1380,113 @@ static inline size_t mqttCtrlMeshFormatResponse(uint8_t* out, size_t room, uint3
   return MQTTCTRL_MESH_RESP_HEAD + n;
 }
 
+// ---- the relay (lou-20) ---------------------------------------------------------------
+//
+// An Observer node on the plane sends its owner's mesh-road request to a node the broker does
+// not reach, and publishes what comes back (MqttControlV3.h has the envelope and the order of
+// the checks). `set mqtt.relay off|own`: own, the default (operator 2026-11-20), serves the
+// holder of this node's command key and nobody else. Zero is own, so a file written before
+// the setting reads so. The name is outside `mqtt.cmd` on purpose: the deny list refuses
+// everything under that, and the owner may switch relaying over the plane.
+enum MqttCtrlRelayMode : uint8_t {
+  MQTTCTRL_RELAY_OWN = 0,
+  MQTTCTRL_RELAY_OFF,
+};
+
+static inline const char* mqttCtrlRelayModeName(uint8_t mode) {
+  return mode == MQTTCTRL_RELAY_OFF ? "off" : "own";
+}
+
+static inline bool mqttCtrlRelayParseMode(const char* text, uint8_t* out) {
+  if (text == NULL || out == NULL) return false;
+  for (uint8_t m = MQTTCTRL_RELAY_OWN; m <= MQTTCTRL_RELAY_OFF; m++) {
+    if (strcmp(text, mqttCtrlRelayModeName(m)) == 0) { *out = m; return true; }
+  }
+  return false;
+}
+
+// A forward costs the mesh airtime, a flooded one the airtime of every repeater that hears
+// it: ten an hour, at most two of them floods, compiled in as the trigger budget is. The
+// forwards of the last hour are remembered, so no span of an hour holds more, wherever it
+// starts. Asking spends nothing: the caller asks, sends, and spends only what went out, so
+// a request the packet pool refused costs none. A clock stepped backwards pulls the
+// remembered times back to now, as SlidingBudget does.
+#define MQTTCTRL_RELAY_MAX          10
+#define MQTTCTRL_RELAY_FLOOD_MAX    2
+#define MQTTCTRL_RELAY_WINDOW_SECS  3600
+
+struct MqttCtrlRelayBudget {
+  uint32_t at[MQTTCTRL_RELAY_MAX];
+  bool flood[MQTTCTRL_RELAY_MAX];
+  uint8_t used;
+  MqttCtrlRelayBudget() : used(0) { }
+
+  // Forwards sent in the hour up to `now`, and the floods among them.
+  void spent(uint32_t now, int* forwards, int* floods) {
+    *forwards = 0;
+    *floods = 0;
+    for (uint8_t i = 0; i < used; i++) {
+      if (at[i] > now) at[i] = now;
+      if (now - at[i] >= MQTTCTRL_RELAY_WINDOW_SECS) continue;
+      (*forwards)++;
+      if (flood[i]) (*floods)++;
+    }
+  }
+  bool allows(uint32_t now, bool is_flood) {
+    int forwards, floods;
+    spent(now, &forwards, &floods);
+    return forwards < MQTTCTRL_RELAY_MAX && (!is_flood || floods < MQTTCTRL_RELAY_FLOOD_MAX);
+  }
+  // Only after allows(): the oldest one remembered is then more than an hour old.
+  void spend(uint32_t now, bool is_flood) {
+    uint8_t slot = 0;
+    if (used < MQTTCTRL_RELAY_MAX) {
+      slot = used++;
+    } else {
+      for (uint8_t i = 1; i < used; i++) if (at[i] < at[slot]) slot = i;
+    }
+    at[slot] = now;
+    flood[slot] = is_flood;
+  }
+};
+
+// `get mqtt.relay`: the mode, what the relay has done since boot, and what is left of the
+// hour. `forwards` and `floods` are MqttCtrlRelayBudget::spent's.
+static inline void mqttCtrlRelayDescribe(uint8_t mode, uint32_t forwarded, uint32_t answered,
+                                         uint32_t refused, int forwards, int floods, char* out,
+                                         size_t out_size) {
+  if (out == NULL || out_size == 0) return;
+  if (mode == MQTTCTRL_RELAY_OFF) {
+    snprintf(out, out_size, "> off");
+    return;
+  }
+  const int left = MQTTCTRL_RELAY_MAX - forwards;
+  int floods_left = MQTTCTRL_RELAY_FLOOD_MAX - floods;
+  if (floods_left > left) floods_left = left;
+  snprintf(out, out_size, "> own, forwarded %lu, answered %lu, refused %lu, %d of %d left this hour "
+                          "(%d of %d floods)", (unsigned long)forwarded, (unsigned long)answered,
+           (unsigned long)refused, left, MQTTCTRL_RELAY_MAX, floods_left, MQTTCTRL_RELAY_FLOOD_MAX);
+}
+
 // /mqttcontrol, the plane's settings file. Append-only, as /autoreply is: version 1 was
 // on/off and the counter; 2 added the slot and the command key; 3 two automatic-OTA bytes
 // that releases up to ar-13 kept here; 4 the mesh road's mode; 5 how the key was set; 6 the
-// alive interval and the boot counter alive messages are ordered by. OTA keeps its bytes in
-// /ota now, and they are carried exactly as read, so an image that rolls back to ar-13 still
-// finds what it wrote; an older image reads the fields it knows and ignores the rest. A
-// build without the plane neither reads nor writes this file, so it survives untouched.
+// alive interval and the boot counter alive messages are ordered by; 7 the relay's mode. OTA
+// keeps its bytes in /ota now, and they are carried exactly as read, so an image that rolls
+// back to ar-13 still finds what it wrote; an older image reads the fields it knows and
+// ignores the rest. A build without the plane neither reads nor writes this file, so it
+// survives untouched.
 //
 //   ver | enabled | counter (4, native order) | slot | key (64 hex + NUL) | ota (2) | mesh | via
-//       | alive minutes (2, 0 = the default) | boot counter (4)
+//       | alive minutes (2, 0 = the default) | boot counter (4) | relay
 #define MQTTCTRL_CONFIG_VER_1   1
-#define MQTTCTRL_CONFIG_VER     6
+#define MQTTCTRL_CONFIG_VER     7
 #define MQTTCTRL_CONFIG_KEY_LEN 65
 #define MQTTCTRL_CONFIG_LEN_3   (1 + 1 + 4 + 1 + MQTTCTRL_CONFIG_KEY_LEN + 2)
 #define MQTTCTRL_CONFIG_LEN_4   (MQTTCTRL_CONFIG_LEN_3 + 1)
 #define MQTTCTRL_CONFIG_LEN_5   (MQTTCTRL_CONFIG_LEN_4 + 1)
-#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_5 + 2 + 4)
+#define MQTTCTRL_CONFIG_LEN_6   (MQTTCTRL_CONFIG_LEN_5 + 2 + 4)
+#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_6 + 1)
 
 // The alive message (mcc3, IATA-2 design §3): every `alive.interval` minutes, 5..1440,
 // default 15, and no `off`: alive is the owner's only discovery.
@@ -1414,6 +1504,7 @@ struct MqttCtrlStoredConfig {
   uint8_t key_via;                           // MqttCtrlKeyVia; a key older than v5 was USB's
   uint16_t alive_minutes;                    // 0 is the default
   uint32_t boot;                             // +1 every boot of an image with the uplink
+  uint8_t relay_mode;                        // MqttCtrlRelayMode; 0, the default, is own
 };
 
 static inline void mqttCtrlConfigDefaults(MqttCtrlStoredConfig* c) {
@@ -1439,11 +1530,13 @@ static inline bool mqttCtrlConfigDecode(const uint8_t* buf, size_t len, int slot
   if (ver >= 3 && len >= MQTTCTRL_CONFIG_LEN_3) memcpy(c->ota_legacy, &buf[7 + MQTTCTRL_CONFIG_KEY_LEN], 2);
   if (ver >= 4 && len >= MQTTCTRL_CONFIG_LEN_4) c->mesh_mode = buf[MQTTCTRL_CONFIG_LEN_3];
   if (ver >= 5 && len >= MQTTCTRL_CONFIG_LEN_5) c->key_via = buf[MQTTCTRL_CONFIG_LEN_4];
-  if (ver >= 6 && len >= MQTTCTRL_CONFIG_LEN) {
+  if (ver >= 6 && len >= MQTTCTRL_CONFIG_LEN_6) {
     memcpy(&c->alive_minutes, &buf[MQTTCTRL_CONFIG_LEN_5], 2);
     memcpy(&c->boot, &buf[MQTTCTRL_CONFIG_LEN_5 + 2], 4);
   }
+  if (ver >= 7 && len >= MQTTCTRL_CONFIG_LEN) c->relay_mode = buf[MQTTCTRL_CONFIG_LEN_6];
   if (c->mesh_mode > MQTTCTRL_MESH_OFF) c->mesh_mode = MQTTCTRL_MESH_AUTO;
+  if (c->relay_mode > MQTTCTRL_RELAY_OFF) c->relay_mode = MQTTCTRL_RELAY_OWN;
   if (c->key_via > MQTTCTRL_KEY_VIA_ADMIN) c->key_via = MQTTCTRL_KEY_VIA_USB;
   if (c->slot > slot_count) c->slot = 0;
   if (c->alive_minutes != 0 && (c->alive_minutes < MQTTCTRL_ALIVE_MIN_MINUTES ||
@@ -1463,6 +1556,7 @@ static inline size_t mqttCtrlConfigEncode(const MqttCtrlStoredConfig* c, uint8_t
   buf[MQTTCTRL_CONFIG_LEN_4] = c->key_via;
   memcpy(&buf[MQTTCTRL_CONFIG_LEN_5], &c->alive_minutes, 2);
   memcpy(&buf[MQTTCTRL_CONFIG_LEN_5 + 2], &c->boot, 4);
+  buf[MQTTCTRL_CONFIG_LEN_6] = c->relay_mode;
   return MQTTCTRL_CONFIG_LEN;
 }
 
