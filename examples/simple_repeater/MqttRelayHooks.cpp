@@ -111,26 +111,6 @@ bool Fork::isRelayPeer(const uint8_t* hash) {
          && _mesh.acl.getClient(_relay_wait.target.pub_key, PUB_KEY_SIZE) == NULL;
 }
 
-bool Fork::relayPeerSecret(uint8_t* dest_secret, int peer_idx) {
-  if (peer_idx != RELAY_PEER) return false;
-  memcpy(dest_secret, _relay_wait.secret, PUB_KEY_SIZE);
-  return true;
-}
-
-bool Fork::onRelayPeerData(mesh::Packet* packet, uint8_t type, int peer_idx, const uint8_t* data,
-                           size_t len) {
-  if (peer_idx != RELAY_PEER) return false;
-  if (type == PAYLOAD_TYPE_RESPONSE) onRelayResponse(packet, MCC3_PATH_NONE, NULL, data, len);
-  return true;
-}
-
-bool Fork::onRelayPeerPath(mesh::Packet* packet, int peer_idx, const uint8_t* path, uint8_t path_len,
-                           uint8_t extra_type, const uint8_t* extra, uint8_t extra_len) {
-  if (peer_idx != RELAY_PEER) return false;
-  if (extra_type == PAYLOAD_TYPE_RESPONSE) onRelayResponse(packet, path_len, path, extra, extra_len);
-  return true;
-}
-
 // The answer, when it begins with the tag this node wrote: what the target sent after it,
 // the SNR it arrived with and the path a path return taught, for the owner's next forward.
 void Fork::onRelayResponse(mesh::Packet* packet, uint8_t path_len, const uint8_t* path,

@@ -2678,6 +2678,94 @@ TEST(Relay, AnEmptyAirBudgetStopsEveryForward) {
   EXPECT_TRUE(b.allows(t + MQTTCTRL_AIR_QUARTER_SECS, false, false));
 }
 
+// The way back to a sender (bench at Gisebo, 2026-11-23): kept for the three last answered.
+static void requesterKey(uint8_t* key, uint8_t first, uint8_t fill) {
+  memset(key, fill, MQTTCTRL_REQUESTER_KEY_LEN);
+  key[0] = first;
+}
+
+TEST(Requesters, ASenderAnsweredIsListenedToForFiveMinutesAndKeepsThePathItBrings) {
+  MqttCtrlRequesters r;
+  uint8_t a[32], secret[32], other[32];
+  requesterKey(a, 0xF4, 1);
+  requesterKey(other, 0xF4, 2);
+  memset(secret, 7, sizeof(secret));
+  EXPECT_EQ(-1, r.find(a));
+  EXPECT_EQ(nullptr, r.pathTo(a));
+  EXPECT_FALSE(r.listening(0, 1000));
+
+  const int i = r.note(a, secret, 1000);
+  ASSERT_GE(i, 0);
+  EXPECT_EQ(i, r.find(a));
+  EXPECT_EQ(-1, r.find(other));                       // the same first byte is not the same sender
+  EXPECT_TRUE(r.listening(i, 1000));
+  EXPECT_TRUE(r.listening(i, 1000 + MQTTCTRL_REQUESTER_LISTEN_MS - 1));
+  EXPECT_FALSE(r.listening(i, 1000 + MQTTCTRL_REQUESTER_LISTEN_MS));
+  EXPECT_EQ(0, memcmp(secret, r.entry[i].secret, 32));
+  EXPECT_EQ(nullptr, r.pathTo(a));                    // answered, but it has brought no path yet
+
+  // Two hops of three-byte hashes: path length 0x82.
+  const uint8_t path[6] = { 0x4A, 0xC6, 0x1A, 0x70, 0x16, 0x53 };
+  ASSERT_TRUE(r.learn(i, path, 0x82));
+  const MqttCtrlRequester* way = r.pathTo(a);
+  ASSERT_NE(nullptr, way);
+  EXPECT_EQ(0x82, way->path_len);
+  EXPECT_EQ(0, memcmp(path, way->path, 6));
+
+  // Answered again: the path stays, the five minutes start anew, across the millis wrap too.
+  EXPECT_EQ(i, r.note(a, secret, 0xFFFFFF00u));
+  EXPECT_NE(nullptr, r.pathTo(a));
+  EXPECT_TRUE(r.listening(i, 100));
+  EXPECT_FALSE(r.listening(i, 0xFFFFFF00u + MQTTCTRL_REQUESTER_LISTEN_MS));
+
+  // A neighbour's way back has no hops, and is a path all the same.
+  ASSERT_TRUE(r.learn(i, NULL, 0));
+  ASSERT_NE(nullptr, r.pathTo(a));
+  EXPECT_EQ(0, r.pathTo(a)->path_len);
+}
+
+TEST(Requesters, AFourthSenderTakesThePlaceOfTheOneHeardLongestAgo) {
+  MqttCtrlRequesters r;
+  uint8_t key[5][32], secret[32] = {0};
+  for (int k = 0; k < 5; k++) requesterKey(key[k], (uint8_t)(0x10 + k), (uint8_t)k);
+  const uint8_t hop[1] = { 0xAA };
+  EXPECT_EQ(0, r.note(key[0], secret, 1000));
+  EXPECT_EQ(1, r.note(key[1], secret, 2000));
+  EXPECT_EQ(2, r.note(key[2], secret, 3000));
+  ASSERT_TRUE(r.learn(0, hop, 1));
+  ASSERT_TRUE(r.learn(1, hop, 1));
+  EXPECT_EQ(0, r.note(key[0], secret, 4000));         // the first is heard again
+  EXPECT_EQ(1, r.note(key[3], secret, 5000));         // so the second goes, and its path with it
+  EXPECT_EQ(-1, r.find(key[1]));
+  EXPECT_EQ(nullptr, r.pathTo(key[3]));
+  EXPECT_NE(nullptr, r.pathTo(key[0]));
+  EXPECT_EQ(2, r.note(key[4], secret, 6000));
+  EXPECT_EQ(-1, r.find(key[2]));
+}
+
+TEST(Requesters, APathThatDoesNotFitOrIsMalformedIsNotKept) {
+  MqttCtrlRequesters r;
+  uint8_t a[32], secret[32] = {0}, path[64] = {0};
+  requesterKey(a, 0xF4, 1);
+  const int i = r.note(a, secret, 1);
+  EXPECT_EQ(63, mqttCtrlPathBytes(0x3F, 64));
+  EXPECT_EQ(64, mqttCtrlPathBytes(0x60, 64));          // 32 two-byte hashes
+  EXPECT_EQ(-1, mqttCtrlPathBytes(0x61, 64));          // 33 of them
+  EXPECT_EQ(-1, mqttCtrlPathBytes(0x96, 64));          // 22 three-byte hashes: 66 bytes
+  EXPECT_EQ(-1, mqttCtrlPathBytes(0xC1, 64));          // the reserved hash size
+  EXPECT_TRUE(r.learn(i, path, 0x60));
+  EXPECT_FALSE(r.learn(i, path, 0x61));
+  EXPECT_FALSE(r.learn(i, path, 0xC1));
+  EXPECT_FALSE(r.learn(i, NULL, 0x01));
+  EXPECT_FALSE(r.learn(-1, path, 0x01));
+  EXPECT_FALSE(r.learn(MQTTCTRL_REQUESTERS, path, 0x01));
+  EXPECT_FALSE(r.learn(2, path, 0x01));                // nobody is there
+  EXPECT_EQ(0x60, r.pathTo(a)->path_len);              // the refusals changed nothing
+  EXPECT_EQ(-1, r.note(NULL, secret, 1));
+  EXPECT_EQ(-1, r.note(a, NULL, 1));
+  EXPECT_EQ(-1, r.find(NULL));
+}
+
 TEST(MeshRoad, AFloodedRequestIsAnsweredOnceItsCopiesHaveDiedDown) {
   EXPECT_EQ(300u, mqttCtrlMeshAnswerDelay(false, 0));
   EXPECT_EQ(300u, mqttCtrlMeshAnswerDelay(false, 0xFFFFFFFFu));

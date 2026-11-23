@@ -466,6 +466,70 @@ void Fork::debugLine(const char* fmt, ...) {
   Serial.println(line);
 }
 
+int Fork::searchPeers(const uint8_t* hash, int* indexes, int room) {
+  int n = 0;
+#ifdef WITH_MQTT_BRIDGE
+  if (n < room && isRelayPeer(hash)) indexes[n++] = RELAY_PEER;
+#endif
+  const uint32_t now_ms = millis();
+  for (int i = 0; i < MQTTCTRL_REQUESTERS && n < room; i++) {
+    if (!_requesters.listening(i, now_ms) || _requesters.entry[i].key[0] != hash[0]) continue;
+    if (_mesh.acl.getClient(_requesters.entry[i].key, PUB_KEY_SIZE) != NULL) continue;   // a client keeps its own entry
+    indexes[n++] = REQUESTER_PEER + i;
+  }
+  return n;
+}
+
+bool Fork::peerSecret(uint8_t* dest_secret, int peer_idx) {
+#ifdef WITH_MQTT_BRIDGE
+  if (peer_idx == RELAY_PEER) {
+    memcpy(dest_secret, _relay_wait.secret, PUB_KEY_SIZE);
+    return true;
+  }
+#endif
+  if (peer_idx < REQUESTER_PEER || peer_idx >= REQUESTER_PEER + MQTTCTRL_REQUESTERS) return false;
+  memcpy(dest_secret, _requesters.entry[peer_idx - REQUESTER_PEER].secret, PUB_KEY_SIZE);
+  return true;
+}
+
+// Nothing but a path is expected of either peer, and a relay's target may answer in a
+// datagram: anything else from them is dropped here, never read as a client's.
+bool Fork::onPeerData(mesh::Packet* packet, uint8_t type, int peer_idx, const uint8_t* data, size_t len) {
+#ifdef WITH_MQTT_BRIDGE
+  if (peer_idx == RELAY_PEER) {
+    if (type == PAYLOAD_TYPE_RESPONSE) onRelayResponse(packet, MCC3_PATH_NONE, NULL, data, len);
+    return true;
+  }
+#endif
+  return peer_idx >= REQUESTER_PEER && peer_idx < REQUESTER_PEER + MQTTCTRL_REQUESTERS;
+}
+
+bool Fork::onPeerPath(mesh::Packet* packet, int peer_idx, const uint8_t* path, uint8_t path_len,
+                      uint8_t extra_type, const uint8_t* extra, uint8_t extra_len, bool* reciprocate) {
+  *reciprocate = false;
+#ifdef WITH_MQTT_BRIDGE
+  if (peer_idx == RELAY_PEER) {
+    if (extra_type == PAYLOAD_TYPE_RESPONSE) onRelayResponse(packet, path_len, path, extra, extra_len);
+    // The target is told the way its answer came, so that it need not flood the next one.
+    // Mesh sends that only for a return that was flooded, direct along `path`.
+    *reciprocate = true;
+    if (packet->isRouteFlood()) {
+      const int out = mqttCtrlPathBytes(path_len, MAX_PATH_SIZE), back = packet->getPathByteLen();
+      const int sealed = (1 + back + 5 + CIPHER_BLOCK_SIZE - 1) / CIPHER_BLOCK_SIZE * CIPHER_BLOCK_SIZE;
+      const uint32_t air_ms = _mesh._radio->getEstAirtimeFor(2 + (out < 0 ? 0 : out) + 2 + CIPHER_MAC_SIZE + sealed);
+      _relay.budget.air.spend(_mesh.getRTCClock()->getCurrentTime(), air_ms);
+      debugLine("relay: the target is sent the way back, %u hop(s), %u ms on the air",
+                (unsigned)(packet->path_len & 63), (unsigned)air_ms);
+    }
+    return true;
+  }
+#endif
+  if (peer_idx < REQUESTER_PEER || peer_idx >= REQUESTER_PEER + MQTTCTRL_REQUESTERS) return false;
+  const bool kept = _requesters.learn(peer_idx - REQUESTER_PEER, path, path_len);
+  debugLine("mesh: the way back to a sender, %u hop(s)%s", (unsigned)(path_len & 63), kept ? "" : ", not kept");
+  return true;
+}
+
 void Fork::ControlLink::runCommand(uint32_t sender_timestamp, char* command, char* reply) {
   fork._mesh.handleCommand(sender_timestamp, command, reply);
 }
@@ -679,8 +743,20 @@ void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   uint32_t random;
   _mesh.getRNG()->random((uint8_t *)&random, sizeof(random));
   const uint32_t delay_millis = mqttCtrlMeshAnswerDelay(packet->isRouteFlood(), random);
+  // The way back: a client's own path, else the one this sender brought after an earlier
+  // answer. The sender is a peer from now, so that it can bring one.
   ClientInfo* client = _mesh.acl.getClient(sender.pub_key, PUB_KEY_SIZE);
-  bool have_out_path = client != NULL && client->out_path_len != OUT_PATH_UNKNOWN;
+  const uint8_t* out_path = NULL;
+  uint8_t out_path_len = OUT_PATH_UNKNOWN;
+  if (client != NULL && client->out_path_len != OUT_PATH_UNKNOWN) {
+    out_path = client->out_path;
+    out_path_len = client->out_path_len;
+  } else if (const MqttCtrlRequester* known = _requesters.pathTo(sender.pub_key)) {
+    out_path = known->path;
+    out_path_len = known->path_len;
+  }
+  _requesters.note(sender.pub_key, secret, millis());
+  const bool have_out_path = out_path != NULL;
   auto route = mesh::chooseReplyRoute(packet->isRouteFlood(), false, have_out_path);
   const bool path_return = !zero_hop && route == mesh::REPLY_ROUTE_PATH_RETURN;
 
@@ -705,13 +781,14 @@ void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   const uint32_t air_ms = _mesh._radio->getEstAirtimeFor(out->getRawLength());
   _mqtt_control.meshAnswered(now, air_ms);
   debugLine("mesh: the answer, %u bytes, %u ms on the air, %s, in %u ms", (unsigned)n, (unsigned)air_ms,
-            zero_hop ? "no hops" : path_return ? "with its path" : "routed", (unsigned)delay_millis);
+            zero_hop ? "no hops" : path_return ? "flooded with its path"
+              : route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH ? "along the way back" : "flooded", (unsigned)delay_millis);
   if (path_return) {
     _mesh.sendFloodReply(out, delay_millis, packet->getPathHashSize());
   } else if (zero_hop) {
     _mesh.sendZeroHop(out, delay_millis);
   } else if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
-    _mesh.sendDirect(out, client->out_path, client->out_path_len, delay_millis);
+    _mesh.sendDirect(out, out_path, out_path_len, delay_millis);
   } else {
     _mesh.sendFloodReply(out, delay_millis, packet->getPathHashSize());
   }

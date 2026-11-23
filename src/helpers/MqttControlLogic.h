@@ -1409,6 +1409,89 @@ static inline uint32_t mqttCtrlMeshAnswerDelay(bool request_flooded, uint32_t ra
   return MQTTCTRL_MESH_FLOOD_ANSWER_MIN_MS + random % (MQTTCTRL_MESH_FLOOD_ANSWER_SPAN_MS + 1);
 }
 
+// The way back to whoever sent a command over the mesh. A node that answers a request it
+// got direct knows no path to the sender, and used to flood the answer: a county's worth of
+// airtime for each command, and at Gisebo on 2026-11-23 one such answer in eight was lost
+// where its copies met. MeshCore has the cure for its own clients: whoever receives a flooded
+// path return sends a short direct packet back with the path that return took, measured in
+// the direction it will be used. So a sender whose command was answered is a peer of this
+// node for five minutes, long enough for that packet to arrive, and the path it brings is
+// kept for the answers that follow. A relay sends it (MqttRelayHooks.cpp), and a companion
+// does of its own accord. Kept in RAM for the three senders last answered: a restart, or a
+// path that has gone stale, costs one flooded command, whose answer floods and renews it.
+#define MQTTCTRL_REQUESTERS            3
+#define MQTTCTRL_REQUESTER_PATH_MAX    64        // MAX_PATH_SIZE
+#define MQTTCTRL_REQUESTER_LISTEN_MS   300000UL
+#define MQTTCTRL_REQUESTER_KEY_LEN     32
+
+struct MqttCtrlRequester {
+  uint8_t key[MQTTCTRL_REQUESTER_KEY_LEN];
+  uint8_t secret[MQTTCTRL_REQUESTER_KEY_LEN];
+  uint8_t path[MQTTCTRL_REQUESTER_PATH_MAX];
+  uint8_t path_len;      // MeshCore's path length byte: bits 6-7 hash size - 1, bits 0-5 hash count
+  uint32_t heard_ms;     // millis() its last command was answered
+  bool used;
+  bool has_path;
+};
+
+// How many bytes a path length byte stands for, or -1 when it is the reserved size or does
+// not fit the room.
+static inline int mqttCtrlPathBytes(uint8_t path_len, size_t room) {
+  const size_t size = (size_t)(path_len >> 6) + 1, count = path_len & 63;
+  return size == 4 || size * count > room ? -1 : (int)(size * count);
+}
+
+struct MqttCtrlRequesters {
+  MqttCtrlRequester entry[MQTTCTRL_REQUESTERS];
+  MqttCtrlRequesters() { memset(entry, 0, sizeof(entry)); }
+
+  int find(const uint8_t* key) const {
+    if (key == NULL) return -1;
+    for (int i = 0; i < MQTTCTRL_REQUESTERS; i++) {
+      if (entry[i].used && memcmp(entry[i].key, key, MQTTCTRL_REQUESTER_KEY_LEN) == 0) return i;
+    }
+    return -1;
+  }
+  // A command of this sender was answered. A sender already known keeps its path; a new one
+  // takes a free place, else that of the sender heard longest ago.
+  int note(const uint8_t* key, const uint8_t* secret, uint32_t now_ms) {
+    if (key == NULL || secret == NULL) return -1;
+    int i = find(key);
+    if (i < 0) {
+      i = 0;
+      for (int j = 0; j < MQTTCTRL_REQUESTERS; j++) {
+        if (!entry[j].used) { i = j; break; }
+        if (now_ms - entry[j].heard_ms > now_ms - entry[i].heard_ms) i = j;
+      }
+      memset(&entry[i], 0, sizeof(entry[i]));
+      memcpy(entry[i].key, key, MQTTCTRL_REQUESTER_KEY_LEN);
+      entry[i].used = true;
+    }
+    memcpy(entry[i].secret, secret, MQTTCTRL_REQUESTER_KEY_LEN);
+    entry[i].heard_ms = now_ms;
+    return i;
+  }
+  // Is this sender still listened to for the path it sends back? millis(), and its wrap.
+  bool listening(int i, uint32_t now_ms) const {
+    return i >= 0 && i < MQTTCTRL_REQUESTERS && entry[i].used
+           && now_ms - entry[i].heard_ms < MQTTCTRL_REQUESTER_LISTEN_MS;
+  }
+  bool learn(int i, const uint8_t* path, uint8_t path_len) {
+    if (i < 0 || i >= MQTTCTRL_REQUESTERS || !entry[i].used) return false;
+    const int n = mqttCtrlPathBytes(path_len, MQTTCTRL_REQUESTER_PATH_MAX);
+    if (n < 0 || (n > 0 && path == NULL)) return false;
+    if (n > 0) memcpy(entry[i].path, path, (size_t)n);
+    entry[i].path_len = path_len;
+    entry[i].has_path = true;
+    return true;
+  }
+  // The path to answer this sender along, or NULL when none was ever brought.
+  const MqttCtrlRequester* pathTo(const uint8_t* key) const {
+    const int i = find(key);
+    return i >= 0 && entry[i].has_path ? &entry[i] : NULL;
+  }
+};
+
 // Room for the response: a datagram carries 167 bytes (Mesh::createDatagram), a path return
 // 161 less the path it carries back (Mesh::createPathReturn, MAX_COMBINED_PATH).
 static inline size_t mqttCtrlMeshResponseRoom(bool path_return, size_t path_bytes) {

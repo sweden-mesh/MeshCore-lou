@@ -92,6 +92,7 @@ class Fork {
   uint32_t _mesh_ok = 0;                       // commands run over the mesh road
   uint32_t _mesh_refused = 0;                  // ... and requests on it that ran nothing
   bool _ctrl_debug = false;                    // `set mqtt.cmd.debug on`: until the next boot
+  MqttCtrlRequesters _requesters;              // who was answered over the mesh, and the way back
 
   // One line on the serial console for each command heard and where it stopped, while
   // `set mqtt.cmd.debug on` is in force. Never a key, a signature or more of a command than
@@ -148,6 +149,7 @@ class Fork {
 
   void relayForward();
   bool sendRelayRequest(const Mcc3Forward& fwd, uint32_t* air_ms);
+  bool isRelayPeer(const uint8_t* hash);
   void publishRelayResult(const uint8_t* rid, Mcc3ForwardResult& result);
   void onRelayResponse(mesh::Packet* packet, uint8_t path_len, const uint8_t* path,
                        const uint8_t* data, size_t len);
@@ -203,22 +205,27 @@ public:
   void onGroupDataRecv(mesh::Packet*, uint8_t, const mesh::GroupChannel&, uint8_t*, size_t) { }
 #endif
 
-  // The relay's target as a peer: Mesh::searchPeersByHash, getPeerSharedSecret,
-  // onPeerDataRecv and onPeerPathRecv. RELAY_PEER stands in MyMesh's matching_peer_indexes
-  // for it, above every client index and the neighbour-discovery overlay's. Each returns
-  // true when the peer was the relay's and upstream must not look it up.
+  // The command plane's peers, which are no clients of this node: the relay's target while a
+  // forward waits for its answer, and whoever was answered over the mesh, for the path it
+  // sends back. Mesh::searchPeersByHash, getPeerSharedSecret, onPeerDataRecv and
+  // onPeerPathRecv. RELAY_PEER and REQUESTER_PEER + n stand in MyMesh's matching_peer_indexes
+  // for them, above every client index and the neighbour-discovery overlay's. searchPeers
+  // returns how many it wrote; the others true when the peer was the plane's and upstream
+  // must not look it up. `reciprocate` is what Mesh::onPeerPathRecv returns then: whether the
+  // sender of a flooded path return is sent the path it took.
   static const int RELAY_PEER = 2000;
-#if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
-  bool isRelayPeer(const uint8_t* hash);
-  bool relayPeerSecret(uint8_t* dest_secret, int peer_idx);
-  bool onRelayPeerData(mesh::Packet* packet, uint8_t type, int peer_idx, const uint8_t* data, size_t len);
-  bool onRelayPeerPath(mesh::Packet* packet, int peer_idx, const uint8_t* path, uint8_t path_len,
-                       uint8_t extra_type, const uint8_t* extra, uint8_t extra_len);
+  static const int REQUESTER_PEER = 2001;
+#ifdef WITH_MQTT_COMMAND
+  int searchPeers(const uint8_t* hash, int* indexes, int room);
+  bool peerSecret(uint8_t* dest_secret, int peer_idx);
+  bool onPeerData(mesh::Packet* packet, uint8_t type, int peer_idx, const uint8_t* data, size_t len);
+  bool onPeerPath(mesh::Packet* packet, int peer_idx, const uint8_t* path, uint8_t path_len,
+                  uint8_t extra_type, const uint8_t* extra, uint8_t extra_len, bool* reciprocate);
 #else
-  bool isRelayPeer(const uint8_t*) { return false; }
-  bool relayPeerSecret(uint8_t*, int) { return false; }
-  bool onRelayPeerData(mesh::Packet*, uint8_t, int, const uint8_t*, size_t) { return false; }
-  bool onRelayPeerPath(mesh::Packet*, int, const uint8_t*, uint8_t, uint8_t, const uint8_t*, uint8_t) {
+  int searchPeers(const uint8_t*, int*, int) { return 0; }
+  bool peerSecret(uint8_t*, int) { return false; }
+  bool onPeerData(mesh::Packet*, uint8_t, int, const uint8_t*, size_t) { return false; }
+  bool onPeerPath(mesh::Packet*, int, const uint8_t*, uint8_t, uint8_t, const uint8_t*, uint8_t, bool*) {
     return false;
   }
 #endif
