@@ -431,15 +431,16 @@ void Fork::ControlLink::onControlMessage(const char* topic, const uint8_t* paylo
 void Fork::formatNodeStats(char* reply) {
 #ifdef WITH_MQTT_BRIDGE
   const long queue = _mesh.bridge != NULL && _mesh.bridge->isRunning() ? _mesh.bridge->getQueueSize() : -1;
+  const long recv_errors = (long)_mesh._radio->getPacketsRecvErrors();
 #else
-  const long queue = -1;
+  const long queue = -1, recv_errors = -1;   // the Observer's radio wrapper counts them
 #endif
-  mqttCtrlFormatNodeStats(reply, MQTTCTRL_MAX_REPLY, _mesh._cli.getBoard()->getBattMilliVolts(),
+  mqttCtrlFormatNodeStats(reply, MQTTCTRL_MAX_REPLY, board.getBattMilliVolts(),
                           _mesh._ms->getMillis() / 1000, (int16_t)_mesh._radio->getNoiseFloor(),
                           _mesh.getTotalAirTime() / 1000, _mesh.getReceiveAirTime() / 1000,
                           (long)(_mesh.getNumSentFlood() + _mesh.getNumSentDirect()),
                           (long)(_mesh.getNumRecvFlood() + _mesh.getNumRecvDirect()),
-                          _mesh.getErrFlags(), (long)_mesh._radio->getPacketsRecvErrors(), queue);
+                          _mesh._err_flags, recv_errors, queue);
 }
 
 // `get sensors`: the battery, the MCU's temperature where the board has one, and what the
@@ -448,8 +449,8 @@ void Fork::formatNodeStats(char* reply) {
 void Fork::formatSensors(char* reply) {
   _mesh.telemetry.reset();
   sensors.querySensors(TELEM_PERM_BASE | TELEM_PERM_ENVIRONMENT, _mesh.telemetry);
-  const float temperature = _mesh._cli.getBoard()->getMCUTemperature();
-  sensorReadoutFormat(reply, SENSOR_READOUT_MAX + 1, _mesh._cli.getBoard()->getBattMilliVolts(),
+  const float temperature = board.getMCUTemperature();
+  sensorReadoutFormat(reply, SENSOR_READOUT_MAX + 1, board.getBattMilliVolts(),
                       isnan(temperature) ? SENSOR_READOUT_NO_TEMP : (int)lroundf(temperature * 10),
                       _mesh.telemetry.getBuffer(), _mesh.telemetry.getSize());
 }
