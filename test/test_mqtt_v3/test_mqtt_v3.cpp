@@ -1006,12 +1006,6 @@ struct RelayBench {
   Mcc3Keys owner = ownerKeys(OWNER, NODE.pub), node = nodeKeys(NODE, OWNER.pub);
   Mcc3Relay relay;
   uint8_t mode = MQTTCTRL_RELAY_OWN;
-  // A relay that has been up a while: what a boot does to the budget is test_mqtt_control's.
-  RelayBench() {
-    relay.budget.air.fresh = false;
-    relay.budget.any_flood = true;
-    relay.budget.last_flood = RELAY_NOW - 2 * MQTTCTRL_RELAY_DAY_SECS;
-  }
   bool has_home = true;
   uint32_t air_ms = 1700;
 

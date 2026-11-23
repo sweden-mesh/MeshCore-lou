@@ -131,7 +131,7 @@ void Fork::describeRelay(char* reply) {
   const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
   const uint32_t left_ms = _relay.budget.air.leftMs(now);
   mqttCtrlRelayDescribe(_mqtt_control.relayMode(), _relay.forwarded, _relay.answered, _relay.refused,
-                        _relay.budget.air.cooling(now) ? (uint8_t)MQTTCTRL_AIR_COOL : _relay.budget.air.phase(now), left_ms, _relay.budget.floodsToday(now), reply,
+                        _relay.budget.air.phase(now), left_ms, _relay.budget.floodsToday(now), reply,
                         MQTTCTRL_MAX_REPLY);
 }
 
