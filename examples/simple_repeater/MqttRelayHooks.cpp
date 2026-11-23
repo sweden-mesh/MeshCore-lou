@@ -35,7 +35,7 @@ void Fork::relayForward() {
     status = MCC3_FWD_SEND_FAILED;
   }
   _relay.refused++;
-  debugLine("relay: forward %u refused, status %d", (unsigned)fwd.counter, status);
+  debugLine("relay: forward %u refused, %s", (unsigned)fwd.counter, mcc3ForwardStatusName(status));
   MESH_DEBUG_PRINTLN("MqttControl: forward %u refused, status %d", (uint32_t)fwd.counter, (uint32_t)status);
   Mcc3ForwardResult result;
   mcc3ForwardResultInit(&result, fwd.counter, (uint8_t)status);

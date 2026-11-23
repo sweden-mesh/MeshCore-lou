@@ -1394,6 +1394,21 @@ struct MqttCtrlAirBudget {
   }
 };
 
+// When the answer goes out. A request that came direct is answered at once, as upstream
+// answers a login. One that came flooded arrives while every repeater around is still
+// repeating it, and a request of this size is on the air 1.7 s a copy: at Gisebo on
+// 2026-11-23 the copies ran for 16 s, and two answers sent 300 ms after the request were
+// heard by nobody. So that answer waits 15 to 30 s, drawn at random so that two nodes
+// answering one flood do not wait alike. The relay waits two minutes for it.
+#define MQTTCTRL_MESH_ANSWER_DELAY_MS        300UL     // upstream's SERVER_RESPONSE_DELAY
+#define MQTTCTRL_MESH_FLOOD_ANSWER_MIN_MS    15000UL
+#define MQTTCTRL_MESH_FLOOD_ANSWER_SPAN_MS   15000UL
+
+static inline uint32_t mqttCtrlMeshAnswerDelay(bool request_flooded, uint32_t random) {
+  if (!request_flooded) return MQTTCTRL_MESH_ANSWER_DELAY_MS;
+  return MQTTCTRL_MESH_FLOOD_ANSWER_MIN_MS + random % (MQTTCTRL_MESH_FLOOD_ANSWER_SPAN_MS + 1);
+}
+
 // Room for the response: a datagram carries 167 bytes (Mesh::createDatagram), a path return
 // 161 less the path it carries back (Mesh::createPathReturn, MAX_COMBINED_PATH).
 static inline size_t mqttCtrlMeshResponseRoom(bool path_return, size_t path_bytes) {

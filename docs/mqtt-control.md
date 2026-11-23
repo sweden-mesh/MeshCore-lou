@@ -474,6 +474,10 @@ The checks are the plane's, with three differences:
   stays denied, and the command still runs with a non-zero `sender_timestamp`.
 - **An unset clock.** A node cut off from NTP may have only the firmware's 2024 default. Then
   the expiry is not checked and the counter alone stops a replay.
+- **A flooded request is answered 15 to 30 s later**, at random, once its copies have died
+  down around the node: an answer sent at once goes out while the repeaters around are still
+  repeating the request, and is lost (measured at Gisebo, 2026-11-23). A request that came
+  direct is answered at once.
 - **An airtime budget for the answers**, on top of the plane's own budget: the first answer
   opens a burst of 15 minutes in which answers may fill 5 % of the time (45 s on the air), the
   15 minutes after it hold 1 % (9 s), and the answer after that opens the next burst. It is

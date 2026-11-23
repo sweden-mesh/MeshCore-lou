@@ -1185,6 +1185,15 @@ TEST(Mcc3Relay, TheAirtimeAndTheFloodLimitsRefuseAndAFailedSendSpendsNothing) {
   EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_DIRECT, now + 1800));
 }
 
+TEST(Mcc3Relay, AStatusHasTheNameMccontrolPrints) {
+  EXPECT_STREQ("answered", mcc3ForwardStatusName(MCC3_FWD_ANSWERED));
+  EXPECT_STREQ("off", mcc3ForwardStatusName(MCC3_FWD_OFF));
+  EXPECT_STREQ("rate-limited", mcc3ForwardStatusName(MCC3_FWD_RATE_LIMITED));
+  EXPECT_STREQ("send-failed", mcc3ForwardStatusName(MCC3_FWD_SEND_FAILED));
+  EXPECT_STREQ("unknown", mcc3ForwardStatusName(MCC3_FWD_SEND_FAILED + 1));
+  EXPECT_STREQ("unknown", mcc3ForwardStatusName(-1));
+}
+
 TEST(Mcc3Relay, TheWaitEndsAfter120SecondsAcrossAMillisWrap) {
   EXPECT_FALSE(mcc3RelayWaitOver(1000, 1000));
   EXPECT_FALSE(mcc3RelayWaitOver(1000, 1000 + 119999));
