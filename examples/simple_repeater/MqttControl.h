@@ -97,7 +97,7 @@ class MqttControl {
   MqttCtrlBudget _transmits;
   uint8_t _mesh_mode;         // MqttCtrlMeshMode
   uint8_t _relay_mode;        // MqttCtrlRelayMode
-  MqttCtrlMeshBudget _mesh_answers;
+  MqttCtrlAirBudget _mesh_answers;
 
   void load();
   void save();
@@ -117,6 +117,8 @@ public:
   const char* pubkey() const { return _pubkey; }
   uint8_t keyVia() const { return _key_via; }
   uint8_t meshMode() const { return _mesh_mode; }
+  // An answer went out over the mesh: `air_ms` is the radio's estimate for its packet.
+  void meshAnswered(uint32_t now, uint32_t air_ms) { _mesh_answers.spend(now, air_ms); }
   void setMeshMode(uint8_t mode) { _mesh_mode = mode; save(); }
   uint8_t relayMode() const { return _relay_mode; }
   void setRelayMode(uint8_t mode) { _relay_mode = mode; save(); }

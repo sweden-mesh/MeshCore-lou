@@ -299,7 +299,7 @@ MqttCtrlResult MqttControl::meshCommand(const mesh::Identity& owner, const char*
   }
   if (!owner.verify(req.env.signature, signed_bytes, signed_len)) return MQTTCTRL_ERR_SIG_INVALID;
   if (!mqttCtrlCounterAccepted(_counter, req.env.counter)) return MQTTCTRL_ERR_REPLAY;
-  if (!_mesh_answers.allow(now)) return MQTTCTRL_ERR_RATE_LIMITED;
+  if (!_mesh_answers.allows(now)) return MQTTCTRL_ERR_RATE_LIMITED;
   *answer = true;
   if (!open) return MQTTCTRL_ERR_MESH_CLOSED;
   return execute(req.env, topic, true, now, runner, reply, NULL);
@@ -309,7 +309,7 @@ MqttCtrlResult MqttControl::meshCommand(const Mcc3Command& cmd, uint32_t now, bo
                                         MqttCommandRunner* runner, char* reply, bool* answer) {
   reply[0] = 0;
   *answer = false;
-  if (!_mesh_answers.allow(now)) return MQTTCTRL_ERR_RATE_LIMITED;
+  if (!_mesh_answers.allows(now)) return MQTTCTRL_ERR_RATE_LIMITED;
   *answer = true;
   if (!open) return MQTTCTRL_ERR_MESH_CLOSED;
   MqttCtrlEnvelope env;

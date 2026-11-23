@@ -15,20 +15,27 @@ void Fork::relayForward() {
   if (opened != MQTTCTRL_OK) {
     _ctrl_unverified++;
     _ctrl_last_unverified = opened;
+    debugLine("relay: a forward did not open (%s)", mqttCtrlResultName(opened));
     return;
   }
   _ctrl_last_verified_ms = millis();
 
   const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
-  int status = mcc3RelayAdmit(&_relay, _mqtt_control.relayMode(), now, &fwd, _mesh.self_id.pub_key);
+  const RegionEntry* home = _mesh.region_map.getHomeRegion();
+  const bool has_home = home != NULL && !home->isWildcard();
+  int status = mcc3RelayAdmit(&_relay, _mqtt_control.relayMode(), now, &fwd, _mesh.self_id.pub_key, has_home);
   if (status == MCC3_FWD_SEND) {
-    if (sendRelayRequest(fwd)) {
-      mcc3RelaySent(&_relay, now, fwd.route != MCC3_ROUTE_DIRECT);
+    uint32_t air_ms = 0;
+    if (sendRelayRequest(fwd, &air_ms)) {
+      mcc3RelaySent(&_relay, now, fwd.route, has_home, air_ms);
+      debugLine("relay: forward %u sent %s, %u ms on the air", (unsigned)fwd.counter,
+                fwd.route == MCC3_ROUTE_DIRECT ? "direct" : "flood", (unsigned)air_ms);
       return;
     }
     status = MCC3_FWD_SEND_FAILED;
   }
   _relay.refused++;
+  debugLine("relay: forward %u refused, status %d", (unsigned)fwd.counter, status);
   MESH_DEBUG_PRINTLN("MqttControl: forward %u refused, status %d", (uint32_t)fwd.counter, (uint32_t)status);
   Mcc3ForwardResult result;
   mcc3ForwardResultInit(&result, fwd.counter, (uint8_t)status);
@@ -37,7 +44,7 @@ void Fork::relayForward() {
 
 // The request goes out as this node's own anonymous request, so the target answers this
 // node: a fresh tag, then the body exactly as a companion would have been handed it.
-bool Fork::sendRelayRequest(const Mcc3Forward& fwd) {
+bool Fork::sendRelayRequest(const Mcc3Forward& fwd, uint32_t* air_ms) {
   mesh::Identity target(fwd.target);
   uint8_t secret[PUB_KEY_SIZE];
   _mesh.self_id.calcSharedSecret(secret, target);
@@ -50,6 +57,7 @@ bool Fork::sendRelayRequest(const Mcc3Forward& fwd) {
   mesh::Packet* pkt = _mesh.createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, _mesh.self_id, target, secret,
                                                data, 4 + fwd.body_len);
   if (pkt == NULL) return false;
+  *air_ms = _mesh._radio->getEstAirtimeFor(pkt->getRawLength());
 
   if (fwd.route == MCC3_ROUTE_DIRECT) {
     _mesh.sendDirect(pkt, fwd.path, fwd.path_len);
@@ -88,6 +96,7 @@ void Fork::publishRelayResult(const uint8_t* rid, Mcc3ForwardResult& result) {
 void Fork::loopRelay() {
   if (!_relay.waiting || !mcc3RelayWaitOver(_relay_wait.since, millis())) return;
   _relay.waiting = false;
+  debugLine("relay: forward %u, no answer", (unsigned)_relay_wait.counter);
   Mcc3ForwardResult result;
   mcc3ForwardResultInit(&result, _relay_wait.counter, MCC3_FWD_NO_ANSWER);
   result.sent = _relay_wait.sent;
@@ -131,6 +140,7 @@ void Fork::onRelayResponse(mesh::Packet* packet, uint8_t path_len, const uint8_t
   if (!_relay.waiting || !mcc3RelayTakeResponse(_relay_wait.tag, data, len, &result)) return;
   _relay.waiting = false;
   _relay.answered++;
+  debugLine("relay: forward %u answered, %u bytes", (unsigned)_relay_wait.counter, (unsigned)len);
   result.sent = _relay_wait.sent;
   result.snr = (int8_t)(packet->getSNR() * 4);
   mcc3ForwardResultPath(&result, path_len, path);
@@ -138,10 +148,11 @@ void Fork::onRelayResponse(mesh::Packet* packet, uint8_t path_len, const uint8_t
 }
 
 void Fork::describeRelay(char* reply) {
-  int forwards, floods;
-  _relay.budget.spent(_mesh.getRTCClock()->getCurrentTime(), &forwards, &floods);
+  const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
+  const uint32_t left_ms = _relay.budget.air.leftMs(now);
   mqttCtrlRelayDescribe(_mqtt_control.relayMode(), _relay.forwarded, _relay.answered, _relay.refused,
-                        forwards, floods, reply, MQTTCTRL_MAX_REPLY);
+                        _relay.budget.air.phase(now), left_ms, _relay.budget.floodsToday(now), reply,
+                        MQTTCTRL_MAX_REPLY);
 }
 
 #endif

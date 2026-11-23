@@ -358,7 +358,22 @@ every status publish carries -- as one line of short pairs that fits the 160-byt
 rxerr=13369 q=0`. The counters are read from the mesh itself and `q` from the bridge's queue,
 left out while the bridge is not running; a value the node cannot measure is left out. It is
 the command plane's own command, so an image without it does not have it. The `stats-*` dumps
-it stands in for stay serial-only. A `set` of a key the CLI does not know travels and is answered "unknown": the deny
+it stands in for stay serial-only.
+
+**`get sensors`** (lou-20) reads what the node measures, on either road and on an image without
+an uplink too: `> batt=3881mV mcu=21.5C temp=23.5C hum=40.5% press=1013.2hPa temp/2=-4.5C`.
+`batt` and `mcu` (the MCU's own temperature, where the board has one) come from the board; the
+rest is what the board's sensors report for a telemetry request, with the channel after a
+slash when it is not the node's own. A position is left out. The line is at most 125 bytes,
+what a sealed answer over the mesh carries, and ends on a whole pair. `get stats` is answered
+on an image without an uplink too.
+
+**`set mqtt.cmd.debug on|off`** (lou-20, the serial console only, until the next boot) prints
+one line, `mcc: ...`, for each command or forward heard on either road and where it stopped:
+not listening, refused before it ran and why, run, answered, and the airtime of what went
+out. It prints no key, no signature and no command text. `get mqtt.cmd.debug` says which.
+
+A `set` of a key the CLI does not know travels and is answered "unknown": the deny
 list bounds what a command may *do*, not whether it is well formed, and the CLI stays the
 authority on the latter.
 
@@ -459,9 +474,12 @@ The checks are the plane's, with three differences:
   stays denied, and the command still runs with a non-zero `sender_timestamp`.
 - **An unset clock.** A node cut off from NTP may have only the firmware's 2024 default. Then
   the expiry is not checked and the counter alone stops a replay.
-- **One answer a minute and ten an hour**, on top of the plane's own budget, since each costs
-  airtime. A request that the key did not sign, whose counter is not new, or that is over this
-  budget is not answered at all, so nobody who heard a request can make the node transmit by
+- **An airtime budget for the answers**, on top of the plane's own budget: the first answer
+  opens a burst of 15 minutes in which answers may fill 5 % of the time (45 s on the air), the
+  15 minutes after it hold 1 % (9 s), and the answer after that opens the next burst. It is
+  counted in the radio's own estimate for each answer, so the shares hold on any radio
+  setting; the answer that crosses the line is the last. A request that the key did not sign,
+  whose counter is not new, or that is over this budget is not answered at all, so nobody who heard a request can make the node transmit by
   sending it again.
 
 `set mqtt.cmd.mesh off|on|auto` (console or admin login; denied on both roads) says when the
@@ -515,8 +533,13 @@ counter are not involved. This is the plane's second sanctioned transmit, beside
   serves the holder of its own command key and nobody else. A node without a command key never
   relays. The owner may switch it over the plane; it is not under `mqtt.cmd`, so the deny list
   admits it. Observer `rc` and `arrc` images only.
-- **The budget.** 10 forwards an hour, at most 2 of them floods, one waiting at a time. Fixed.
-  A request that could not be sent spends nothing.
+- **The budget.** The relay's requests have the same airtime budget as a node's answers: a
+  burst of 15 minutes at 5 % (45 s on the air, about 26 requests), then 15 minutes at 1 %
+  (9 s), then a burst again. A flood also costs every repeater that hears it, so floods keep
+  limits of their own: one a minute in a burst, one in five minutes in a cooldown, 100 in a
+  day, and of those that leave the region home (the default scope, or any flood from a relay
+  with no region home) two an hour. One forward waits at a time. Fixed. A request that could
+  not be sent spends nothing.
 - **The route** is the owner's choice per forward: direct along a path the forward carries (no
   path means one transmission, for a target the relay hears itself), a flood in the relay's
   `region home`, or a flood in its default scope. A flood in `region home` uses the default
@@ -530,8 +553,8 @@ counter are not involved. This is the plane's second sanctioned transmit, beside
   `off`, `expired`, `replay`, `bad-body`, `busy`, `rate-limited`, `clock-unset`, `send-failed`.
   With an answer come its SNR at the relay and, when the answer returned a path, that path,
   which mccontrol can send direct along next time.
-- `get mqtt.relay` answers `> own, forwarded 3, answered 2, refused 1, 7 of 10 left this hour
-  (2 of 2 floods)`, counted since boot, or `> off`. Bit 4 of the alive message's flags says the
+- `get mqtt.relay` answers `> own, forwarded 3, answered 2, refused 1, burst, 39.9 s airtime
+  left, floods today 1 of 100`, the counts since boot, or `> off`. Bit 4 of the alive message's flags says the
   node relays.
 
 Anything that is not a forward of the owner's is dropped in silence and counted in

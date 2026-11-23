@@ -6,6 +6,10 @@
 
 #ifdef WITH_MQTT_COMMAND
 
+#include <math.h>
+#include <stdarg.h>
+#include <helpers/SensorReadout.h>
+
 #ifdef WITH_MQTT_BRIDGE
 
 // `set mqtt.cmd on` with no slot configured, the one line a fresh node needs
@@ -282,6 +286,7 @@ void Fork::loopMqttControl() {
     _mqtt_control.discard();
     _ctrl_unverified++;
     _ctrl_last_unverified = ready;
+    debugLine("mqtt: a command discarded, no usable mqtt.cmd.pubkey");
     MESH_DEBUG_PRINTLN("MqttControl: no usable mqtt.cmd.pubkey, command discarded");
     return;
   }
@@ -306,6 +311,8 @@ void Fork::loopMqttControl() {
   MqttCtrlResult result = _mqtt_control.drain(owner, _mesh.getRTCClock()->getCurrentTime(),
                                               &_control_link, reply, sizeof(reply), &outcome);
   MESH_DEBUG_PRINTLN("MqttControl: result %d, reply '%s'", (uint32_t)result, reply);
+  debugLine("mqtt: a command, %s, %s", outcome.authentic ? "the key's" : "not the key's",
+            mqttCtrlResultName(result));
 
   // Only an outcome the command key vouched for is published -- see the note on
   // drain(). A refusal that got this far still publishes: a node that refuses in
@@ -406,20 +413,6 @@ void Fork::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome
   _mesh.bridge->publishControlResult(_ctrl_result, payload, n, MQTTCTRL_RESULT_QOS);
 }
 
-// `get stats`, readable over the plane: the counters every status publish carries, read
-// from the mesh itself -- the radio, the dispatcher, the board -- and the bridge's queue
-// when it runs. Any sender_timestamp: it says no more than the status topic does. The
-// `stats-*` dumps it stands in for stay serial-only.
-void Fork::formatNodeStats(char* reply) {
-  const long queue = _mesh.bridge != NULL && _mesh.bridge->isRunning() ? _mesh.bridge->getQueueSize() : -1;
-  mqttCtrlFormatNodeStats(reply, MQTTCTRL_MAX_REPLY, _mesh._cli.getBoard()->getBattMilliVolts(),
-                          _mesh._ms->getMillis() / 1000, (int16_t)_mesh._radio->getNoiseFloor(),
-                          _mesh.getTotalAirTime() / 1000, _mesh.getReceiveAirTime() / 1000,
-                          (long)(_mesh.getNumSentFlood() + _mesh.getNumSentDirect()),
-                          (long)(_mesh.getNumRecvFlood() + _mesh.getNumRecvDirect()),
-                          _mesh.getErrFlags(), (long)_mesh._radio->getPacketsRecvErrors(), queue);
-}
-
 void Fork::ControlLink::onControlMessage(const char* topic, const uint8_t* payload, size_t len) {
   // A pong is the broker's answer to `mqtt.cmd ping`, never a command: it is taken
   // here, before any parsing, and goes no further whether it matches or not.
@@ -430,6 +423,47 @@ void Fork::ControlLink::onControlMessage(const char* topic, const uint8_t* paylo
   fork._mqtt_control.stage(topic, payload, len);
 }
 #endif
+
+// `get stats`, readable on either road: the counters every status publish carries, read
+// from the mesh itself -- the radio, the dispatcher, the board -- and the bridge's queue
+// when there is one and it runs. Any sender_timestamp: it says no more than the status topic
+// does. The `stats-*` dumps it stands in for stay serial-only.
+void Fork::formatNodeStats(char* reply) {
+#ifdef WITH_MQTT_BRIDGE
+  const long queue = _mesh.bridge != NULL && _mesh.bridge->isRunning() ? _mesh.bridge->getQueueSize() : -1;
+#else
+  const long queue = -1;
+#endif
+  mqttCtrlFormatNodeStats(reply, MQTTCTRL_MAX_REPLY, _mesh._cli.getBoard()->getBattMilliVolts(),
+                          _mesh._ms->getMillis() / 1000, (int16_t)_mesh._radio->getNoiseFloor(),
+                          _mesh.getTotalAirTime() / 1000, _mesh.getReceiveAirTime() / 1000,
+                          (long)(_mesh.getNumSentFlood() + _mesh.getNumSentDirect()),
+                          (long)(_mesh.getNumRecvFlood() + _mesh.getNumRecvDirect()),
+                          _mesh.getErrFlags(), (long)_mesh._radio->getPacketsRecvErrors(), queue);
+}
+
+// `get sensors`: the battery, the MCU's temperature where the board has one, and what the
+// board's sensors report for a telemetry request, less any position. The mesh's own
+// telemetry buffer is borrowed: a telemetry request fills it afresh before it reads it.
+void Fork::formatSensors(char* reply) {
+  _mesh.telemetry.reset();
+  sensors.querySensors(TELEM_PERM_BASE | TELEM_PERM_ENVIRONMENT, _mesh.telemetry);
+  const float temperature = _mesh._cli.getBoard()->getMCUTemperature();
+  sensorReadoutFormat(reply, SENSOR_READOUT_MAX + 1, _mesh._cli.getBoard()->getBattMilliVolts(),
+                      isnan(temperature) ? SENSOR_READOUT_NO_TEMP : (int)lroundf(temperature * 10),
+                      _mesh.telemetry.getBuffer(), _mesh.telemetry.getSize());
+}
+
+void Fork::debugLine(const char* fmt, ...) {
+  if (!_ctrl_debug) return;
+  char line[120];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(line, sizeof(line), fmt, args);
+  va_end(args);
+  Serial.print("mcc: ");
+  Serial.println(line);
+}
 
 void Fork::ControlLink::runCommand(uint32_t sender_timestamp, char* command, char* reply) {
   fork._mesh.handleCommand(sender_timestamp, command, reply);
@@ -442,12 +476,33 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
     describeMqttControl(reply);
     return true;
   }
-#ifdef WITH_MQTT_BRIDGE
   if (memcmp(command, "get stats", 9) == 0 && (command[9] == 0 || command[9] == ' ' ||
                                                command[9] == '\n' || command[9] == '\r')) {
     formatNodeStats(reply);
     return true;
   }
+  if (strcmp(command, "get sensors") == 0) {
+    formatSensors(reply);
+    return true;
+  }
+  if (strcmp(command, "get mqtt.cmd.debug") == 0) {
+    sprintf(reply, "> %s", _ctrl_debug ? "on" : "off");
+    return true;
+  }
+  // The serial console's alone: the lines go nowhere else, and it lasts until the next boot.
+  if (memcmp(command, "set mqtt.cmd.debug ", 19) == 0) {
+    const bool on = strcmp(&command[19], "on") == 0;
+    if (sender_timestamp != 0 || mesh_admin) {
+      strcpy(reply, "Err - the serial console only");
+    } else if (!on && strcmp(&command[19], "off") != 0) {
+      strcpy(reply, "Err - use: set mqtt.cmd.debug on|off");
+    } else {
+      _ctrl_debug = on;
+      strcpy(reply, "OK");
+    }
+    return true;
+  }
+#ifdef WITH_MQTT_BRIDGE
   MqttCtrlSlotPlan plan;
   const MqttCtrlSetup setup = mqttCtrlPlanSlot(command, &plan);
   if (setup == MQTTCTRL_SETUP_BAD_HOST) {
@@ -514,7 +569,11 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
     return true;
   }
   if (!mqttCtrlMeshIsRequest(data, len)) return false;
-  if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) return true;
+  if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) {
+    debugLine("mesh: a request (old scheme) heard, not listening: mqtt.cmd %s, mesh %s",
+              _mqtt_control.isEnabled() ? "on" : "off", mqttCtrlMeshModeName(_mqtt_control.meshMode()));
+    return true;
+  }
 
   MqttCtrlMeshRequest req;
   char node_hex[PUB_KEY_SIZE * 2 + 1];
@@ -526,6 +585,7 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
       || mqttCtrlOwnerReady(_mqtt_control.pubkey()) != MQTTCTRL_OK
       || !mesh::Utils::fromHex(owner.pub_key, PUB_KEY_SIZE, _mqtt_control.pubkey())) {
     _mesh_refused++;
+    debugLine("mesh: a request (old scheme) refused before the signature: unreadable, or no command key");
     return true;
   }
 
@@ -538,6 +598,7 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
   if (result == MQTTCTRL_OK) _mesh_ok++;
   else _mesh_refused++;
   MESH_DEBUG_PRINTLN("MqttControl: mesh result %d, reply '%s'", (uint32_t)result, reply);
+  debugLine("mesh: a request (old scheme), %s, %s", mqttCtrlResultName(result), answer ? "answered" : "no answer");
   if (answer) answerMeshCommand(packet, secret, sender, req.tag, req.env.counter, result, reply, false, false);
   return true;
 }
@@ -547,7 +608,11 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
 // neither. Every refusal before the signature and the answer budget is silent.
 void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                              const uint8_t* data, size_t len) {
-  if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) return;
+  if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) {
+    debugLine("mesh: a request heard, not listening: mqtt.cmd %s, mesh %s",
+              _mqtt_control.isEnabled() ? "on" : "off", mqttCtrlMeshModeName(_mqtt_control.meshMode()));
+    return;
+  }
   refreshMcc3Keys();
   mesh::Identity owner;
   const Mcc3Keys* keys = mesh::Utils::fromHex(owner.pub_key, PUB_KEY_SIZE, _mqtt_control.pubkey())
@@ -559,6 +624,8 @@ void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
                                        }, &owner, &cmd);
   if (result != MQTTCTRL_OK) {
     _mesh_refused++;
+    debugLine("mesh: a request refused before it ran: %s%s", mqttCtrlResultName(result),
+              keys == NULL ? " (no command key)" : "");
     return;
   }
 
@@ -570,6 +637,8 @@ void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   if (result == MQTTCTRL_OK) _mesh_ok++;
   else _mesh_refused++;
   MESH_DEBUG_PRINTLN("MqttControl: mcc3 mesh result %d, reply '%s'", (uint32_t)result, reply);
+  debugLine("mesh: a request, counter %u, %s, %s", (unsigned)cmd.counter, mqttCtrlResultName(result),
+            answer ? "answered" : "no answer");
   if (answer) {
     answerMeshCommand(packet, secret, sender, cmd.tag, cmd.counter, result, reply, true,
                       (cmd.flags & MCC3_MESH_FLAG_ZERO_HOP) != 0);
@@ -626,15 +695,17 @@ void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   }
   if (n == 0) return;
 
-  if (path_return) {
-    mesh::Packet* path = _mesh.createPathReturn(sender, secret, packet->path, packet->path_len,
-                                                PAYLOAD_TYPE_RESPONSE, data, n);
-    if (path) _mesh.sendFloodReply(path, delay_millis, packet->getPathHashSize());
-    return;
-  }
-  mesh::Packet* out = _mesh.createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, data, n);
+  mesh::Packet* out = path_return
+      ? _mesh.createPathReturn(sender, secret, packet->path, packet->path_len, PAYLOAD_TYPE_RESPONSE, data, n)
+      : _mesh.createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, data, n);
   if (out == NULL) return;
-  if (zero_hop) {
+  const uint32_t air_ms = _mesh._radio->getEstAirtimeFor(out->getRawLength());
+  _mqtt_control.meshAnswered(now, air_ms);
+  debugLine("mesh: the answer, %u bytes, %u ms on the air, %s", (unsigned)n, (unsigned)air_ms,
+            zero_hop ? "no hops" : path_return ? "with its path" : "routed");
+  if (path_return) {
+    _mesh.sendFloodReply(out, delay_millis, packet->getPathHashSize());
+  } else if (zero_hop) {
     _mesh.sendZeroHop(out, delay_millis);
   } else if (route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH) {
     _mesh.sendDirect(out, client->out_path, client->out_path_len, delay_millis);
