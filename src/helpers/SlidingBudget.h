@@ -26,15 +26,19 @@
 // bad sync -- must not mint budget, so every remembered time that is now in the future
 // is pulled back to `now`: the cost is at most one window of refusals, never an extra
 // allowance.
-struct SlidingBudget {
-  uint32_t stamps[SLIDING_BUDGET_SLOTS];
+//
+// SlidingBudgetOf<N> remembers N; SlidingBudget is the ten everything but the command
+// plane's general budget uses.
+template <int SLOTS>
+struct SlidingBudgetOf {
+  uint32_t stamps[SLOTS];
   uint32_t secs;
   uint8_t  maximum;
   uint8_t  used;
 
-  SlidingBudget(uint8_t max_allowed, uint32_t window_secs)
+  SlidingBudgetOf(uint8_t max_allowed, uint32_t window_secs)
       : secs(window_secs),
-        maximum(max_allowed > SLIDING_BUDGET_SLOTS ? SLIDING_BUDGET_SLOTS : max_allowed),
+        maximum(max_allowed > SLOTS ? SLOTS : max_allowed),
         used(0) {}
 
   bool allow(uint32_t now) {
@@ -52,3 +56,5 @@ struct SlidingBudget {
     return true;
   }
 };
+
+typedef SlidingBudgetOf<SLIDING_BUDGET_SLOTS> SlidingBudget;

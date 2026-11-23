@@ -105,10 +105,10 @@ void Fork::loopRelay() {
 
 // While a forward waits its target is a peer, so Mesh can decrypt the RESPONSE, or the path
 // return carrying one, that a node which never logged in here sends back. A target that is
-// a client already keeps its own entry and is left to it.
+// a client of this node as well is tried here first: its answer to the forward would else go
+// to the client's side, which has no use for it, and the forward would end with no answer.
 bool Fork::isRelayPeer(const uint8_t* hash) {
-  return _relay.waiting && _relay_wait.target.isHashMatch(hash)
-         && _mesh.acl.getClient(_relay_wait.target.pub_key, PUB_KEY_SIZE) == NULL;
+  return _relay.waiting && _relay_wait.target.isHashMatch(hash);
 }
 
 // The answer, when it begins with the tag this node wrote: what the target sent after it,
@@ -131,7 +131,7 @@ void Fork::describeRelay(char* reply) {
   const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
   const uint32_t left_ms = _relay.budget.air.leftMs(now);
   mqttCtrlRelayDescribe(_mqtt_control.relayMode(), _relay.forwarded, _relay.answered, _relay.refused,
-                        _relay.budget.air.phase(now), left_ms, _relay.budget.floodsToday(now), reply,
+                        _relay.budget.air.cooling(now) ? (uint8_t)MQTTCTRL_AIR_COOL : _relay.budget.air.phase(now), left_ms, _relay.budget.floodsToday(now), reply,
                         MQTTCTRL_MAX_REPLY);
 }
 
