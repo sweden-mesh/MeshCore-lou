@@ -59,11 +59,12 @@
 // parameter change costs a flash write; a trigger costs the whole mesh airtime
 // and provokes a reply storm from every repeater in range, so it is capped far
 // harder. Both apply to *validly signed* commands: a key that leaks must not
-// become a flood weapon, and the airtime is not ours to spend. Thirty commands an hour
-// (operator's user story of 2026-11-23: an hourly reading and ten commands of maintenance in
-// short succession to one node, which ten an hour refused at the eleventh); what a command
-// puts on the air has budgets of its own, MqttCtrlAirBudget and the trigger's two.
-#define MQTTCTRL_CMD_MAX          30
+// become a flood weapon, and the airtime is not ours to spend. Fifty commands an hour
+// (operator 2026-11-23; ten refused his user story at the eleventh: an hourly reading and ten
+// commands of maintenance in short succession to one node). The number is free because what
+// a command puts on the air has budgets of its own, MqttCtrlAirBudget and the trigger's two:
+// fifty commands answered over the mesh are still held to 3 % of the hour.
+#define MQTTCTRL_CMD_MAX          50
 #define MQTTCTRL_CMD_WINDOW_SECS  3600
 #define MQTTCTRL_TRIGGER_MAX      2
 #define MQTTCTRL_TRIGGER_WINDOW   3600
@@ -74,7 +75,7 @@
 // packets to the same socket. Two writers interleave, the broker reads a malformed
 // packet and drops the node -- once per command, observed 2026-09-19 on both nodes
 // that could be commanded. Anything above 0 takes the outbox instead and is written
-// by the MQTT task alone. Costs one PUBACK per command, against thirty an hour.
+// by the MQTT task alone. Costs one PUBACK per command, against fifty an hour.
 #define MQTTCTRL_RESULT_QOS       1
 
 // The command budget is the shared sliding one; see SlidingBudget.h for why a fixed
@@ -1345,8 +1346,9 @@ static inline void mqttCtrlMeshNote(uint8_t mode, uint32_t ok, uint32_t refused,
 // packet, so the shares hold on any radio setting. Asking spends nothing, and the packet
 // that crosses the line is the last one sent. A clock stepped backwards restarts the quarter
 // it is in and mints no burst; one stepped forwards past both quarters opens one early, once.
-// After a boot the first quarter is a cooldown: the budget lives in RAM, and `reboot` is a
-// command.
+// The budget is in RAM, so a restart opens a burst as well: a cooldown after every boot was
+// tried and withdrawn the same day (operator 2026-11-23), since a node just installed or
+// restarted is exactly the one its owner wants to talk to.
 #define MQTTCTRL_AIR_QUARTER_SECS  900
 #define MQTTCTRL_AIR_BURST_MS      45000UL
 #define MQTTCTRL_AIR_COOL_MS       9000UL
@@ -1365,9 +1367,7 @@ struct MqttCtrlAirBudget {
   uint32_t start;      // when the burst opened
   uint32_t spent_ms;   // in the quarter `counted` names
   uint8_t counted;     // MqttCtrlAirPhase
-  bool fresh;          // nothing sent since boot: the first quarter is a cooldown, so that a
-                       // restart, which a command can ask for, never buys a burst
-  MqttCtrlAirBudget() : start(0), spent_ms(0), counted(MQTTCTRL_AIR_IDLE), fresh(true) { }
+  MqttCtrlAirBudget() : start(0), spent_ms(0), counted(MQTTCTRL_AIR_IDLE) { }
 
   uint8_t phase(uint32_t now) {
     if (counted == MQTTCTRL_AIR_IDLE) return MQTTCTRL_AIR_IDLE;
@@ -1384,12 +1384,7 @@ struct MqttCtrlAirBudget {
     }
     return p;
   }
-  // The quarter the next packet falls in: what phase() says, and a cooldown before the
-  // first packet since boot.
-  bool cooling(uint32_t now) {
-    const uint8_t p = phase(now);
-    return p == MQTTCTRL_AIR_COOL || (p == MQTTCTRL_AIR_IDLE && fresh);
-  }
+  bool cooling(uint32_t now) { return phase(now) == MQTTCTRL_AIR_COOL; }
   uint32_t allowanceMs(uint32_t now) { return cooling(now) ? MQTTCTRL_AIR_COOL_MS : MQTTCTRL_AIR_BURST_MS; }
   uint32_t leftMs(uint32_t now) {
     const uint32_t allowance = allowanceMs(now);
@@ -1398,16 +1393,10 @@ struct MqttCtrlAirBudget {
   bool allows(uint32_t now) { return leftMs(now) > 0; }
   void spend(uint32_t now, uint32_t ms) {
     if (phase(now) == MQTTCTRL_AIR_IDLE) {
-      if (fresh && now >= MQTTCTRL_AIR_QUARTER_SECS) {
-        start = now - MQTTCTRL_AIR_QUARTER_SECS;
-        counted = MQTTCTRL_AIR_COOL;
-      } else {
-        start = now;
-        counted = MQTTCTRL_AIR_BURST;
-      }
+      start = now;
+      counted = MQTTCTRL_AIR_BURST;
       spent_ms = 0;
     }
-    fresh = false;
     spent_ms = ms > 0xFFFFFFFFUL - spent_ms ? 0xFFFFFFFFUL : spent_ms + ms;
   }
 };
@@ -1564,7 +1553,6 @@ static inline bool mqttCtrlRelayParseMode(const char* text, uint8_t* out) {
 // default scope two an hour. Compiled in, as the trigger budget is. Asking spends nothing:
 // the caller asks, sends, and spends only what went out, so a request the packet pool
 // refused costs none. A clock stepped backwards pulls the remembered times back to now.
-// After a boot the first flood waits a cooldown's gap from the first forward asked for.
 #define MQTTCTRL_RELAY_FLOOD_GAP_SECS       60
 #define MQTTCTRL_RELAY_FLOOD_COOL_GAP_SECS  300
 #define MQTTCTRL_RELAY_FLOODS_A_DAY         100
@@ -1595,19 +1583,14 @@ struct MqttCtrlRelayBudget {
     return n;
   }
   bool allows(uint32_t now, bool flood, bool wide) {
-    // The first forward asked for since boot stands in for a flood just sent: the limits are
-    // in RAM, and a restart must not buy a flood sooner than a cooldown would.
-    if (!any_flood) {
-      last_flood = now;
-      any_flood = true;
-      if (flood) return false;
-    }
     if (!air.allows(now)) return false;
     if (!flood) return true;
-    if (last_flood > now) last_flood = now;
-    const uint32_t gap = air.cooling(now) ? MQTTCTRL_RELAY_FLOOD_COOL_GAP_SECS
-                                          : MQTTCTRL_RELAY_FLOOD_GAP_SECS;
-    if (now - last_flood < gap) return false;
+    if (any_flood) {
+      if (last_flood > now) last_flood = now;
+      const uint32_t gap = air.cooling(now) ? MQTTCTRL_RELAY_FLOOD_COOL_GAP_SECS
+                                            : MQTTCTRL_RELAY_FLOOD_GAP_SECS;
+      if (now - last_flood < gap) return false;
+    }
     if (floodsToday(now) >= MQTTCTRL_RELAY_FLOODS_A_DAY) return false;
     return !wide || wideThisHour(now) < MQTTCTRL_RELAY_WIDE_AN_HOUR;
   }

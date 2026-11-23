@@ -583,7 +583,7 @@ TEST(RateLimit, TheBudgetsAreWhatTheOperatorAskedFor) {
   // Named here so a change to either constant has to come past a test that says what
   // they were chosen to be: 2 transmits an hour is ~10.2 s of mesh airtime including
   // the reply storms each one provokes, 0.28% of the hour.
-  EXPECT_EQ(MQTTCTRL_CMD_MAX, 30);                    // operator's user story, 2026-11-23
+  EXPECT_EQ(MQTTCTRL_CMD_MAX, 50);                    // operator, 2026-11-23
   EXPECT_EQ(MQTTCTRL_TRIGGER_MAX, 2);
   EXPECT_EQ(MQTTCTRL_CMD_WINDOW_SECS, 3600);
   EXPECT_EQ(MQTTCTRL_TRIGGER_WINDOW, 3600);
@@ -2532,60 +2532,22 @@ TEST(Relay, TheOwnerSwitchesItOverThePlaneAndNothingUnderMqttCmdOpens) {
   }
 }
 
-// A budget that has sent before: the tests of the quarters themselves start from here. What
-// a boot does to it has tests of its own below.
-static MqttCtrlAirBudget airSinceLong() {
-  MqttCtrlAirBudget b;
-  b.fresh = false;
-  return b;
-}
-
-static MqttCtrlRelayBudget relaySinceLong(uint32_t now) {
-  MqttCtrlRelayBudget b;
-  b.air.fresh = false;
-  b.any_flood = true;
-  b.last_flood = now - 2 * MQTTCTRL_RELAY_DAY_SECS;
-  return b;
-}
-
-TEST(AirBudget, AfterABootTheFirstQuarterIsACooldown) {
+// The budgets are in RAM and a restart opens a burst: a cooldown after every boot was tried
+// and withdrawn (operator 2026-11-23). Pinned, so that it does not come back unnoticed.
+TEST(AirBudget, ANodeJustStartedHasItsBurst) {
   const uint32_t t = 1795000000;
   MqttCtrlAirBudget b;
-  EXPECT_TRUE(b.cooling(t));
-  EXPECT_EQ(MQTTCTRL_AIR_COOL_MS, b.leftMs(t));
-  EXPECT_EQ(MQTTCTRL_AIR_COOL_MS, b.leftMs(t + 5000));          // however long it waits unused
-  int sent = 0;
-  while (b.allows(t + 5000 + sent)) {
-    b.spend(t + 5000 + sent, 1700);
-    sent++;
-  }
-  EXPECT_EQ(6, sent);                                           // 9 s, not a burst's 45
-  EXPECT_EQ(MQTTCTRL_AIR_COOL, b.phase(t + 5100));
-  EXPECT_FALSE(b.allows(t + 5000 + MQTTCTRL_AIR_QUARTER_SECS - 1));
-  // A quarter after its first packet the node is where any other is: the next opens a burst.
-  EXPECT_EQ(MQTTCTRL_AIR_IDLE, b.phase(t + 5000 + MQTTCTRL_AIR_QUARTER_SECS));
-  EXPECT_FALSE(b.cooling(t + 5000 + MQTTCTRL_AIR_QUARTER_SECS));
-  EXPECT_EQ(MQTTCTRL_AIR_BURST_MS, b.leftMs(t + 5000 + MQTTCTRL_AIR_QUARTER_SECS));
+  EXPECT_FALSE(b.cooling(t));
+  EXPECT_EQ(MQTTCTRL_AIR_BURST_MS, b.leftMs(t));
+  MqttCtrlRelayBudget r;
+  EXPECT_TRUE(r.allows(t, true, false));
+  EXPECT_TRUE(r.allows(t, true, true));
 }
 
-TEST(Relay, AfterABootTheFirstFloodWaitsACooldownsGapFromTheFirstForwardAskedFor) {
-  const uint32_t t = 1795000000;
-  MqttCtrlRelayBudget b;
-  EXPECT_FALSE(b.allows(t, true, false));
-  EXPECT_TRUE(b.allows(t, false, false));                       // a direct forward goes at once
-  EXPECT_FALSE(b.allows(t + MQTTCTRL_RELAY_FLOOD_COOL_GAP_SECS - 1, true, false));
-  EXPECT_TRUE(b.allows(t + MQTTCTRL_RELAY_FLOOD_COOL_GAP_SECS, true, false));
-  MqttCtrlRelayBudget d;                                        // asked first for a direct one
-  EXPECT_TRUE(d.allows(t, false, false));
-  EXPECT_FALSE(d.allows(t + 1, true, false));
-  EXPECT_TRUE(d.allows(t + MQTTCTRL_RELAY_FLOOD_COOL_GAP_SECS, true, false));
-}
-
-// 5 % of a quarter of an hour, then 1 % of the next, then a burst again (operator 2026-11-23).
 TEST(AirBudget, ABurstOfFivePerCentThenACooldownOfOneThenABurstAgain) {
   EXPECT_EQ(MQTTCTRL_AIR_QUARTER_SECS * 1000UL * 5 / 100, MQTTCTRL_AIR_BURST_MS);
   EXPECT_EQ(MQTTCTRL_AIR_QUARTER_SECS * 1000UL * 1 / 100, MQTTCTRL_AIR_COOL_MS);
-  MqttCtrlAirBudget b = airSinceLong();
+  MqttCtrlAirBudget b;
   const uint32_t t = 1795000000;
   // Asking spends nothing and opens nothing.
   for (int i = 0; i < 100; i++) EXPECT_TRUE(b.allows(t));
@@ -2627,13 +2589,13 @@ TEST(AirBudget, ABurstOfFivePerCentThenACooldownOfOneThenABurstAgain) {
 
 TEST(AirBudget, AClockSteppedBackwardsMintsNoBurst) {
   const uint32_t t = 1795000000;
-  MqttCtrlAirBudget b = airSinceLong();
+  MqttCtrlAirBudget b;
   b.spend(t, MQTTCTRL_AIR_BURST_MS);
   EXPECT_FALSE(b.allows(t - 86400));                               // the burst restarts, still spent
   EXPECT_FALSE(b.allows(t - 86400 + MQTTCTRL_AIR_QUARTER_SECS - 1));
   EXPECT_EQ(MQTTCTRL_AIR_COOL, b.phase(t - 86400 + MQTTCTRL_AIR_QUARTER_SECS));
 
-  MqttCtrlAirBudget c = airSinceLong();                                             // in a cooldown it stays one
+  MqttCtrlAirBudget c;                                             // in a cooldown it stays one
   c.spend(t, 100);
   c.spend(t + MQTTCTRL_AIR_QUARTER_SECS, MQTTCTRL_AIR_COOL_MS);
   EXPECT_FALSE(c.allows(t + MQTTCTRL_AIR_QUARTER_SECS + 1));
@@ -2645,7 +2607,7 @@ TEST(AirBudget, AClockSteppedBackwardsMintsNoBurst) {
   EXPECT_FALSE(c.allows(t - 5000 + MQTTCTRL_AIR_QUARTER_SECS - 1));
   EXPECT_TRUE(c.allows(t - 5000 + MQTTCTRL_AIR_QUARTER_SECS));
   // A huge packet length cannot wrap the count round to nothing spent.
-  MqttCtrlAirBudget d = airSinceLong();
+  MqttCtrlAirBudget d;
   d.spend(t, 0xFFFFFFF0u);
   d.spend(t, 0x100);
   EXPECT_FALSE(d.allows(t));
@@ -2653,7 +2615,7 @@ TEST(AirBudget, AClockSteppedBackwardsMintsNoBurst) {
 
 TEST(Relay, FloodsKeepAGapADayAndAnHourOfTheirOwn) {
   const uint32_t t = 1795000000, air = 1700;
-  MqttCtrlRelayBudget b = relaySinceLong(t);
+  MqttCtrlRelayBudget b;
   for (int i = 0; i < 100; i++) EXPECT_TRUE(b.allows(t, true, true));   // asking spends nothing
   EXPECT_EQ(0, b.floodsToday(t));
 
@@ -2684,7 +2646,7 @@ TEST(Relay, FloodsKeepAGapADayAndAnHourOfTheirOwn) {
 
 TEST(Relay, AHundredFloodsADayAndTwoWideOnesAnHour) {
   const uint32_t t = 1795000000;
-  MqttCtrlRelayBudget b = relaySinceLong(t);
+  MqttCtrlRelayBudget b;
   // No airtime, so only the flood limits speak. A flood every five minutes.
   int given = 0;
   uint32_t at = t;
@@ -2700,7 +2662,7 @@ TEST(Relay, AHundredFloodsADayAndTwoWideOnesAnHour) {
   b.spend(t + MQTTCTRL_RELAY_DAY_SECS, true, false, 0);
   EXPECT_EQ(1, b.floodsToday(t + MQTTCTRL_RELAY_DAY_SECS));
 
-  MqttCtrlRelayBudget w = relaySinceLong(t);
+  MqttCtrlRelayBudget w;
   w.spend(t, true, true, 0);
   w.spend(t + 600, true, true, 0);
   EXPECT_FALSE(w.allows(t + 1200, true, true));
@@ -2712,7 +2674,7 @@ TEST(Relay, AHundredFloodsADayAndTwoWideOnesAnHour) {
   EXPECT_TRUE(w.allows(t + 4200, true, true));
 
   // A clock stepped backwards mints nothing: what is remembered is pulled back to now.
-  MqttCtrlRelayBudget c = relaySinceLong(t);
+  MqttCtrlRelayBudget c;
   c.spend(t, true, true, 0);
   c.spend(t + 600, true, true, 0);
   EXPECT_FALSE(c.allows(t - 86400, true, false));                 // the gap counts from now
@@ -2724,7 +2686,7 @@ TEST(Relay, AHundredFloodsADayAndTwoWideOnesAnHour) {
 
 TEST(Relay, AnEmptyAirBudgetStopsEveryForward) {
   const uint32_t t = 1795000000;
-  MqttCtrlRelayBudget b = relaySinceLong(t);
+  MqttCtrlRelayBudget b;
   b.spend(t, false, false, MQTTCTRL_AIR_BURST_MS);
   EXPECT_FALSE(b.allows(t + 100, false, false));
   EXPECT_FALSE(b.allows(t + 100, true, false));
