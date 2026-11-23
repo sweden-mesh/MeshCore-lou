@@ -734,7 +734,7 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
 
 int MyMesh::searchPeersByHash(const uint8_t *hash) {
   int n = 0;
-  if (fork.isRelayPeer(hash)) matching_peer_indexes[n++] = Fork::RELAY_PEER;
+  n += fork.searchPeers(hash, matching_peer_indexes, MAX_CLIENTS);
 #if defined(WITH_MQTT_NEIGHBORS)
   // While a neighbor-scope discovery is active, overlay the heard neighbours
   // that are NOT already ACL clients so their RESPONSE packets can be decoded.
@@ -760,7 +760,7 @@ int MyMesh::searchPeersByHash(const uint8_t *hash) {
 
 void MyMesh::getPeerSharedSecret(uint8_t *dest_secret, int peer_idx) {
   int i = matching_peer_indexes[peer_idx];
-  if (fork.relayPeerSecret(dest_secret, i)) return;
+  if (fork.peerSecret(dest_secret, i)) return;
 #if defined(WITH_MQTT_NEIGHBORS)
   // Overlay entries have no precomputed shared secret; derive it on the fly.
   if (neighbor_discover_active && i >= NEIGHBOR_DISCOVER_PEER_BASE) {
@@ -802,7 +802,7 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
 void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, const uint8_t *secret,
                             uint8_t *data, size_t len) {
   int i = matching_peer_indexes[sender_idx];
-  if (fork.onRelayPeerData(packet, type, i, data, len)) return;
+  if (fork.onPeerData(packet, type, i, data, len)) return;
 #if defined(WITH_MQTT_NEIGHBORS)
   // Overlay response: a heard neighbour (not an ACL client) answering our
   // anon-regions scope query. Consume it and stop — it is not a client packet.
@@ -930,7 +930,8 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
                             uint8_t path_len, uint8_t extra_type, uint8_t *extra, uint8_t extra_len) {
   // TODO: prevent replay attacks
   int i = matching_peer_indexes[sender_idx];
-  if (fork.onRelayPeerPath(packet, i, path, path_len, extra_type, extra, extra_len)) return false;
+  bool reciprocate;
+  if (fork.onPeerPath(packet, i, path, path_len, extra_type, extra, extra_len, &reciprocate)) return reciprocate;
 
   if (i >= 0 && i < acl.getNumClients()) { // get from our known_clients table (sender SHOULD already be known in this context)
     MESH_DEBUG_PRINTLN("PATH to client, path_len=%d", (uint32_t)path_len);
