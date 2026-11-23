@@ -6,7 +6,9 @@
 #
 #   -c  the unpacked candidate-<revision> artifact of fork-matrix.yml (images, unsigned
 #       manifests, SHA256SUMS)
-#   -t  the release tag, v<base>-lou-<nn>; every image must be of that revision
+#   -t  the release tag, v<base>-lou-<nn>, or v<base>-lou-<nn>rc[<n>] for a release candidate,
+#       which is created as a pre-release: no node fetches one (releases/latest/download skips
+#       it), and the firmware page offers it only on request; every image must be of that revision
 #   -k  the release key (default ~/.config/mccontrol/release.key); read here and nowhere else
 #   -r  the repository the release lives in (default sweden-mesh/MeshCore-lou)
 #   -o  where the release's files are assembled (default: release-<tag>/ beside the candidate)
@@ -35,8 +37,10 @@ while getopts "c:t:k:r:o:p" opt; do
 done
 [ -n "$CAND" ] && [ -n "$TAG" ] || { sed -n '2,/^set /p' "$0" | sed '$d' >&2; exit 2; }
 CAND="$(cd "$CAND" && pwd)"   # the script works inside it, so a relative path would move
-REV=$(echo "$TAG" | grep -oE 'lou-[0-9]+$' || true)
-[ -n "$REV" ] || { echo "the tag must end in lou-<nn>: $TAG" >&2; exit 2; }
+REV=$(echo "$TAG" | grep -oE 'lou-[0-9]+(rc[0-9]*)?$' || true)
+[ -n "$REV" ] || { echo "the tag must end in lou-<nn> or lou-<nn>rc[<n>]: $TAG" >&2; exit 2; }
+PRE=""
+case "$REV" in *rc*) PRE="--prerelease" ;; esac
 [ -f "$KEY" ] || { echo "no release key at $KEY" >&2; exit 2; }
 OUT="${OUT:-$(dirname "$CAND")/release-$TAG}"
 MAX_ASSETS=1000
@@ -92,9 +96,9 @@ sha256sum * > SHA256SUMS
 count=$(ls | wc -l)
 [ "$count" -le "$MAX_ASSETS" ] || fail "$count assets, over GitHub's $MAX_ASSETS per release"
 echo "release $TAG: $count assets in $OUT ($(ls "$CAND"/*.unsigned.json 2>/dev/null | wc -l) signed manifests, firmware-index.json), key ${PUB:0:12}..."
-# A full release, not a pre-release: the OTA channel is releases/latest/download, which
-# skips pre-releases.
-cmd=(gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes-file RELEASE_NOTES.md --draft)
+# A release is a full release: the OTA channel is releases/latest/download, which skips
+# pre-releases. A release candidate is a pre-release for that very reason.
+cmd=(gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes-file RELEASE_NOTES.md --draft $PRE)
 if [ "$PUBLISH" -eq 1 ]; then
   [ -f RELEASE_NOTES.md ] || fail "no RELEASE_NOTES.md in $OUT"
   "${cmd[@]}" ./*

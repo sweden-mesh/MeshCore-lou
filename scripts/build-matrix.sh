@@ -54,7 +54,7 @@ if [ "$BOARDS" = all ]; then
   [ "$BASE" = observer ] && pattern='_repeater_observer_mqtt$' || pattern='_repeater$'
   BOARDS=$(bash build.sh list | awk '{print $1}' | grep "$pattern" | LC_ALL=C sort)
 fi
-case "$REV" in lou-[0-9]*) ;; *) echo "revision must be lou-<nn>, not '$REV'" >&2; exit 2 ;; esac
+echo "$REV" | grep -qE '^lou-[0-9]+(rc[0-9]*)?$' || { echo "revision must be lou-<nn> or lou-<nn>rc[<n>], not '$REV'" >&2; exit 2; }
 BASE_VERSION=$(grep -m1 -oE 'FIRMWARE_VERSION +"v[0-9.]+"' examples/simple_repeater/MyMesh.h | grep -oE 'v[0-9.]+')
 
 # The -D flags for a combination; the codes must be known and in the fixed order, so one
