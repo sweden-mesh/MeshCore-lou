@@ -662,8 +662,16 @@ struct Mcc3Relay {
 // held and before the body is judged, so a refused forward cannot be sent again either.
 // The budget is asked and not spent: mcc3RelaySent spends it for a request that went out.
 // MCC3_FWD_SEND, or the status to answer with.
+static inline bool mcc3RouteFloods(uint8_t route) { return route != MCC3_ROUTE_DIRECT; }
+
+// A flood leaves the region home when the owner asked for the default scope, and when the
+// relay has no home to keep it in.
+static inline bool mcc3RouteWide(uint8_t route, bool has_home) {
+  return route == MCC3_ROUTE_FLOOD_DEFAULT || (route == MCC3_ROUTE_FLOOD_HOME && !has_home);
+}
+
 static inline int mcc3RelayAdmit(Mcc3Relay* r, uint8_t mode, uint32_t now, const Mcc3Forward* f,
-                                 const uint8_t node_key[32]) {
+                                 const uint8_t node_key[32], bool has_home) {
   if (mode != MQTTCTRL_RELAY_OWN) return MCC3_FWD_OFF;
   if (now < MQTTConnectionPolicy::kSyncedClockEpoch) return MCC3_FWD_CLOCK_UNSET;
   if (f->expiry < now || f->expiry - now > MCC3_FWD_MAX_AHEAD_SECS) return MCC3_FWD_EXPIRED;
@@ -671,12 +679,15 @@ static inline int mcc3RelayAdmit(Mcc3Relay* r, uint8_t mode, uint32_t now, const
   r->last_counter = f->counter;
   if (!mcc3ForwardBodyOk(f, node_key)) return MCC3_FWD_BAD_BODY;
   if (r->waiting) return MCC3_FWD_BUSY;
-  if (!r->budget.allows(now, f->route != MCC3_ROUTE_DIRECT)) return MCC3_FWD_RATE_LIMITED;
+  if (!r->budget.allows(now, mcc3RouteFloods(f->route), mcc3RouteWide(f->route, has_home))) {
+    return MCC3_FWD_RATE_LIMITED;
+  }
   return MCC3_FWD_SEND;
 }
 
-static inline void mcc3RelaySent(Mcc3Relay* r, uint32_t now, bool flood) {
-  r->budget.spend(now, flood);
+// `air_ms` is the radio's estimate for the request that went out.
+static inline void mcc3RelaySent(Mcc3Relay* r, uint32_t now, uint8_t route, bool has_home, uint32_t air_ms) {
+  r->budget.spend(now, mcc3RouteFloods(route), mcc3RouteWide(route, has_home), air_ms);
   r->waiting = true;
   r->forwarded++;
 }

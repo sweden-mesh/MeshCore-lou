@@ -91,6 +91,14 @@ class Fork {
   uint32_t _mesh_down_since = 0;               // millis() the command slot went down, 0 while up
   uint32_t _mesh_ok = 0;                       // commands run over the mesh road
   uint32_t _mesh_refused = 0;                  // ... and requests on it that ran nothing
+  bool _ctrl_debug = false;                    // `set mqtt.cmd.debug on`: until the next boot
+
+  // One line on the serial console for each command heard and where it stopped, while
+  // `set mqtt.cmd.debug on` is in force. Never a key, a signature or more of a command than
+  // its outcome.
+  void debugLine(const char* fmt, ...);
+  void formatNodeStats(char* reply);
+  void formatSensors(char* reply);
 
   bool handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* command, char* reply);
   void describeMqttControl(char* reply);
@@ -139,7 +147,7 @@ class Fork {
   } _relay_wait;
 
   void relayForward();
-  bool sendRelayRequest(const Mcc3Forward& fwd);
+  bool sendRelayRequest(const Mcc3Forward& fwd, uint32_t* air_ms);
   void publishRelayResult(const uint8_t* rid, Mcc3ForwardResult& result);
   void onRelayResponse(mesh::Packet* packet, uint8_t path_len, const uint8_t* path,
                        const uint8_t* data, size_t len);
@@ -149,7 +157,6 @@ class Fork {
   void setupMqttControl(MQTTBridge* bridge);
   void autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply);
   void pingMqttControl(char* reply);
-  void formatNodeStats(char* reply);
   void loopMqttPing();
   void refreshMqttControlV2Key();
   void loopMqttControl();

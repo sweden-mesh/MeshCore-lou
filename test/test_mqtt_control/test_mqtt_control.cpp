@@ -15,6 +15,7 @@
 #include <string>
 #include <ForkFeatures.h>
 #include "helpers/MqttControlLogic.h"
+#include "helpers/SensorReadout.h"
 #include "helpers/AutoReplyLogic.h"   // a trigger is checked one layer down
 #include "MeshCore.h"                 // the packet bounds the mesh road is sized by
 // The limiter itself, so the budgets are exercised rather than only their decision
@@ -809,6 +810,76 @@ TEST(GoldenEnvelope, ATamperedCommandIsRefused) {
 }
 
 // ---- get stats: the node's counters as one line ---------------------------------
+
+// `get sensors` (operator 2026-11-23): battery, MCU temperature and the board's sensors on
+// one line that a sealed answer over the mesh carries whole.
+TEST(SensorReadout, BatteryMcuTemperatureAndTheBoardsSensors) {
+  char out[SENSOR_READOUT_MAX + 1];
+  // Channel 1: 23.5 C, 40.5 %, 1013.2 hPa. Channel 2: -4.5 C and 3.72 V, 0.125 A.
+  const uint8_t lpp[] = { 1, 103, 0x00, 0xEB,   1, 104, 81,   1, 115, 0x27, 0x94,
+                          2, 103, 0xFF, 0xD3,   2, 116, 0x01, 0x74,   2, 117, 0x00, 0x7D };
+  sensorReadoutFormat(out, sizeof(out), 3881, 215, lpp, sizeof(lpp));
+  EXPECT_STREQ("> batt=3881mV mcu=21.5C temp=23.5C hum=40.5% press=1013.2hPa temp/2=-4.5C "
+               "volt/2=3.72V curr/2=0.125A", out);
+  EXPECT_LE(strlen(out), (size_t)SENSOR_READOUT_MAX);
+}
+
+TEST(SensorReadout, ABoardWithNothingToSaySaysSo) {
+  char out[SENSOR_READOUT_MAX + 1];
+  sensorReadoutFormat(out, sizeof(out), -1, SENSOR_READOUT_NO_TEMP, NULL, 0);
+  EXPECT_STREQ("> (no sensors)", out);
+  sensorReadoutFormat(out, sizeof(out), 4100, SENSOR_READOUT_NO_TEMP, NULL, 0);
+  EXPECT_STREQ("> batt=4100mV", out);
+  sensorReadoutFormat(out, sizeof(out), -1, -73, NULL, 0);
+  EXPECT_STREQ("> mcu=-7.3C", out);
+}
+
+TEST(SensorReadout, APositionIsLeftOutAndAnUnknownTypeEndsTheLine) {
+  char out[SENSOR_READOUT_MAX + 1];
+  // A GPS record (9 bytes) between two temperatures, then a type the table does not know.
+  const uint8_t lpp[] = { 1, 103, 0x00, 0x64,   1, 136, 1, 2, 3, 4, 5, 6, 7, 8, 9,   3, 103, 0x00, 0xC8,
+                          1, 250, 0xAA, 0xBB,   1, 103, 0x01, 0x2C };
+  sensorReadoutFormat(out, sizeof(out), -1, SENSOR_READOUT_NO_TEMP, lpp, sizeof(lpp));
+  EXPECT_STREQ("> temp=10.0C temp/3=20.0C", out);
+  // A record cut short by the buffer's end is not read.
+  sensorReadoutFormat(out, sizeof(out), -1, SENSOR_READOUT_NO_TEMP, lpp, 3);
+  EXPECT_STREQ("> (no sensors)", out);
+}
+
+TEST(SensorReadout, TheLineNeverEndsInHalfAPairAndNeverLeavesItsBuffer) {
+  uint8_t lpp[40 * 4];
+  for (int i = 0; i < 40; i++) {
+    lpp[i * 4] = (uint8_t)(10 + i);
+    lpp[i * 4 + 1] = 103;
+    lpp[i * 4 + 2] = 0x7F;
+    lpp[i * 4 + 3] = 0xFF;
+  }
+  char guard[SENSOR_READOUT_MAX + 1 + 4];
+  memset(guard, 'x', sizeof(guard));
+  size_t n = sensorReadoutFormat(guard, SENSOR_READOUT_MAX + 1, 4200, 250, lpp, sizeof(lpp));
+  EXPECT_EQ(strlen(guard), n);
+  EXPECT_LE(n, (size_t)SENSOR_READOUT_MAX);
+  EXPECT_EQ('x', guard[SENSOR_READOUT_MAX + 1]);
+  EXPECT_EQ('C', guard[n - 1]);                      // whole pairs only
+  EXPECT_NE(nullptr, strstr(guard, " temp/10=3276.7C"));
+  char tiny[1];
+  EXPECT_EQ(0u, sensorReadoutFormat(tiny, sizeof(tiny), 4200, 250, NULL, 0));
+  EXPECT_EQ(0u, sensorReadoutFormat(NULL, 100, 4200, 250, NULL, 0));
+}
+
+TEST(SensorReadout, TheReadsTravelOnBothRoadsAndTheDebugSwitchOnNeither) {
+  for (const char* c : { "get sensors", "get stats" }) {
+    EXPECT_TRUE(mqttCtrlCommandAllowed(c, strlen(c), true)) << c;
+    EXPECT_TRUE(mqttCtrlCommandAllowed(c, strlen(c), false)) << c;
+    EXPECT_TRUE(mqttCtrlMeshCommandAllowed(c, strlen(c), false, true)) << c;
+    EXPECT_TRUE(mqttCtrlMeshCommandAllowed(c, strlen(c), false, false)) << c;   // an image without an uplink
+    EXPECT_FALSE(mqttCtrlIsTransmitCommand(c, strlen(c))) << c;
+  }
+  for (const char* c : { "set mqtt.cmd.debug on", "set mqtt.cmd.debug off" }) {
+    EXPECT_TRUE(mqttCtrlCommandDenied(c, strlen(c))) << c;
+    EXPECT_FALSE(mqttCtrlMeshCommandAllowed(c, strlen(c), true, false)) << c;
+  }
+}
 
 TEST(NodeStats, OneLineOfShortPairsInTheStatusBlocksOrder) {
   char buf[160];
@@ -2425,18 +2496,17 @@ TEST(Relay, ModesParseAndDescribe) {
   EXPECT_EQ(0, (int)MQTTCTRL_RELAY_OWN);           // a file older than the setting reads as own
 
   char out[MQTTCTRL_MAX_REPLY];
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OFF, 5, 4, 1, 3, 1, out, sizeof(out));
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OFF, 5, 4, 1, MQTTCTRL_AIR_BURST, 1000, 3, out, sizeof(out));
   EXPECT_STREQ("> off", out);
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 0, 0, 0, 0, 0, out, sizeof(out));
-  EXPECT_STREQ("> own, forwarded 0, answered 0, refused 0, 10 of 10 left this hour (2 of 2 floods)", out);
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 12, 9, 3, 4, 1, out, sizeof(out));
-  EXPECT_STREQ("> own, forwarded 12, answered 9, refused 3, 6 of 10 left this hour (1 of 2 floods)", out);
-  // Nine direct ones sent: one forward is left, so one flood is, not two.
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 9, 9, 0, 9, 0, out, sizeof(out));
-  EXPECT_STREQ("> own, forwarded 9, answered 9, refused 0, 1 of 10 left this hour (1 of 2 floods)", out);
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 10, 2, out, sizeof(out));
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 0, 0, 0, MQTTCTRL_AIR_IDLE, MQTTCTRL_AIR_BURST_MS, 0, out, sizeof(out));
+  EXPECT_STREQ("> own, forwarded 0, answered 0, refused 0, idle, 45.0 s airtime left, floods today 0 of 100", out);
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 12, 9, 3, MQTTCTRL_AIR_BURST, 24650, 4, out, sizeof(out));
+  EXPECT_STREQ("> own, forwarded 12, answered 9, refused 3, burst, 24.6 s airtime left, floods today 4 of 100", out);
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 30, 30, 0, MQTTCTRL_AIR_COOL, 0, 100, out, sizeof(out));
+  EXPECT_STREQ("> own, forwarded 30, answered 30, refused 0, cooldown, 0.0 s airtime left, floods today 100 of 100", out);
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, MQTTCTRL_AIR_COOL,
+                        0xFFFFFFFFu, 100, out, sizeof(out));
   EXPECT_LT(strlen(out), (size_t)MQTTCTRL_MAX_REPLY - 1);
-  EXPECT_NE(nullptr, strstr(out, "0 of 10 left this hour (0 of 2 floods)"));
 }
 
 TEST(Relay, TheOwnerSwitchesItOverThePlaneAndNothingUnderMqttCmdOpens) {
@@ -2458,72 +2528,154 @@ TEST(Relay, TheOwnerSwitchesItOverThePlaneAndNothingUnderMqttCmdOpens) {
   }
 }
 
-TEST(Relay, TheBudgetIsTenAnHourTwoOfThemFloodsAndAskingSpendsNothing) {
-  MqttCtrlRelayBudget b;
+// 5 % of a quarter of an hour, then 1 % of the next, then a burst again (operator 2026-11-23).
+TEST(AirBudget, ABurstOfFivePerCentThenACooldownOfOneThenABurstAgain) {
+  EXPECT_EQ(MQTTCTRL_AIR_QUARTER_SECS * 1000UL * 5 / 100, MQTTCTRL_AIR_BURST_MS);
+  EXPECT_EQ(MQTTCTRL_AIR_QUARTER_SECS * 1000UL * 1 / 100, MQTTCTRL_AIR_COOL_MS);
+  MqttCtrlAirBudget b;
   const uint32_t t = 1795000000;
-  int forwards = -1, floods = -1;
-  b.spent(t, &forwards, &floods);
-  EXPECT_EQ(0, forwards);
-  EXPECT_EQ(0, floods);
-  for (int i = 0; i < 100; i++) EXPECT_TRUE(b.allows(t, true));
-  b.spent(t, &forwards, &floods);
-  EXPECT_EQ(0, forwards);
+  // Asking spends nothing and opens nothing.
+  for (int i = 0; i < 100; i++) EXPECT_TRUE(b.allows(t));
+  EXPECT_EQ(MQTTCTRL_AIR_IDLE, b.phase(t));
+  EXPECT_EQ(MQTTCTRL_AIR_BURST_MS, b.leftMs(t));
 
-  b.spend(t, true);
-  b.spend(t + 1, true);
-  EXPECT_FALSE(b.allows(t + 2, true));
-  EXPECT_TRUE(b.allows(t + 2, false));
-  for (int i = 0; i < 8; i++) {
-    ASSERT_TRUE(b.allows(t + 10 + i, false)) << i;
-    b.spend(t + 10 + i, false);
+  // The first packet opens the burst; 1 700 ms each, the 27th is the one that crosses 45 s.
+  int sent = 0;
+  while (b.allows(t + 10 + sent)) {
+    b.spend(t + 10 + sent, 1700);
+    sent++;
   }
-  EXPECT_FALSE(b.allows(t + 20, false));
-  EXPECT_FALSE(b.allows(t + 20, true));
-  b.spent(t + 20, &forwards, &floods);
-  EXPECT_EQ(10, forwards);
-  EXPECT_EQ(2, floods);
+  EXPECT_EQ(27, sent);
+  EXPECT_EQ(MQTTCTRL_AIR_BURST, b.phase(t + 100));
+  EXPECT_EQ(0u, b.leftMs(t + 100));
+  EXPECT_FALSE(b.allows(t + 10 + MQTTCTRL_AIR_QUARTER_SECS - 1));
 
-  // No span of an hour holds more, wherever it starts: the first comes free at exactly +3600.
-  EXPECT_FALSE(b.allows(t + 3599, false));
-  EXPECT_TRUE(b.allows(t + 3600, false));
-  EXPECT_TRUE(b.allows(t + 3600, true));           // the flood that left the hour frees a flood
-  b.spend(t + 3600, false);
-  EXPECT_FALSE(b.allows(t + 3600, false));
-  b.spent(t + 3600, &forwards, &floods);
-  EXPECT_EQ(10, forwards);
-  EXPECT_EQ(1, floods);
-  EXPECT_TRUE(b.allows(t + 3601, true));
-  b.spend(t + 3601, true);
-  EXPECT_FALSE(b.allows(t + 3609, false));
-  EXPECT_TRUE(b.allows(t + 3610, false));
+  // The cooldown starts a quarter after the burst opened, used up or not, with 9 s.
+  const uint32_t cool = t + 10 + MQTTCTRL_AIR_QUARTER_SECS;
+  EXPECT_EQ(MQTTCTRL_AIR_COOL, b.phase(cool));
+  EXPECT_EQ(MQTTCTRL_AIR_COOL_MS, b.leftMs(cool));
+  sent = 0;
+  while (b.allows(cool + sent)) {
+    b.spend(cool + sent, 1700);
+    sent++;
+  }
+  EXPECT_EQ(6, sent);
+  EXPECT_FALSE(b.allows(cool + MQTTCTRL_AIR_QUARTER_SECS - 1));
+
+  // After it the next packet opens a new burst, whenever it comes.
+  const uint32_t again = cool + MQTTCTRL_AIR_QUARTER_SECS + 5000;
+  EXPECT_EQ(MQTTCTRL_AIR_IDLE, b.phase(again));
+  EXPECT_TRUE(b.allows(again));
+  b.spend(again, 1700);
+  EXPECT_EQ(MQTTCTRL_AIR_BURST, b.phase(again));
+  EXPECT_EQ(MQTTCTRL_AIR_BURST_MS - 1700, b.leftMs(again + MQTTCTRL_AIR_QUARTER_SECS - 1));
+  EXPECT_EQ(MQTTCTRL_AIR_COOL, b.phase(again + MQTTCTRL_AIR_QUARTER_SECS));
+}
+
+TEST(AirBudget, AClockSteppedBackwardsMintsNoBurst) {
+  const uint32_t t = 1795000000;
+  MqttCtrlAirBudget b;
+  b.spend(t, MQTTCTRL_AIR_BURST_MS);
+  EXPECT_FALSE(b.allows(t - 86400));                               // the burst restarts, still spent
+  EXPECT_FALSE(b.allows(t - 86400 + MQTTCTRL_AIR_QUARTER_SECS - 1));
+  EXPECT_EQ(MQTTCTRL_AIR_COOL, b.phase(t - 86400 + MQTTCTRL_AIR_QUARTER_SECS));
+
+  MqttCtrlAirBudget c;                                             // in a cooldown it stays one
+  c.spend(t, 100);
+  c.spend(t + MQTTCTRL_AIR_QUARTER_SECS, MQTTCTRL_AIR_COOL_MS);
+  EXPECT_FALSE(c.allows(t + MQTTCTRL_AIR_QUARTER_SECS + 1));
+  EXPECT_EQ(MQTTCTRL_AIR_COOL, c.phase(t + 100));                  // a small step back, into the burst's time
+  EXPECT_FALSE(c.allows(t + 100));
+  EXPECT_FALSE(c.allows(t + 100 + MQTTCTRL_AIR_QUARTER_SECS - 1));
+  EXPECT_EQ(MQTTCTRL_AIR_COOL, c.phase(t - 5000));
+  EXPECT_FALSE(c.allows(t - 5000));
+  EXPECT_FALSE(c.allows(t - 5000 + MQTTCTRL_AIR_QUARTER_SECS - 1));
+  EXPECT_TRUE(c.allows(t - 5000 + MQTTCTRL_AIR_QUARTER_SECS));
+  // A huge packet length cannot wrap the count round to nothing spent.
+  MqttCtrlAirBudget d;
+  d.spend(t, 0xFFFFFFF0u);
+  d.spend(t, 0x100);
+  EXPECT_FALSE(d.allows(t));
+}
+
+TEST(Relay, FloodsKeepAGapADayAndAnHourOfTheirOwn) {
+  const uint32_t t = 1795000000, air = 1700;
+  MqttCtrlRelayBudget b;
+  for (int i = 0; i < 100; i++) EXPECT_TRUE(b.allows(t, true, true));   // asking spends nothing
+  EXPECT_EQ(0, b.floodsToday(t));
+
+  // In a burst one flood a minute; a direct forward waits for no gap.
+  b.spend(t, true, false, air);
+  EXPECT_FALSE(b.allows(t + MQTTCTRL_RELAY_FLOOD_GAP_SECS - 1, true, false));
+  EXPECT_TRUE(b.allows(t + 1, false, false));
+  EXPECT_TRUE(b.allows(t + MQTTCTRL_RELAY_FLOOD_GAP_SECS, true, false));
+  int floods = 1;
+  for (uint32_t at = t + 60; at < t + MQTTCTRL_AIR_QUARTER_SECS; at += 20) {
+    if (!b.allows(at, true, false)) continue;
+    b.spend(at, true, false, air);
+    floods++;
+  }
+  EXPECT_EQ(15, floods);
+
+  // In the cooldown one in five minutes.
+  const uint32_t cool = t + MQTTCTRL_AIR_QUARTER_SECS;
+  floods = 0;
+  for (uint32_t at = cool; at < cool + MQTTCTRL_AIR_QUARTER_SECS; at += 20) {
+    if (!b.allows(at, true, false)) continue;
+    b.spend(at, true, false, air);
+    floods++;
+  }
+  EXPECT_EQ(3, floods);
+  EXPECT_EQ(18, b.floodsToday(cool + 899));
+}
+
+TEST(Relay, AHundredFloodsADayAndTwoWideOnesAnHour) {
+  const uint32_t t = 1795000000;
+  MqttCtrlRelayBudget b;
+  // No airtime, so only the flood limits speak. A flood every five minutes.
+  int given = 0;
+  uint32_t at = t;
+  for (; given < MQTTCTRL_RELAY_FLOODS_A_DAY; at += 300) {
+    ASSERT_TRUE(b.allows(at, true, false)) << given;
+    b.spend(at, true, false, 0);
+    given++;
+  }
+  EXPECT_FALSE(b.allows(at, true, false));
+  EXPECT_TRUE(b.allows(at, false, false));                       // a direct forward is not a flood
+  EXPECT_FALSE(b.allows(t + MQTTCTRL_RELAY_DAY_SECS - 1, true, false));
+  EXPECT_TRUE(b.allows(t + MQTTCTRL_RELAY_DAY_SECS, true, false));
+  b.spend(t + MQTTCTRL_RELAY_DAY_SECS, true, false, 0);
+  EXPECT_EQ(1, b.floodsToday(t + MQTTCTRL_RELAY_DAY_SECS));
+
+  MqttCtrlRelayBudget w;
+  w.spend(t, true, true, 0);
+  w.spend(t + 600, true, true, 0);
+  EXPECT_FALSE(w.allows(t + 1200, true, true));
+  EXPECT_TRUE(w.allows(t + 1200, true, false));                  // a flood in the region home may go
+  EXPECT_FALSE(w.allows(t + 3599, true, true));
+  EXPECT_TRUE(w.allows(t + 3600, true, true));
+  w.spend(t + 3600, true, true, 0);
+  EXPECT_FALSE(w.allows(t + 4199, true, true));
+  EXPECT_TRUE(w.allows(t + 4200, true, true));
 
   // A clock stepped backwards mints nothing: what is remembered is pulled back to now.
   MqttCtrlRelayBudget c;
-  for (int i = 0; i < 10; i++) c.spend(t + i, false);
-  EXPECT_FALSE(c.allows(t - 86400, false));
-  EXPECT_FALSE(c.allows(t - 86400 + 3599, false));
-  EXPECT_TRUE(c.allows(t - 86400 + 3600, false));
+  c.spend(t, true, true, 0);
+  c.spend(t + 600, true, true, 0);
+  EXPECT_FALSE(c.allows(t - 86400, true, false));                 // the gap counts from now
+  EXPECT_TRUE(c.allows(t - 86400 + 60, true, false));
+  EXPECT_FALSE(c.allows(t - 86400 + 60, true, true));             // and so does the wide hour
+  EXPECT_FALSE(c.allows(t - 86400 + 3659, true, true));
+  EXPECT_TRUE(c.allows(t - 86400 + 3660, true, true));
 }
 
-TEST(MeshRoad, OneAnswerAMinuteAndTenAnHour) {
-  MqttCtrlMeshBudget b;
-  uint32_t t = 1000;
-  EXPECT_TRUE(b.allow(t));
-  EXPECT_FALSE(b.allow(t + MQTTCTRL_MESH_GAP_SECS - 1));
-  int given = 1;
-  for (int i = 1; i < 20; i++) {
-    if (b.allow(t + i * MQTTCTRL_MESH_GAP_SECS)) given++;
-  }
-  EXPECT_EQ(MQTTCTRL_MESH_HOUR_MAX, given);              // 20 minutes, ten answers
-  EXPECT_FALSE(b.allow(t + 3599));
-  EXPECT_TRUE(b.allow(t + 3600));                        // the first has left the hour, and
-                                                         // the refusals spent no minute
-  EXPECT_FALSE(b.allow(t + 3600 + MQTTCTRL_MESH_GAP_SECS - 1));
-  MqttCtrlMeshBudget back;                               // a clock stepped backwards
-  EXPECT_TRUE(back.allow(5000));
-  EXPECT_FALSE(back.allow(100));
-  EXPECT_FALSE(back.allow(100 + MQTTCTRL_MESH_GAP_SECS - 1));
-  EXPECT_TRUE(back.allow(100 + MQTTCTRL_MESH_GAP_SECS));
+TEST(Relay, AnEmptyAirBudgetStopsEveryForward) {
+  const uint32_t t = 1795000000;
+  MqttCtrlRelayBudget b;
+  b.spend(t, false, false, MQTTCTRL_AIR_BURST_MS);
+  EXPECT_FALSE(b.allows(t + 100, false, false));
+  EXPECT_FALSE(b.allows(t + 100, true, false));
+  EXPECT_TRUE(b.allows(t + MQTTCTRL_AIR_QUARTER_SECS, false, false));
 }
 
 TEST(MeshRoad, TheResponseCarriesTagClockCounterCodeAndAClampedReply) {

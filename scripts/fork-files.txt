@@ -22,6 +22,7 @@ src/helpers/LoginThrottle.h
 src/helpers/MQTTSlotAuth.h
 src/helpers/MqttControlLogic.h
 src/helpers/MqttControlV3.h
+src/helpers/SensorReadout.h
 # The Observer's own pure headers MqttControlLogic.h includes, so a mesh-only command plane
 # builds on core (OTM-5). The Observer owns them; a rebase that changes them is synced here.
 src/helpers/MQTTConnectionPolicy.h

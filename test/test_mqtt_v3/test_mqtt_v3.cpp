@@ -1006,15 +1006,17 @@ struct RelayBench {
   Mcc3Keys owner = ownerKeys(OWNER, NODE.pub), node = nodeKeys(NODE, OWNER.pub);
   Mcc3Relay relay;
   uint8_t mode = MQTTCTRL_RELAY_OWN;
+  bool has_home = true;
+  uint32_t air_ms = 1700;
 
   // As Fork::relayForward: open, admit, and count a send that went out.
   int take(const std::string& payload, uint32_t now, bool pool_empty = false) {
     Mcc3Forward f;
     if (mcc3OpenForward(&node, payload.data(), payload.size(), &f) != MQTTCTRL_OK) return -2;
-    int status = mcc3RelayAdmit(&relay, mode, now, &f, NODE.pub);
+    int status = mcc3RelayAdmit(&relay, mode, now, &f, NODE.pub, has_home);
     if (status != MCC3_FWD_SEND) return status;
     if (pool_empty) return MCC3_FWD_SEND_FAILED;
-    mcc3RelaySent(&relay, now, f.route != MCC3_ROUTE_DIRECT);
+    mcc3RelaySent(&relay, now, f.route, has_home, air_ms);
     return MCC3_FWD_SEND;
   }
   int take(const Mcc3Forward& f, uint32_t now, bool pool_empty = false) {
@@ -1135,7 +1137,7 @@ TEST(Mcc3Relay, AForwardCounterIsTakenOnceEvenWhenItsBodyIsRefused) {
   EXPECT_EQ(MCC3_FWD_BAD_BODY, b.take(bad, RELAY_NOW + 9));
 }
 
-TEST(Mcc3Relay, TenForwardsAnHourTwoOfThemFloodsAndAFailedSendSpendsNothing) {
+TEST(Mcc3Relay, TheAirtimeAndTheFloodLimitsRefuseAndAFailedSendSpendsNothing) {
   RelayBench b;
   uint32_t counter = 100, now = RELAY_NOW;
   auto send = [&](uint8_t route, uint32_t at, bool pool_empty = false) {
@@ -1145,30 +1147,42 @@ TEST(Mcc3Relay, TenForwardsAnHourTwoOfThemFloodsAndAFailedSendSpendsNothing) {
     b.relay.waiting = false;
     return status;
   };
-  // Two floods, by either flooded route; the third waits for the hour, a direct one does not.
+  // A flood, and the next one a minute later; a direct forward waits for no gap.
   EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_HOME, now));
-  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_DEFAULT, now + 10));
-  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_FLOOD_HOME, now + 20));
-  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_FLOOD_DEFAULT, now + 20));
-  // A send the packet pool refused spends nothing, however often.
-  for (int i = 0; i < 20; i++) EXPECT_EQ(MCC3_FWD_SEND_FAILED, send(MCC3_ROUTE_DIRECT, now + 30, true));
-  for (int i = 0; i < 8; i++) EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_DIRECT, now + 100 + i)) << i;
-  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_DIRECT, now + 200));
-  EXPECT_EQ(10u, b.relay.forwarded);
-  int forwards, floods;
-  b.relay.budget.spent(now + 200, &forwards, &floods);
-  EXPECT_EQ(10, forwards);
-  EXPECT_EQ(2, floods);
+  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_FLOOD_HOME, now + 59));
+  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_DIRECT, now + 59));
+  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_DEFAULT, now + 60));
+  // Two floods to the default scope an hour; the region home is still open.
+  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_DEFAULT, now + 120));
+  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_FLOOD_DEFAULT, now + 180));
+  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_HOME, now + 180));
+  // A relay with no region home floods its default scope whatever was asked, and it counts so.
+  b.has_home = false;
+  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_FLOOD_HOME, now + 240));
+  b.has_home = true;
+  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_HOME, now + 240));
+  EXPECT_EQ(6u, b.relay.forwarded);
+  EXPECT_EQ(5, b.relay.budget.floodsToday(now + 240));
 
-  // The window slides: an hour after the first flood one forward is free, and it may be a flood.
-  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_DIRECT, now + 3599));
-  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_HOME, now + 3600));
-  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_DIRECT, now + 3601));
-  // Then the second flood's hour ends, ten seconds later: one more, flood or not.
-  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_DEFAULT, now + 3610));
-  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_FLOOD_HOME, now + 3700));
-  for (int i = 0; i < 8; i++) EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_DIRECT, now + 3700 + i)) << i;
-  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_DIRECT, now + 3710));
+  // A send the packet pool refused spends nothing, however often.
+  for (int i = 0; i < 40; i++) EXPECT_EQ(MCC3_FWD_SEND_FAILED, send(MCC3_ROUTE_DIRECT, now + 250, true));
+  EXPECT_EQ(MQTTCTRL_AIR_BURST_MS - 6 * 1700, b.relay.budget.air.leftMs(now + 250));
+
+  // The burst holds 45 s of requests: 21 more of 1.7 s, the last one crossing the line.
+  int sent = 0;
+  while (send(MCC3_ROUTE_DIRECT, now + 300 + sent) == MCC3_FWD_SEND) sent++;
+  EXPECT_EQ(21, sent);
+  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_DIRECT, now + 899));
+  // The cooldown: 9 s, and a flood only every five minutes.
+  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_HOME, now + 900));
+  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_FLOOD_HOME, now + 1199));
+  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_FLOOD_HOME, now + 1200));
+  sent = 0;
+  while (send(MCC3_ROUTE_DIRECT, now + 1300 + sent) == MCC3_FWD_SEND) sent++;
+  EXPECT_EQ(4, sent);
+  // And the quarter after it a burst again.
+  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, send(MCC3_ROUTE_DIRECT, now + 1799));
+  EXPECT_EQ(MCC3_FWD_SEND, send(MCC3_ROUTE_DIRECT, now + 1800));
 }
 
 TEST(Mcc3Relay, TheWaitEndsAfter120SecondsAcrossAMillisWrap) {

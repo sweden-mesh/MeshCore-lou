@@ -1334,27 +1334,63 @@ static inline void mqttCtrlMeshNote(uint8_t mode, uint32_t ok, uint32_t refused,
            (unsigned long)ok, (unsigned long)refused);
 }
 
-// Every answer over the mesh costs airtime on a shared network, and off the broker nothing
-// else caps it: at most one a minute and ten an hour, on top of the plane's own budget.
-#define MQTTCTRL_MESH_GAP_SECS   60
-#define MQTTCTRL_MESH_HOUR_MAX   10
+// What the plane puts on the air beyond the node's own traffic: a node's answers over the
+// mesh, and a relay's requests. Two quarters of an hour alternate (operator 2026-11-23): the
+// first packet opens a burst that may fill 5 % of its quarter, the quarter after it holds
+// 1 %, and the packet after that opens the next burst. That is half, then a tenth, of the
+// 10 % the band allows one transmitter. It is counted in the radio's own estimate for each
+// packet, so the shares hold on any radio setting. Asking spends nothing, and the packet
+// that crosses the line is the last one sent. A clock stepped backwards restarts the quarter
+// it is in and mints no burst; one stepped forwards past both quarters opens one early, once.
+#define MQTTCTRL_AIR_QUARTER_SECS  900
+#define MQTTCTRL_AIR_BURST_MS      45000UL
+#define MQTTCTRL_AIR_COOL_MS       9000UL
 
-// A refusal spends neither limit: an answer refused by the hour must not restart the minute.
-// A clock stepped backwards pulls the last answer back to now, as SlidingBudget does.
-struct MqttCtrlMeshBudget {
-  SlidingBudget hour;
-  uint32_t last;
-  bool any;
-  MqttCtrlMeshBudget() : hour(MQTTCTRL_MESH_HOUR_MAX, 3600), last(0), any(false) { }
-  bool allow(uint32_t now) {
-    if (any) {
-      if (last > now) last = now;
-      if (now - last < MQTTCTRL_MESH_GAP_SECS) return false;
+enum MqttCtrlAirPhase : uint8_t {
+  MQTTCTRL_AIR_IDLE = 0,
+  MQTTCTRL_AIR_BURST,
+  MQTTCTRL_AIR_COOL,
+};
+
+static inline const char* mqttCtrlAirPhaseName(uint8_t phase) {
+  return phase == MQTTCTRL_AIR_BURST ? "burst" : phase == MQTTCTRL_AIR_COOL ? "cooldown" : "idle";
+}
+
+struct MqttCtrlAirBudget {
+  uint32_t start;      // when the burst opened
+  uint32_t spent_ms;   // in the quarter `counted` names
+  uint8_t counted;     // MqttCtrlAirPhase
+  MqttCtrlAirBudget() : start(0), spent_ms(0), counted(MQTTCTRL_AIR_IDLE) { }
+
+  uint8_t phase(uint32_t now) {
+    if (counted == MQTTCTRL_AIR_IDLE) return MQTTCTRL_AIR_IDLE;
+    if (start > now || (counted == MQTTCTRL_AIR_COOL && now - start < MQTTCTRL_AIR_QUARTER_SECS)) {
+      start = counted == MQTTCTRL_AIR_COOL && now >= MQTTCTRL_AIR_QUARTER_SECS
+                ? now - MQTTCTRL_AIR_QUARTER_SECS : now;
     }
-    if (!hour.allow(now)) return false;
-    last = now;
-    any = true;
-    return true;
+    const uint32_t age = now - start;
+    const uint8_t p = age < MQTTCTRL_AIR_QUARTER_SECS ? MQTTCTRL_AIR_BURST
+                    : age < 2 * MQTTCTRL_AIR_QUARTER_SECS ? MQTTCTRL_AIR_COOL : MQTTCTRL_AIR_IDLE;
+    if (p != counted) {
+      counted = p;
+      spent_ms = 0;
+    }
+    return p;
+  }
+  uint32_t allowanceMs(uint32_t now) {
+    return phase(now) == MQTTCTRL_AIR_COOL ? MQTTCTRL_AIR_COOL_MS : MQTTCTRL_AIR_BURST_MS;
+  }
+  uint32_t leftMs(uint32_t now) {
+    const uint32_t allowance = allowanceMs(now);
+    return spent_ms < allowance ? allowance - spent_ms : 0;
+  }
+  bool allows(uint32_t now) { return leftMs(now) > 0; }
+  void spend(uint32_t now, uint32_t ms) {
+    if (phase(now) == MQTTCTRL_AIR_IDLE) {
+      start = now;
+      counted = MQTTCTRL_AIR_BURST;
+    }
+    spent_ms = ms > 0xFFFFFFFFUL - spent_ms ? 0xFFFFFFFFUL : spent_ms + ms;
   }
 };
 
@@ -1405,67 +1441,87 @@ static inline bool mqttCtrlRelayParseMode(const char* text, uint8_t* out) {
   return false;
 }
 
-// A forward costs the mesh airtime, a flooded one the airtime of every repeater that hears
-// it: ten an hour, at most two of them floods, compiled in as the trigger budget is. The
-// forwards of the last hour are remembered, so no span of an hour holds more, wherever it
-// starts. Asking spends nothing: the caller asks, sends, and spends only what went out, so
-// a request the packet pool refused costs none. A clock stepped backwards pulls the
-// remembered times back to now, as SlidingBudget does.
-#define MQTTCTRL_RELAY_MAX          10
-#define MQTTCTRL_RELAY_FLOOD_MAX    2
-#define MQTTCTRL_RELAY_WINDOW_SECS  3600
+// A forward costs this node airtime, which MqttCtrlAirBudget holds, and a flooded one the
+// airtime of every repeater that hears it, which nothing on this node measures. So floods
+// keep limits of their own (operator 2026-11-23): one a minute in a burst, one in five
+// minutes in a cooldown, a hundred in a day, and of those that leave the region home for the
+// default scope two an hour. Compiled in, as the trigger budget is. Asking spends nothing:
+// the caller asks, sends, and spends only what went out, so a request the packet pool
+// refused costs none. A clock stepped backwards pulls the remembered times back to now.
+#define MQTTCTRL_RELAY_FLOOD_GAP_SECS       60
+#define MQTTCTRL_RELAY_FLOOD_COOL_GAP_SECS  300
+#define MQTTCTRL_RELAY_FLOODS_A_DAY         100
+#define MQTTCTRL_RELAY_WIDE_AN_HOUR         2
+#define MQTTCTRL_RELAY_DAY_SECS             86400UL
 
 struct MqttCtrlRelayBudget {
-  uint32_t at[MQTTCTRL_RELAY_MAX];
-  bool flood[MQTTCTRL_RELAY_MAX];
-  uint8_t used;
-  MqttCtrlRelayBudget() : used(0) { }
+  MqttCtrlAirBudget air;
+  uint32_t last_flood;
+  uint32_t day_start;                              // the first flood of the day counted
+  uint32_t wide_at[MQTTCTRL_RELAY_WIDE_AN_HOUR];
+  uint8_t day_floods;
+  uint8_t wide_used;
+  bool any_flood;
+  MqttCtrlRelayBudget() : last_flood(0), day_start(0), day_floods(0), wide_used(0), any_flood(false) { }
 
-  // Forwards sent in the hour up to `now`, and the floods among them.
-  void spent(uint32_t now, int* forwards, int* floods) {
-    *forwards = 0;
-    *floods = 0;
-    for (uint8_t i = 0; i < used; i++) {
-      if (at[i] > now) at[i] = now;
-      if (now - at[i] >= MQTTCTRL_RELAY_WINDOW_SECS) continue;
-      (*forwards)++;
-      if (flood[i]) (*floods)++;
+  int floodsToday(uint32_t now) {
+    if (day_start > now) day_start = now;
+    if (day_floods > 0 && now - day_start >= MQTTCTRL_RELAY_DAY_SECS) day_floods = 0;
+    return day_floods;
+  }
+  int wideThisHour(uint32_t now) {
+    int n = 0;
+    for (uint8_t i = 0; i < wide_used; i++) {
+      if (wide_at[i] > now) wide_at[i] = now;
+      if (now - wide_at[i] < 3600) n++;
     }
+    return n;
   }
-  bool allows(uint32_t now, bool is_flood) {
-    int forwards, floods;
-    spent(now, &forwards, &floods);
-    return forwards < MQTTCTRL_RELAY_MAX && (!is_flood || floods < MQTTCTRL_RELAY_FLOOD_MAX);
+  bool allows(uint32_t now, bool flood, bool wide) {
+    if (!air.allows(now)) return false;
+    if (!flood) return true;
+    if (any_flood) {
+      if (last_flood > now) last_flood = now;
+      const uint32_t gap = air.phase(now) == MQTTCTRL_AIR_COOL ? MQTTCTRL_RELAY_FLOOD_COOL_GAP_SECS
+                                                               : MQTTCTRL_RELAY_FLOOD_GAP_SECS;
+      if (now - last_flood < gap) return false;
+    }
+    if (floodsToday(now) >= MQTTCTRL_RELAY_FLOODS_A_DAY) return false;
+    return !wide || wideThisHour(now) < MQTTCTRL_RELAY_WIDE_AN_HOUR;
   }
-  // Only after allows(): the oldest one remembered is then more than an hour old.
-  void spend(uint32_t now, bool is_flood) {
+  // Only after allows(): a wide flood then has a time of its own that is free or an hour old.
+  void spend(uint32_t now, bool flood, bool wide, uint32_t air_ms) {
+    air.spend(now, air_ms);
+    if (!flood) return;
+    last_flood = now;
+    any_flood = true;
+    if (floodsToday(now) == 0) day_start = now;
+    day_floods++;
+    if (!wide) return;
     uint8_t slot = 0;
-    if (used < MQTTCTRL_RELAY_MAX) {
-      slot = used++;
+    if (wide_used < MQTTCTRL_RELAY_WIDE_AN_HOUR) {
+      slot = wide_used++;
     } else {
-      for (uint8_t i = 1; i < used; i++) if (at[i] < at[slot]) slot = i;
+      for (uint8_t i = 1; i < wide_used; i++) if (wide_at[i] < wide_at[slot]) slot = i;
     }
-    at[slot] = now;
-    flood[slot] = is_flood;
+    wide_at[slot] = now;
   }
 };
 
-// `get mqtt.relay`: the mode, what the relay has done since boot, and what is left of the
-// hour. `forwards` and `floods` are MqttCtrlRelayBudget::spent's.
+// `get mqtt.relay`: the mode, what the relay has done since boot, the quarter it is in with
+// the airtime left of it, and the day's floods.
 static inline void mqttCtrlRelayDescribe(uint8_t mode, uint32_t forwarded, uint32_t answered,
-                                         uint32_t refused, int forwards, int floods, char* out,
-                                         size_t out_size) {
+                                         uint32_t refused, uint8_t phase, uint32_t left_ms,
+                                         int floods_today, char* out, size_t out_size) {
   if (out == NULL || out_size == 0) return;
   if (mode == MQTTCTRL_RELAY_OFF) {
     snprintf(out, out_size, "> off");
     return;
   }
-  const int left = MQTTCTRL_RELAY_MAX - forwards;
-  int floods_left = MQTTCTRL_RELAY_FLOOD_MAX - floods;
-  if (floods_left > left) floods_left = left;
-  snprintf(out, out_size, "> own, forwarded %lu, answered %lu, refused %lu, %d of %d left this hour "
-                          "(%d of %d floods)", (unsigned long)forwarded, (unsigned long)answered,
-           (unsigned long)refused, left, MQTTCTRL_RELAY_MAX, floods_left, MQTTCTRL_RELAY_FLOOD_MAX);
+  snprintf(out, out_size, "> own, forwarded %lu, answered %lu, refused %lu, %s, %lu.%lu s airtime left, "
+                          "floods today %d of %d", (unsigned long)forwarded, (unsigned long)answered,
+           (unsigned long)refused, mqttCtrlAirPhaseName(phase), (unsigned long)(left_ms / 1000),
+           (unsigned long)(left_ms % 1000 / 100), floods_today, MQTTCTRL_RELAY_FLOODS_A_DAY);
 }
 
 // /mqttcontrol, the plane's settings file. Append-only, as /autoreply is: version 1 was
