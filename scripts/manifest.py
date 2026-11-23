@@ -46,7 +46,8 @@ def sha256_of(path):
 
 
 def features_of_version(version):
-    m = re.search(r"-lou-\d+-([a-z]+)-", version)
+    # a release candidate's revision ends in rc or rcN (-lou-20rc-arrc-): not the feature rc
+    m = re.search(r"-lou-\d+(?:rc\d*)?-([a-z]+)-", version)
     return m.group(1) if m and m.group(1) in FEATURE_TOKENS else None
 
 
@@ -112,7 +113,7 @@ def verify(manifest_json, pub_hex):
     return 0
 
 
-IMAGE_RE = re.compile(r"^(?P<env>.+?)-(?P<mcu>[a-z0-9]+)-(?P<base>v[0-9.]+)-(?P<rev>lou-\d+)-"
+IMAGE_RE = re.compile(r"^(?P<env>.+?)-(?P<mcu>[a-z0-9]+)-(?P<base>v[0-9.]+)-(?P<rev>lou-\d+(?:rc\d*)?)-"
                       r"(?P<features>[a-z]+)-(?P<hash>[0-9a-f]{7,})(?P<merged>-merged)?\.(?P<ext>bin|uf2|zip|hex)$")
 FLASH = {"bin": "app image at 0x10000 (OTA, or a cable flash that keeps the settings)",
          "merged": "full image at 0x0 (a clean device)",
