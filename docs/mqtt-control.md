@@ -314,7 +314,7 @@ feature enabled → command key set → signature valid
   right way round.
 - **Expiry fails closed without a clock.** If NTP has not synced, every command is refused
   rather than accepted on a guess. A command may not be valid more than an hour ahead.
-- **The rate limit applies to validly signed commands** — 10 an hour, and 2 transmits, on
+- **The rate limit applies to validly signed commands** — 30 an hour (10 before lou-20), and 2 transmits, on
   separate counters: a trigger spends a transmit, a `set` or `get` spends a command, and
   neither spends the other's.
   **The hour slides.** No span of 3600 s holds more than the budget, wherever it starts; a
@@ -483,8 +483,20 @@ The checks are the plane's, with three differences:
   15 minutes after it hold 1 % (9 s), and the answer after that opens the next burst. It is
   counted in the radio's own estimate for each answer, so the shares hold on any radio
   setting; the answer that crosses the line is the last. A request that the key did not sign,
-  whose counter is not new, or that is over this budget is not answered at all, so nobody who heard a request can make the node transmit by
-  sending it again.
+  whose counter is not new, or that is over this budget is not answered at all, so nobody who
+  heard a request can make the node transmit by sending it again. A request that was answered
+  with a refusal counts as seen too, until the next restart.
+- **After a restart the first 15 minutes are a cooldown** (9 s), for the answers here and for a
+  relay's requests alike: the budgets are kept in RAM, and `reboot` is a command.
+- **The way back.** A request that came direct tells the node no path to its sender. Whoever was
+  answered over the mesh is therefore listened to for five minutes for MeshCore's reciprocal
+  path: a relay sends it when a flooded answer reaches it (the path that answer took, sent
+  direct), and a companion does of its own accord. The node keeps the path in RAM, for the three
+  senders it answered last, and answers their next direct requests along it. Until it has one
+  (after a restart, or for a sender never reached by a flood) the answer to a direct request is
+  flooded in the node's default scope, as before. A path that has stopped working shows as no
+  answer to a direct command: one flooded command renews it, because the answer to a flooded
+  request is always flooded.
 
 `set mqtt.cmd.mesh off|on|auto` (console or admin login; denied on both roads) says when the
 road is open. `auto`, the default, opens it once the command slot has been down 15 minutes, so
@@ -543,7 +555,11 @@ counter are not involved. This is the plane's second sanctioned transmit, beside
   limits of their own: one a minute in a burst, one in five minutes in a cooldown, 100 in a
   day, and of those that leave the region home (the default scope, or any flood from a relay
   with no region home) two an hour. One forward waits at a time. Fixed. A request that could
-  not be sent spends nothing.
+  not be sent spends nothing. After a restart the first 15 minutes are a cooldown, and the first
+  flood waits five minutes from the first forward asked for.
+- **The way back.** When a flooded answer reaches the relay, it sends the target the path that
+  answer took, direct along the path the answer taught (MeshCore's reciprocal path; counted in
+  the airtime budget). The target then answers direct commands along it instead of flooding.
 - **The route** is the owner's choice per forward: direct along a path the forward carries (no
   path means one transmission, for a target the relay hears itself), a flood in the relay's
   `region home`, or a flood in its default scope. A flood in `region home` uses the default

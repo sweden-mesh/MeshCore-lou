@@ -98,6 +98,11 @@ class MqttControl {
   uint8_t _mesh_mode;         // MqttCtrlMeshMode
   uint8_t _relay_mode;        // MqttCtrlRelayMode
   MqttCtrlAirBudget _mesh_answers;
+  // The newest counter answered over the mesh, run or refused. The saved counter moves only
+  // when a command runs, so without this a refused request (the road closed, a denied
+  // command) could be sent again by anyone who heard it, and be answered again.
+  uint32_t _mesh_answered = 0;
+  bool _mesh_answered_any = false;
 
   void load();
   void save();
