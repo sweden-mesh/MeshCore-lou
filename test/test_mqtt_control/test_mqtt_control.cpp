@@ -2678,6 +2678,25 @@ TEST(Relay, AnEmptyAirBudgetStopsEveryForward) {
   EXPECT_TRUE(b.allows(t + MQTTCTRL_AIR_QUARTER_SECS, false, false));
 }
 
+TEST(MeshRoad, AFloodedRequestIsAnsweredOnceItsCopiesHaveDiedDown) {
+  EXPECT_EQ(300u, mqttCtrlMeshAnswerDelay(false, 0));
+  EXPECT_EQ(300u, mqttCtrlMeshAnswerDelay(false, 0xFFFFFFFFu));
+  EXPECT_EQ(15000u, mqttCtrlMeshAnswerDelay(true, 0));
+  EXPECT_EQ(30000u, mqttCtrlMeshAnswerDelay(true, 15000));
+  EXPECT_EQ(15000u, mqttCtrlMeshAnswerDelay(true, 15001));
+  bool low = false, high = false;
+  for (uint32_t r = 0; r < 100000; r += 7) {
+    const uint32_t d = mqttCtrlMeshAnswerDelay(true, r * 2654435761u);
+    ASSERT_GE(d, 15000u);
+    ASSERT_LE(d, 30000u);
+    low = low || d < 17000;
+    high = high || d > 28000;
+  }
+  EXPECT_TRUE(low && high);
+  // Well inside the two minutes a relay waits, with the flood's own travel either way.
+  EXPECT_LT(MQTTCTRL_MESH_FLOOD_ANSWER_MIN_MS + MQTTCTRL_MESH_FLOOD_ANSWER_SPAN_MS + 2 * 30000UL, 120000UL);
+}
+
 TEST(MeshRoad, TheResponseCarriesTagClockCounterCodeAndAClampedReply) {
   uint8_t out[200];
   size_t n = mqttCtrlMeshFormatResponse(out, sizeof(out), 0x6553F100, 1715770351, 7,

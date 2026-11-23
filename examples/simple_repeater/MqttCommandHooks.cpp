@@ -676,7 +676,9 @@ void Fork::refreshMcc3Keys() {
 void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                              uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply,
                              bool sealed, bool zero_hop) {
-  const uint32_t delay_millis = 300;   // upstream's SERVER_RESPONSE_DELAY
+  uint32_t random;
+  _mesh.getRNG()->random((uint8_t *)&random, sizeof(random));
+  const uint32_t delay_millis = mqttCtrlMeshAnswerDelay(packet->isRouteFlood(), random);
   ClientInfo* client = _mesh.acl.getClient(sender.pub_key, PUB_KEY_SIZE);
   bool have_out_path = client != NULL && client->out_path_len != OUT_PATH_UNKNOWN;
   auto route = mesh::chooseReplyRoute(packet->isRouteFlood(), false, have_out_path);
@@ -702,8 +704,8 @@ void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   if (out == NULL) return;
   const uint32_t air_ms = _mesh._radio->getEstAirtimeFor(out->getRawLength());
   _mqtt_control.meshAnswered(now, air_ms);
-  debugLine("mesh: the answer, %u bytes, %u ms on the air, %s", (unsigned)n, (unsigned)air_ms,
-            zero_hop ? "no hops" : path_return ? "with its path" : "routed");
+  debugLine("mesh: the answer, %u bytes, %u ms on the air, %s, in %u ms", (unsigned)n, (unsigned)air_ms,
+            zero_hop ? "no hops" : path_return ? "with its path" : "routed", (unsigned)delay_millis);
   if (path_return) {
     _mesh.sendFloodReply(out, delay_millis, packet->getPathHashSize());
   } else if (zero_hop) {

@@ -533,6 +533,15 @@ enum Mcc3ForwardStatus {
   MCC3_FWD_CLOCK_UNSET,
   MCC3_FWD_SEND_FAILED,      // no packet could be built or queued
 };
+static inline const char* mcc3ForwardStatusName(int status) {
+  static const char* const names[] = {
+    "answered", "no-answer", "off", "expired", "replay", "bad-body", "busy", "rate-limited",
+    "clock-unset", "send-failed",
+  };
+  if (status < 0 || status >= (int)(sizeof(names) / sizeof(names[0]))) return "unknown";
+  return names[status];
+}
+
 #define MCC3_FWD_SEND          (-1)   // mcc3RelayAdmit: nothing refuses it
 
 struct Mcc3Forward {
