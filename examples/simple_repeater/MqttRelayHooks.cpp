@@ -28,14 +28,16 @@ void Fork::relayForward() {
     uint32_t air_ms = 0;
     if (sendRelayRequest(fwd, &air_ms)) {
       mcc3RelaySent(&_relay, now, fwd.route, has_home, air_ms);
-      debugLine("relay: forward %u sent %s, %u ms on the air", (unsigned)fwd.counter,
-                fwd.route == MCC3_ROUTE_DIRECT ? "direct" : "flood", (unsigned)air_ms);
+      _relay_wait.request = mcc3ForwardRequestCounter(&fwd);
+      debugLine("relay: forward %u, request %u, sent %s, %u ms on the air", (unsigned)fwd.counter,
+                (unsigned)_relay_wait.request, fwd.route == MCC3_ROUTE_DIRECT ? "direct" : "flood", (unsigned)air_ms);
       return;
     }
     status = MCC3_FWD_SEND_FAILED;
   }
   _relay.refused++;
-  debugLine("relay: forward %u refused, %s", (unsigned)fwd.counter, mcc3ForwardStatusName(status));
+  debugLine("relay: forward %u, request %u, refused, %s", (unsigned)fwd.counter,
+            (unsigned)mcc3ForwardRequestCounter(&fwd), mcc3ForwardStatusName(status));
   MESH_DEBUG_PRINTLN("MqttControl: forward %u refused, status %d", (uint32_t)fwd.counter, (uint32_t)status);
   Mcc3ForwardResult result;
   mcc3ForwardResultInit(&result, fwd.counter, (uint8_t)status);
@@ -96,7 +98,7 @@ void Fork::publishRelayResult(const uint8_t* rid, Mcc3ForwardResult& result) {
 void Fork::loopRelay() {
   if (!_relay.waiting || !mcc3RelayWaitOver(_relay_wait.since, millis())) return;
   _relay.waiting = false;
-  debugLine("relay: forward %u, no answer", (unsigned)_relay_wait.counter);
+  debugLine("relay: forward %u, request %u, no answer", (unsigned)_relay_wait.counter, (unsigned)_relay_wait.request);
   Mcc3ForwardResult result;
   mcc3ForwardResultInit(&result, _relay_wait.counter, MCC3_FWD_NO_ANSWER);
   result.sent = _relay_wait.sent;
@@ -120,7 +122,8 @@ void Fork::onRelayResponse(mesh::Packet* packet, uint8_t path_len, const uint8_t
   if (!_relay.waiting || !mcc3RelayTakeResponse(_relay_wait.tag, data, len, &result)) return;
   _relay.waiting = false;
   _relay.answered++;
-  debugLine("relay: forward %u answered, %u bytes", (unsigned)_relay_wait.counter, (unsigned)len);
+  debugLine("relay: forward %u, request %u, answered, %u bytes", (unsigned)_relay_wait.counter,
+            (unsigned)_relay_wait.request, (unsigned)len);
   result.sent = _relay_wait.sent;
   result.snr = (int8_t)(packet->getSNR() * 4);
   mcc3ForwardResultPath(&result, path_len, path);

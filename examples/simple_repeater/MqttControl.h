@@ -83,6 +83,13 @@ class MqttControl {
   Mcc3Keys _mcc3;
   bool _mcc3_ready;
   char _mcc3_key_for[PUB_KEY_SIZE * 2 + 1];    // the command key they were derived from
+  // `rekey`: the key that waits (RAM only), its keys once derived, and whether it just took over.
+  char _rekey[PUB_KEY_SIZE * 2 + 1];
+  unsigned long _rekey_since;
+  bool _rekey_offered;
+  Mcc3Keys _rekey_mcc3;
+  char _rekey_key_for[PUB_KEY_SIZE * 2 + 1];
+  bool _rekey_done;
   uint8_t _node_key[PUB_KEY_SIZE];
 #ifdef WITH_MQTT_BRIDGE
   MqttControlStaged _staged;
@@ -139,6 +146,26 @@ public:
   }
   // NULL while there is no command key to seal to.
   const Mcc3Keys* mcc3Keys() const { return _mcc3_ready ? &_mcc3 : NULL; }
+
+  // `rekey` (mqttCtrlRekeyParse): the key that waits, "" when none does or its hour is over.
+  const char* rekeyWaiting(unsigned long now_ms) {
+    if (!mqttCtrlRekeyWaiting(_rekey_offered, _rekey_since, now_ms)) { _rekey_offered = false; return ""; }
+    return _rekey;
+  }
+  const char* rekeyKeyFor() const { return _rekey_key_for; }
+  void setRekeyKeys(const Mcc3Keys& keys, const char* key_for) {
+    _rekey_mcc3 = keys;
+    StrHelper::strncpy(_rekey_key_for, key_for, sizeof(_rekey_key_for));
+  }
+  // Its keys, or NULL while none waits or they are not derived yet.
+  const Mcc3Keys* rekeyKeys(unsigned long now_ms) {
+    const char* k = rekeyWaiting(now_ms);
+    return k[0] != 0 && strcmp(k, _rekey_key_for) == 0 ? &_rekey_mcc3 : NULL;
+  }
+  // The waiting key signed a command: it is the key from here on, saved.
+  void rekeyTakeOver();
+  // True once after a takeover, for the caller's log line.
+  bool rekeyJustDone() { const bool d = _rekey_done; _rekey_done = false; return d; }
 
   // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
   static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);

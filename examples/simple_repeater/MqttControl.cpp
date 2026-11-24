@@ -54,6 +54,12 @@ MqttControl::MqttControl()
   _ota_legacy[1] = OTA_AUTO_CHECK_HOURS_DEFAULT;
   _mcc3_key_for[0] = 0;
   memset(_node_key, 0, sizeof(_node_key));
+  _rekey[0] = 0;
+  _rekey_since = 0;
+  _rekey_offered = false;
+  _rekey_key_for[0] = 0;
+  _rekey_done = false;
+  memset(&_rekey_mcc3, 0, sizeof(_rekey_mcc3));
 #ifdef WITH_MQTT_BRIDGE
   _v2_key_for[0] = 0;
   _v2_topic[0] = 0;
@@ -181,6 +187,19 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
                                [](void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len) {
                                  return ((const mesh::Identity*)ctx)->verify(sig, msg, (int)len);
                                }, (void*)&owner, &mcc3);
+      // Not the key's: a key that waits (`rekey`) is tried, and takes over if it signed this.
+      const Mcc3Keys* waiting = result != MQTTCTRL_OK ? rekeyKeys(millis()) : NULL;
+      mesh::Identity next;
+      if (waiting != NULL && mesh::Utils::fromHex(next.pub_key, PUB_KEY_SIZE, _rekey)) {
+        MqttCtrlResult again = mcc3OpenCommand(waiting, _node_key, _staged.payload, _staged.payload_len,
+                                 [](void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len) {
+                                   return ((const mesh::Identity*)ctx)->verify(sig, msg, (int)len);
+                                 }, (void*)&next, &mcc3);
+        if (again == MQTTCTRL_OK) {
+          rekeyTakeOver();
+          result = MQTTCTRL_OK;
+        }
+      }
       if (result != MQTTCTRL_OK) break;
       memset(&env, 0, sizeof(env));
       env.counter = mcc3.counter;
@@ -281,10 +300,40 @@ MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, const char* top
   char command[MQTTCTRL_MAX_COMMAND + 1];
   memcpy(command, env.command, env.command_len);
   command[env.command_len] = 0;
+  // `rekey` never reaches the console: only a command the key in use signed gets here.
+  if (mqttCtrlIsRekey(command, env.command_len)) {
+    char hex[PUB_KEY_SIZE * 2 + 1];
+    if (!mqttCtrlRekeyParse(command, env.command_len, hex)) {
+      strcpy(reply, "Err - use: rekey <the new PUBLIC key, 43 base64url characters>");
+    } else if (strcasecmp(hex, _pubkey) == 0) {
+      strcpy(reply, "Err - that is the key in use");
+    } else {
+      strcpy(_rekey, hex);
+      _rekey_since = millis();
+      _rekey_offered = true;
+      _rekey_key_for[0] = 0;
+      strcpy(reply, "OK - the new key waits 60 min: send a command signed by it");
+    }
+    return MQTTCTRL_OK;
+  }
   if (runner != NULL) {
     runner->runCommand(mqttCtrlSenderStamp(now), command, reply);
   }
   return MQTTCTRL_OK;
+}
+
+void MqttControl::rekeyTakeOver() {
+  strcpy(_pubkey, _rekey);
+  _key_via = MQTTCTRL_KEY_VIA_REKEY;
+  _mcc3 = _rekey_mcc3;
+  strcpy(_mcc3_key_for, _rekey);
+  _mcc3_ready = true;
+  _rekey[0] = 0;
+  _rekey_key_for[0] = 0;
+  _rekey_offered = false;
+  memset(&_rekey_mcc3, 0, sizeof(_rekey_mcc3));
+  _rekey_done = true;
+  save();
 }
 
 MqttCtrlResult MqttControl::meshCommand(const mesh::Identity& owner, const char* topic,

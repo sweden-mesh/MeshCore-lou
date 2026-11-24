@@ -568,6 +568,14 @@ struct Mcc3ForwardResult {
   uint8_t response[MCC3_FWD_RES_RESPONSE];   // the target's answer after its 4-byte tag
 };
 
+// The counter of the request a forward carries, which the relay cannot read but can see: a
+// 0xC2 request has it in the clear (it is the nonce). 0 for the old 0xC1 request, which has
+// none in the clear. It is what joins the relay's log lines to the sender's and the target's.
+static inline uint32_t mcc3ForwardRequestCounter(const Mcc3Forward* f) {
+  if (f == NULL || f->body_len < 6 || f->body[0] != MCC3_MESH_SUBTYPE) return 0;
+  return mqttCtrlMeshU32(&f->body[2]);
+}
+
 // The first byte of an mcc3 payload, 0 when it has none. No key is used.
 static inline uint8_t mcc3PayloadKind(const char* payload, size_t len) {
   uint8_t head[3];
