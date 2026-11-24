@@ -267,7 +267,6 @@ ThinkNode_M7_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' ver
 Tiny_Relay_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Tiny_Relay_repeater-arrc
 waveshare_rp2040_lora_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=waveshare_rp2040_lora_repeater-arrc
 Waveshare_S3_LR1121_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Waveshare_S3_LR1121_repeater-arrc
-wio-e5-mini_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=wio-e5-mini_repeater-arrc
 wio-e5_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=wio-e5_repeater-arrc
 wio_wm1110_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=wio_wm1110_repeater-arrc
 WioTrackerL1-1W_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=WioTrackerL1-1W_repeater-arrc

@@ -78,6 +78,10 @@ flags_for() {
 # undefines MESH_DEBUG and the rest, and -UMQTT_DEBUG the Observer's own (ruling 21).
 QUIET_ENVS="${QUIET_ENVS:-Xiao_S3_WIO_repeater_observer_mqtt}"
 
+# Images that do not fit their board, as <env>-<combination>: never planned and never built.
+# wio-e5-mini (STM32WLE5, 229 376 B of flash): arrc is 5 584 B over since lou-20; ar and rc fit.
+NO_FIT="${NO_FIT-wio-e5-mini_repeater-arrc}"
+
 for combo in $COMBOS; do
   flags_for "$combo" >/dev/null || { echo "not a combination for $BASE: '$combo'" >&2; exit 2; }
 done
@@ -91,8 +95,9 @@ total=$(( $(echo $COMBOS | wc -w) * $(echo $BOARDS | wc -w) ))
 for combo in $COMBOS; do
   flags=$(flags_for "$combo")
   for env in $BOARDS; do
-    n=$((n + 1))
     variant="$env-$combo"
+    case " $NO_FIT " in *" $variant "*) continue ;; esac
+    n=$((n + 1))
     quiet=""
     case " $QUIET_ENVS " in *" $env "*) quiet=1 ;; esac
     extra="${quiet:+ -UMQTT_DEBUG}"
