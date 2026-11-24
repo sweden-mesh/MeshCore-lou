@@ -2425,6 +2425,57 @@ TEST(MeshRoad, ARepairArrivingOverMqttIsRefused) {
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 0, now, true));
 }
 
+// The owner's tool signs "time <now>" with an expiry minutes later. A node weeks behind would
+// refuse anything else as expiry-too-far; this one command is judged by its own word. (A clock
+// still at the firmware default, before 2025, skips the expiry check already.)
+TEST(MeshRoad, AClockStepMendsANodeThatIsWeeksBehind) {
+  const uint32_t owner_now = 1795000000;
+  const uint32_t behind = owner_now - 21u * 86400u;   // set once, then weeks behind
+  Held other("v1|9|1795000150|get name");
+  EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&other.env, 0, behind, true));
+  Held step("v1|9|1795000150|time 1795000000");
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&step.env, 0, behind, true));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&step.env, 0, behind, true, false)) << "a mesh-only image too";
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&step.env, 0, owner_now, true)) << "and on a node whose clock is right";
+}
+
+TEST(MeshRoad, AClockStepIsStillACommandWithACounter) {
+  Held step("v1|9|1795000150|time 1795000000");
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&step.env, 9, 1700000000, true));
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&step.env, 10, 1700000000, true));
+}
+
+// The time must agree with the command's own signed expiry: at or before it, by an hour at most.
+TEST(MeshRoad, AClockStepMustAgreeWithItsOwnExpiry) {
+  Held late("v1|9|1795000150|time 1795000151");
+  EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthoriseMesh(&late.env, 0, 1700000000, true));
+  Held edge("v1|9|1795003600|time 1795000000");
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&edge.env, 0, 1700000000, true));
+  Held far("v1|9|1795003601|time 1795000000");
+  EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&far.env, 0, 1700000000, true));
+}
+
+// Only the whole form: digits, a time that looks synced. Anything else is the deny list's.
+TEST(MeshRoad, OnlyAWholeClockStepIsOne) {
+  uint32_t e = 0;
+  EXPECT_TRUE(mqttCtrlMeshClockStep("time 1795000000", 15, &e));
+  EXPECT_EQ(1795000000u, e);
+  for (const char* c : { "time", "time ", "time 12", "time 1795000000 x", "time -1", "time 99999999999", "time 0x6AFD", "Time 1795000000", "timex 1795000000", "clock sync" }) {
+    EXPECT_FALSE(mqttCtrlMeshClockStep(c, strlen(c), &e)) << c;
+  }
+  const uint32_t now = 1795000000 - 60;
+  for (const char* body : { "v1|9|1795000000|time", "v1|9|1795000000|time 12", "v1|9|1795000000|time 1795000000 x" }) {
+    Held h(body);
+    EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthoriseMesh(&h.env, 0, now, true)) << body;
+  }
+}
+
+// Over MQTT the clock stays out of reach: an Observer node has NTP, and a broker could hold a command.
+TEST(MeshRoad, AClockStepOverMqttIsRefused) {
+  Held step("v1|9|1795000150|time 1795000000");
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&step.env, 0, 1795000000, true));
+}
+
 TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   const uint32_t unset = 1715770351 + 3600;           // the firmware's 2024 default, an hour up
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(unset, 1795000000));

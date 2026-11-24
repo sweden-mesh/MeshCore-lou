@@ -750,7 +750,8 @@ static inline bool mqttCtrlCommandDenied(const char* command, size_t len) {
     // airtime: `trigger` is the one sanctioned transmit, on its own budget.
     "advert", "alert", "set advert.interval", "set flood.advert.interval",
     // the clock: expiry is judged against it. `time <epoch>` steps it forward by
-    // any amount; `clock sync` steps it to the node's own now and is harmless.
+    // any amount; `clock sync` steps it to the node's own now and is harmless. The mesh
+    // road alone admits a `time <epoch>` that agrees with its own expiry (mqttCtrlMeshClockStep).
     "time",
     // serial-only already (sender_timestamp == 0); listed so the two gates agree.
     "log", "stats-core", "stats-packets", "stats-radio", "stats-radio-diag",
@@ -1247,12 +1248,45 @@ static inline MqttCtrlResult mqttCtrlMeshCheckExpiry(uint32_t now, uint32_t expi
   return mqttCtrlCheckExpiry(now, expiry);
 }
 
+// `time <epoch>` over the mesh road mends a clock that is behind (operator 2026-11-24: nodes
+// without Wi-Fi run weeks and years behind, and then refuse every command as expiry-too-far
+// with no way back but a visit). The epoch is all digits and a synced-looking time; the CLI
+// itself only ever steps the clock forward.
+static inline bool mqttCtrlMeshClockStep(const char* command, size_t len, uint32_t* epoch) {
+  if (command == NULL || len < 6 || len > 15 || strncmp(command, "time ", 5) != 0) return false;
+  uint32_t v = 0;
+  for (size_t i = 5; i < len; i++) {
+    if (command[i] < '0' || command[i] > '9') return false;
+    const uint32_t d = (uint32_t)(command[i] - '0');
+    if (v > (0xFFFFFFFFu - d) / 10) return false;
+    v = v * 10 + d;
+  }
+  if (v < MQTTConnectionPolicy::kSyncedClockEpoch) return false;
+  if (epoch != NULL) *epoch = v;
+  return true;
+}
+
+// A clock step is judged by its own word, not by the clock it is sent to mend: the time it
+// names must sit at or before its own signed expiry, by no more than the plane ever allows.
+// So the owner's tool, which signs "now" and an expiry minutes later, passes on a node years
+// behind; a step to some far time needs an expiry signed out there too. The counter above
+// still refuses every replay, and nothing here can move a clock back.
+static inline MqttCtrlResult mqttCtrlMeshCheckClockStep(uint32_t epoch, uint32_t expiry) {
+  if (expiry < epoch) return MQTTCTRL_ERR_EXPIRED;
+  if (expiry - epoch > MQTTCTRL_MAX_FUTURE_SECS) return MQTTCTRL_ERR_FUTURE;
+  return MQTTCTRL_OK;
+}
+
 // mqttCtrlAuthorise for the mesh road: the same counter, its own expiry and command rules.
 static inline MqttCtrlResult mqttCtrlAuthoriseMesh(const MqttCtrlEnvelope* env,
                                                    uint32_t last_counter, uint32_t now,
                                                    bool auto_reply, bool uplink = true) {
   if (env == NULL) return MQTTCTRL_ERR_EMPTY;
   if (!mqttCtrlCounterAccepted(last_counter, env->counter)) return MQTTCTRL_ERR_REPLAY;
+  uint32_t step = 0;
+  if (mqttCtrlMeshClockStep(env->command, env->command_len, &step)) {
+    return mqttCtrlMeshCheckClockStep(step, env->expiry);
+  }
   MqttCtrlResult expiry = mqttCtrlMeshCheckExpiry(now, env->expiry);
   if (expiry != MQTTCTRL_OK) return expiry;
   if (!mqttCtrlMeshCommandAllowed(env->command, env->command_len, auto_reply, uplink)) return MQTTCTRL_ERR_NOT_ALLOWED;
