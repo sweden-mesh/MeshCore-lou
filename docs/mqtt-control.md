@@ -662,3 +662,16 @@ are refused; nothing readable is lost.
 
 Codes are appended to the enum and never renumbered, so a stored result keeps its meaning.
 
+## Mending a clock over the mesh: `time <epoch>`
+
+A node without Wi-Fi has no time source. One whose clock is still at the firmware default
+(before 2025) skips the expiry check and is guarded by the counter alone. One whose clock was set
+once and has since fallen weeks behind refuses every command as `expiry-too-far`. The mesh road
+therefore admits one command the deny list otherwise refuses: `time <epoch>`, all digits.
+
+It is judged by its own word, not by the clock it is sent to mend: the time it names must be at
+or before the command's own signed expiry, by an hour at most. The counter still refuses a
+replay, and the console's `time` only ever moves a clock forward, so a clock that is ahead is
+still a serial visit. Over MQTT `time` stays denied: an Observer node has NTP, and a broker can
+hold a command back. What is left to weigh: whoever holds the command key can push a mesh-only
+node's clock far ahead once, after which the owner's commands expire until someone visits it.
