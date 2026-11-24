@@ -136,10 +136,10 @@ static std::string typed(const std::string& bytes, std::string* echo = NULL) {
 }
 
 TEST(ForkConsole, ACorrectedLineIsTheLineThePersonSees) {
-  // Bench, LOUTEST 2026-11-16: `set mqtt.cmd.x` corrected to ` on` read as
-  // `unknown config: mqtt.cmd on`, the erased bytes still in it.
-  EXPECT_EQ("set mqtt.cmd on\r", typed("set mqtt.cmd.x\b\b on\r"));
-  EXPECT_EQ("get mqtt.cmd.slot\r", typed("get mqtt.cmd.slox\x7ft\r"));
+  // Bench, LOUTEST 2026-11-16: `set cmd.x` corrected to ` on` read as
+  // `unknown config: cmd on`, the erased bytes still in it.
+  EXPECT_EQ("set cmd on\r", typed("set cmd.x\b\b on\r"));
+  EXPECT_EQ("get cmd.slot\r", typed("get cmd.slox\x7ft\r"));
   std::string echo;
   typed("ab\x7f" "c", &echo);
   EXPECT_EQ("ab<c", echo);                                   // the erase is echoed as one
@@ -147,7 +147,7 @@ TEST(ForkConsole, ACorrectedLineIsTheLineThePersonSees) {
 }
 
 TEST(ForkConsole, AnArrowKeyLeavesNothingInTheLine) {
-  EXPECT_EQ("get mqtt.cmd.slot\r", typed("\x1b[Aget mqtt.cmd.slot\r"));
+  EXPECT_EQ("get cmd.slot\r", typed("\x1b[Aget cmd.slot\r"));
   EXPECT_EQ("time\r", typed("ti\x1b[D\x1b[Cme\r"));
   EXPECT_EQ("ver\r", typed("\x1bOAver\r"));                  // SS3, as some terminals send
   EXPECT_EQ("ver\r", typed("\x1b[1;5Cver\r"));               // a sequence with parameters

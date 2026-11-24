@@ -131,7 +131,7 @@ static inline bool mcc3ResultTopic(const uint8_t rid[MCC3_RID_LEN], char* out, s
   return true;
 }
 
-// Once per command key: at boot and after `set mqtt.cmd.pubkey`, as the v2 key is.
+// Once per command key: at boot and after `set cmd.pubkey`, as the v2 key is.
 static inline void mcc3DeriveKeys(const uint8_t shared[32], const char* node_hex, Mcc3Keys* keys) {
   static const char* const labels[4] = { "mcc3/cmd/", "mcc3/mesh/", "mcc3/alive/", "mcc3/fwd/" };
   uint8_t* out[4] = { keys->cmd, keys->mesh, keys->alive, keys->fwd };
@@ -433,7 +433,7 @@ struct Mcc3Alive {
   uint32_t last_counter;
   uint32_t interval;        // seconds
   uint8_t flags;            // MCC3_ALIVE_*
-  uint8_t mesh;             // mqtt.cmd.mesh: 0 off, 1 on, 2 auto
+  uint8_t mesh;             // cmd.mesh: 0 off, 1 on, 2 auto
   uint8_t fingerprint[4];   // the command key's first 4 bytes
   uint8_t via;              // MqttCtrlKeyVia
   const char* version;
@@ -445,7 +445,7 @@ struct Mcc3Alive {
 #define MCC3_ALIVE_UPLINK      0x02    // an Observer image (Wi-Fi and MQTT)
 #define MCC3_ALIVE_AUTO_REPLY  0x04
 #define MCC3_ALIVE_CLOCK_SET   0x08
-#define MCC3_ALIVE_RELAY       0x10    // relays for its owner (`mqtt.relay own`, an Observer image)
+#define MCC3_ALIVE_RELAY       0x10    // relays for its owner (`relay own`, an Observer image)
 
 // The alive message's mesh byte from the plane's own mode numbering (MqttCtrlMeshMode).
 static inline uint8_t mcc3AliveMeshMode(uint8_t mode) {
@@ -524,7 +524,7 @@ static inline size_t mcc3BuildAlive(const uint8_t key[MCC3_KEY_LEN], const uint8
 enum Mcc3ForwardStatus {
   MCC3_FWD_ANSWERED = 0,     // the response is in the result
   MCC3_FWD_NO_ANSWER,        // sent, and nothing came back in time; the target may have run it
-  MCC3_FWD_OFF,              // `mqtt.relay off`
+  MCC3_FWD_OFF,              // `relay off`
   MCC3_FWD_EXPIRED,          // expiry passed, or too far ahead
   MCC3_FWD_REPLAY,
   MCC3_FWD_BAD_BODY,         // body, route, path or target refused
@@ -660,7 +660,7 @@ struct Mcc3Relay {
   uint32_t last_counter = 0;                 // the last forward counter accepted
   bool waiting = false;                      // a forward is out and its answer has not come
   MqttCtrlRelayBudget budget;
-  uint32_t forwarded = 0;                    // since boot, for `get mqtt.relay`
+  uint32_t forwarded = 0;                    // since boot, for `get relay`
   uint32_t answered = 0;
   uint32_t refused = 0;
 };

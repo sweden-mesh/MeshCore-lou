@@ -91,11 +91,11 @@ class Fork {
   uint32_t _mesh_down_since = 0;               // millis() the command slot went down, 0 while up
   uint32_t _mesh_ok = 0;                       // commands run over the mesh road
   uint32_t _mesh_refused = 0;                  // ... and requests on it that ran nothing
-  bool _ctrl_debug = false;                    // `set mqtt.cmd.debug on`: until the next boot
+  bool _ctrl_debug = false;                    // `set cmd.debug on`: until the next boot
   MqttCtrlRequesters _requesters;              // who was answered over the mesh, and the way back
 
   // One line on the serial console for each command heard and where it stopped, while
-  // `set mqtt.cmd.debug on` is in force. Never a key, a signature or more of a command than
+  // `set cmd.debug on` is in force. Never a key, a signature or more of a command than
   // its outcome.
   void debugLine(const char* fmt, ...);
   void formatNodeStats(char* reply);

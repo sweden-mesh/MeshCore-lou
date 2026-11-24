@@ -19,14 +19,14 @@ Ed25519 signature by the command key this node was given.
 ## Turning it on
 
 ```
-set mqtt.cmd.pubkey <64 hex characters>   # serial, or a remote admin's first key; the PUBLIC half of the signing key
-set mqtt.cmd on                           # takes a slot, or puts the plane's back on the preset; reboot to apply
-set mqtt.cmd on <host>                    # the same on a region's own broker (lou-18)
-get mqtt.cmd                              # state, counter, slot, /cmd subscription, last command
-mqtt.cmd ping                             # the whole plane, end to end, on the spot (ar-12)
+set cmd.pubkey <64 hex characters>   # serial, or a remote admin's first key; the PUBLIC half of the signing key
+set cmd on                           # takes a slot, or puts the plane's back on the preset; reboot to apply
+set cmd on <host>                    # the same on a region's own broker (lou-18)
+get cmd                              # state, counter, slot, /cmd subscription, last command
+cmd ping                             # the whole plane, end to end, on the spot (ar-12)
 ```
 
-**`set mqtt.cmd on` with no slot configured sets the node up by itself** (2026-10-08): it
+**`set cmd on` with no slot configured sets the node up by itself** (2026-10-08): it
 takes a free slot, gives it the built-in `mccontrol` preset -- the default command broker,
 `mqtts://mqtt-meshcore.louie.se:8883`, token login like the collectors -- with every packet type on
 (so the broker collects the region's packets beside the status and neighbours the plane's statistics use), points the
@@ -45,23 +45,23 @@ Which slot (operator 2026-10-10, from ar-12):
 - **With PSRAM** the pick is the first of slots 3-6 whose preset is `none`; slot 2 is never
   taken there, whatever it holds.
 
-**The plane's slot is not changed by anything else.** While `mqtt.cmd.slot` names a slot,
+**The plane's slot is not changed by anything else.** While `cmd.slot` names a slot,
 every command that would change it is refused with the reason, by serial or over the plane:
 `set mqttN.<anything>` for that slot, and `set mqtt.analyzer.us|eu on|off`, which write slots
 1 and 2. Over the plane such a command would cut the line it arrived on. To change the slot,
-move the plane first with `set mqtt.cmd.slot`, which the command plane does not admit.
+move the plane first with `set cmd.slot`, which the command plane does not admit.
 
 When no slot can run another connection the reply says so and names the cure -- turn one off
 (`set mqtt2.preset none`) -- rather than doing it for you.
 
-**A region's own command broker** (lou-18): `set mqtt.cmd on <host>` does the same with a
+**A region's own command broker** (lou-18): `set cmd on <host>` does the same with a
 custom slot in place of the preset -- server `mqtts://<host>:8883`, the host as the login
 token's audience, every packet type on -- and answers
 `OK - slot 3, custom (mqtts://mqtt.meshcore-vgr.se:8883), packets on; reboot to apply`. The
 host is a name: letters, digits, `.` and `-`, up to 50 characters; a URL, a port or anything
 else is refused. The slot is chosen as above, or, when the plane already has one, that slot
 is rewritten, so a node moves from the shared broker to its region's (or between two
-regional ones) in one line. The bare `set mqtt.cmd on` stays the shared broker, and from
+regional ones) in one line. The bare `set cmd on` stays the shared broker, and from
 lou-19, on a node whose plane already has a slot, it rewrites that slot back to the
 `mccontrol` preset (server and audience cleared, every packet type on) and answers
 `OK - slot 3, mccontrol (mqtts://mqtt-meshcore.louie.se:8883), packets on; reboot to apply`:
@@ -70,34 +70,34 @@ the plane on and left the slot as it was. Either form saves the slot to the Obse
 settings before the plane is pointed at it, and refuses, changing nothing, when that save
 fails. On lou-18 the host form saved the wrong settings file, so its answer was right but
 the slot was back as it was after the reboot. Like every
-`set mqtt.cmd`, it is not admitted over the broker; the mesh road's repair allowance (below)
+`set cmd`, it is not admitted over the broker; the mesh road's repair allowance (below)
 admits both forms. On firmware before lou-18 the same slot is set by hand:
 
 ```
 set mqttN.preset custom · set mqttN.server mqtts://broker.example:8883 · set mqttN.audience broker.example
 set mqttN.filter all
-set mqtt.cmd.slot <n>                     # the MQTT slot to listen and answer on; reboot to apply
+set cmd.slot <n>                     # the MQTT slot to listen and answer on; reboot to apply
 ```
 
-The key and the slot are both needed. With `mqtt.cmd on` but no command key, every command is refused -- and,
+The key and the slot are both needed. With `cmd on` but no command key, every command is refused -- and,
 importantly, *discarded*. The node holds one staged command at a time and a full slot drops
 the newer arrival, so a refusal that left the slot occupied would silently swallow every
 later command for the rest of the boot, including the ones sent once a key was finally
 provisioned. Refusing and clearing are the same act (`mqttCtrlOwnerReady`, tested in
 `test_mqtt_control`).
 
-`mqtt.cmd.pubkey` is not `mqtt.owner`. `mqtt.owner` is the Observer firmware's own setting: it
+`cmd.pubkey` is not `mqtt.owner`. `mqtt.owner` is the Observer firmware's own setting: it
 names the person who owns the node, and travels in the login token to the stats services. The
 command key is one key for a whole fleet, held by whoever runs the control plane, so the two
 are kept apart and an operator's ownership claim does not have to give way to it. Both
-`get mqtt.cmd.pubkey` and `set mqtt.cmd.pubkey` answer a caller at the serial port or the
+`get cmd.pubkey` and `set cmd.pubkey` answer a caller at the serial port or the
 local console, where `get` shows the whole key and how it was set, and an empty `set` clears it.
 
 A remote admin, logged in over the mesh with the admin password, may give a node its **first**
 key, so a board on a mast needs no climb (lou-19). Only while no key is set: replacing or
 clearing one stays with serial. And only once the admin password is not the default
 `password`, is at least 8 characters and is not the guest password; the reply says which rule
-failed. Over admin, `get mqtt.cmd.pubkey` shows the key's first 8 hex characters and `set via
+failed. Over admin, `get cmd.pubkey` shows the key's first 8 hex characters and `set via
 admin` or `set via usb`. The status message carries neither: it goes to every slot, the public
 brokers among them, where a key's fingerprint would group nodes by owner. The plane itself
 never reaches the key: it is told apart from a remote admin by an explicit flag on the admin
@@ -106,7 +106,7 @@ throttled: a sender key that gives a wrong password 5 times is refused for 10 mi
 
 ## Which broker
 
-Commands arrive on one MQTT slot and results leave by the same one, `mqtt.cmd.slot`, from 1 to
+Commands arrive on one MQTT slot and results leave by the same one, `cmd.slot`, from 1 to
 the board's slot count (3 without PSRAM, 6 with); `0`, the default, listens nowhere. The node
 subscribes on that slot alone. The stats presets refuse subscriptions -- `meshcore-mqtt.meshat.se`
 is the one that forced this -- so the stats go out on their preset slot as before, and the
@@ -115,7 +115,7 @@ control plane rides a broker of its own on another:
 ```
 set mqtt1.preset meshat.se            # stats, unchanged
 set mqtt2.preset custom               # plus slot 2's server and audience
-set mqtt.cmd.slot 2
+set cmd.slot 2
 reboot
 ```
 
@@ -136,7 +136,7 @@ second login for as long as the first held the id. The per-slot id and the `pw`/
 Observer's own client ids and `get mqtt.stats` line.
 
 The slot is read at boot, when the subscriptions are made. It cannot be set remotely: a signed
-`set mqtt.cmd.slot 0` would leave a node that only a serial cable could bring back.
+`set cmd.slot 0` would leave a node that only a serial cable could bring back.
 
 ## mcc3: keyed by the node, sealed to its owner (lou-20)
 
@@ -150,14 +150,14 @@ are this tree's `test/data/mcc3-vectors.json`, rebuilt byte for byte by `test/te
 mcc/cmd/{NODE}      commands to this node; the only topic it subscribes to under mcc/
 mcc/r/{RID}         results, on the reply id the sealed command names (random per mccontrol session)
 mcc/alive/{NODE}    the node's alive message, retained; the slot's will empties it
-mcc/ping/{NODE}     `mqtt.cmd ping`; the broker answers `pong|<nonce>` on mcc/cmd/{NODE}
+mcc/ping/{NODE}     `cmd ping`; the broker answers `pong|<nonce>` on mcc/cmd/{NODE}
 ```
 
 There is no broadcast topic of any kind: a county act is one sealed command per node. In lou-20
 the old scheme's `meshcore/{IATA}/all/cmd` is not subscribed either; its per-node topic is,
 while `mqtt.iata` is set (below).
 
-- **Keys.** `S` = X25519 of the node's identity and the command key (`set mqtt.cmd.pubkey`),
+- **Keys.** `S` = X25519 of the node's identity and the command key (`set cmd.pubkey`),
   and four keys from it by HKDF-SHA256 with info `mcc3/cmd/`, `mcc3/mesh/`, `mcc3/alive/` and
   `mcc3/fwd/` + the node's key in hex. Derived once per command key, kept in RAM.
 - **A command** is ChaCha20-Poly1305 under the first, padded to one of two sizes, and holds the
@@ -165,7 +165,7 @@ while `mqtt.iata` is set (below).
   reply id and command. The node opens the AEAD, then checks the signature: a command for one
   node verifies on no other, and an MQTT one is never taken as a mesh one. Then the counter,
   expiry, deny list and rate limits exactly as below. Everything before the signature is
-  silent (counted in `get mqtt.cmd` as unverified); every outcome after it is answered, sealed
+  silent (counted in `get cmd` as unverified); every outcome after it is answered, sealed
   under a fresh random nonce, on `mcc/r/{RID}`.
 - **The flags byte** is reserved for delegation, which is not defined yet: a node refuses any
   envelope whose flags are not zero, silently, as `bad-version`. One bit is defined, on the
@@ -215,9 +215,9 @@ An earlier version used a project-specific prefix to keep control traffic out of
 observer tooling watches. That separation was never needed: the tooling matches on the leaf
 (`+/packets`, `+/status`), so `/cmd` and `/res` never collided with it.
 
-## Checking the plane: `get mqtt.cmd` and `mqtt.cmd ping`
+## Checking the plane: `get cmd` and `cmd ping`
 
-`get mqtt.cmd` answers on one line (from ar-12):
+`get cmd` answers on one line (from ar-12):
 
 ```
 > on, counter 41, slot 2 connected, /cmd subscribed, last command 312 s ago, ping pong in 230 ms
@@ -230,19 +230,19 @@ From lou-18 a command refused before the key vouched for it -- no command key, t
 a broken envelope -- adds `, unverified <n> (last <reason>)`, the reason as mccontrol names it
 (`sig-invalid`, `no-owner-key`, ...). Such a refusal is never answered, since anyone on the
 broker can send one, so this is where it shows: `sig-invalid` means the node holds another
-command key than the sender's (`get mqtt.cmd.pubkey`).
+command key than the sender's (`get cmd.pubkey`).
 
-`mqtt.cmd ping` proves the rest, at the console and without the owner's laptop. The node
+`cmd ping` proves the rest, at the console and without the owner's laptop. The node
 publishes `ping|<8-hex nonce>` on its own `/ping`, answers at once, and goes on repeating:
 
 ```
-OK - ping sent, read 'get mqtt.cmd' for the pong
+OK - ping sent, read 'get cmd' for the pong
 Err - slot 2 not connected
 Err - publish refused
-Err - a ping is already waiting: read 'get mqtt.cmd'
+Err - a ping is already waiting: read 'get cmd'
 ```
 
-The command broker answers `pong|<same nonce>` on the node's own `/cmd`; `get mqtt.cmd` shows
+The command broker answers `pong|<same nonce>` on the node's own `/cmd`; `get cmd` shows
 the round trip, or `no pong in 10 s` -- the `/cmd` subscription, or a broker that does not
 answer pings. The node's identity key is never a registered command key, so a message it put
 on `/cmd` itself would be dropped by the broker by design; the echo has to be the broker's.
@@ -252,7 +252,7 @@ compare, never an Ed25519 verify; it is never executed, answered, logged or coun
 the signed command that marks a new OTA image valid; and it is taken only with the nonce of
 the one ping in flight, which it consumes, so a second or a stale pong changes nothing.
 
-`mqtt.cmd ping` is admitted over the plane as a read, inside the ten-commands-an-hour budget.
+`cmd ping` is admitted over the plane as a read, inside the ten-commands-an-hour budget.
 Sent that way, its `r2` result is held until the ping settles and then carries the outcome --
 `OK - pong in 230 ms on slot 2 (mqtts, jwt)` or `Err - no pong in 10 s: ...` -- once. It puts
 nothing on the air. The broker's half (`mcbroker`) answers a ping only on the session's own
@@ -270,7 +270,7 @@ r3|<counter>|<base64url(ciphertext || tag)>
 
 The key is HKDF-SHA256 over the X25519 agreement of the command key and the node's identity,
 with info `mccontrol-v2|` + the node's command topic, derived once per command key (at boot and
-after `set mqtt.cmd.pubkey`) and kept in RAM. ChaCha20-Poly1305; the nonce is the direction
+after `set cmd.pubkey`) and kept in RAM. ChaCha20-Poly1305; the nonce is the direction
 (0 command, 1 result), seven zero bytes and the command's counter, big-endian -- the counter
 is strictly increasing and persisted before the command runs, so no nonce repeats. Commands are
 padded to 64 or 160 bytes, results to 256 or 512, so length does not name the command. The node
@@ -338,7 +338,7 @@ the mesh until someone adds it.
 | denied | why |
 |---|---|
 | `set prv.key`, `set public.key` | identity: a changed key is a different node, and the fleet, the maps and every history line lose it |
-| `set mqtt.cmd*` (`.slot`, `.pubkey`), `get mqtt.cmd.pubkey` | the plane itself: a signed command that repoints the slot or the key silently removes the node from control, and only a serial visit undoes that. The standard MQTT settings -- `mqttN.*`, `mqtt.presets`, `mqtt.iata`, `mqtt.*` -- are deliberately admitted: a broker may go away and another must be reachable without a visit |
+| `set cmd*` (`.slot`, `.pubkey`), `get cmd.pubkey` | the plane itself: a signed command that repoints the slot or the key silently removes the node from control, and only a serial visit undoes that. The standard MQTT settings -- `mqttN.*`, `mqtt.presets`, `mqtt.iata`, `mqtt.*` -- are deliberately admitted: a broker may go away and another must be reachable without a visit |
 | `password`, `wifi.pwd`, `wifi.ssid`, `guest.password`, `alert.psk`, `bridge.secret`, `snmp.community`, `mqtt.email`, `mqtt.owner`, `owner.info`, `tls*`, `get prv*`, `get mqttN.password/.token/.username` | credentials and ownership, read and written: a result is public on the broker, and a write of these takes over something other than the node. The secrets are denied by bare prefix, so no suffix reaches them |
 | `erase`, `start *` (webconfig, the SoftAP OTA), `poweroff`, `shutdown`, `set bootloader.ver` | no way back from the road. `reboot` and `clkreboot` are admitted: settings need them to apply. `ota check` is admitted as a read, and from lou-19 `ota update` to one node: the image is signed and the old one comes back if the new one never proves itself ([ota.md](ota.md)) |
 | `set lat`, `set lon`, `get lat`, `get lon`, `set role`, `set repeat` | position is evidence the whole mesh relies on, and whether a node publishes where it is belongs to its owner per node (the advert), not to a signed read whose result is public; `repeat off` is how a leaked key would silence a region in ten commands |
@@ -368,10 +368,10 @@ slash when it is not the node's own. A position is left out. The line is at most
 what a sealed answer over the mesh carries, and ends on a whole pair. `get stats` is answered
 on an image without an uplink too.
 
-**`set mqtt.cmd.debug on|off`** (lou-20, the serial console only, until the next boot) prints
+**`set cmd.debug on|off`** (lou-20, the serial console only, until the next boot) prints
 one line, `mcc: ...`, for each command or forward heard on either road and where it stopped:
 not listening, refused before it ran and why, run, answered, and the airtime of what went
-out. It prints no key, no signature and no command text. `get mqtt.cmd.debug` says which.
+out. It prints no key, no signature and no command text. `get cmd.debug` says which.
 
 A `set` of a key the CLI does not know travels and is answered "unknown": the deny
 list bounds what a command may *do*, not whether it is well formed, and the CLI stays the
@@ -412,7 +412,7 @@ answer comes back to this node alone. Both are described in
 
 The deny list is deliberately independent of the second guard: MQTT commands run with the
 node's clock rather than the `0` that marks a locally-privileged caller, so `set prv.key`,
-`erase`, `log`, the `stats-*` dumps and `set mqtt.cmd.pubkey` refuse them anyway. Either alone
+`erase`, `log`, the `stats-*` dumps and `set cmd.pubkey` refuse them anyway. Either alone
 should be enough; both together mean one of them can be wrong.
 
 **The deny list matches with the boundary rule, and the secrets without one.** A family entry
@@ -468,7 +468,7 @@ counter is one counter: a command that arrives both ways runs once.
 The checks are the plane's, with three differences:
 
 - **The repair allowance.** Over the mesh, and only there, `set wifi.ssid <name>`,
-  `set wifi.pwd <password>` and `set mqtt.cmd on [<host>]` are admitted, so a node can be put
+  `set wifi.pwd <password>` and `set cmd on [<host>]` are admitted, so a node can be put
   back on its network and its broker; `reboot` applies them. The command is encrypted to the
   node on this road, where on the broker it is plain text. Everything else the deny list holds
   stays denied, and the command still runs with a non-zero `sender_timestamp`.
@@ -496,11 +496,11 @@ The checks are the plane's, with three differences:
   answer to a direct command: one flooded command renews it, because the answer to a flooded
   request is always flooded.
 
-`set mqtt.cmd.mesh off|on|auto` (console or admin login; denied on both roads) says when the
+`set cmd.mesh off|on|auto` (console or admin login; denied on both roads) says when the
 road is open. `auto`, the default, opens it once the command slot has been down 15 minutes, so
 a node whose broker answers never takes commands over the air; until then a signed request is
-answered `mesh-closed` (code 19). `get mqtt.cmd.mesh` says which, and `get mqtt.cmd` adds
-`, mesh <mode> ok <n> refused <n>`. With `set mqtt.cmd off` the road is closed too. `reboot`
+answered `mesh-closed` (code 19). `get cmd.mesh` says which, and `get cmd` adds
+`, mesh <mode> ok <n> refused <n>`. With `set cmd off` the road is closed too. `reboot`
 answers nothing, over the mesh as over MQTT. A firmware without the road reads `0xC1` as a
 login whose password no one can type, and answers nothing.
 
@@ -512,19 +512,19 @@ above holds, with these differences:
 
 - **The topic is `meshcore/mesh/{own key}/cmd`.** Such an image has no `mqtt.iata`, so the
   region in the topic it rebuilds is always the word `mesh`, and that is what a sender signs
-  for a node it knows as mesh only. `get mqtt.cmd` says `mesh only`.
-- **The road is always open** while `set mqtt.cmd on`: there is no MQTT to wait for, so
-  `mqtt.cmd.mesh` does not exist there, and a mode carried over in `/mqttcontrol` from an
+  for a node it knows as mesh only. `get cmd` says `mesh only`.
+- **The road is always open** while `set cmd on`: there is no MQTT to wait for, so
+  `cmd.mesh` does not exist there, and a mode carried over in `/mqttcontrol` from an
   Observer image is ignored.
 - **What only an uplink means is refused** as `not-allowed` (14): the repair allowance, which
-  repairs an uplink there is none of, `ota check`, `ota update`, `mqtt.cmd ping` and the broker
+  repairs an uplink there is none of, `ota check`, `ota update`, `cmd ping` and the broker
   slots' settings (`set mqttN.*`). The deny list applies in full.
 
 On an Observer image the mesh road already reaches the broker slots' settings (`set mqttN.*`),
 as the deny list admits them, so a broken Observer feed can be repaired over the mesh.
 
-Set it up on the console: `set mqtt.cmd.pubkey <64 hex>` (serial only, as everywhere), then
-`set mqtt.cmd on`.
+Set it up on the console: `set cmd.pubkey <64 hex>` (serial only, as everywhere), then
+`set cmd on`.
 
 ## Relaying: one node's MQTT for another node's command (lou-20)
 
@@ -543,9 +543,9 @@ and its owner.
 A forward runs nothing on the relay. It never reaches the CLI, so the deny list and the command
 counter are not involved. This is the plane's second sanctioned transmit, beside `trigger`.
 
-- **The switch.** `set mqtt.relay off|own`, `get mqtt.relay`. The default is `own`: the relay
+- **The switch.** `set relay off|own`, `get relay`. The default is `own`: the relay
   serves the holder of its own command key and nobody else. A node without a command key never
-  relays. The owner may switch it over the plane; it is not under `mqtt.cmd`, so the deny list
+  relays. The owner may switch it over the plane; it is not under `cmd`, so the deny list
   admits it. Observer `rc` and `arrc` images only.
 - **The budget.** The relay's requests have the same airtime budget as a node's answers: a
   burst of 15 minutes at 5 % (45 s on the air, about 26 requests), then 15 minutes at 1 %
@@ -570,12 +570,12 @@ counter are not involved. This is the plane's second sanctioned transmit, beside
   `off`, `expired`, `replay`, `bad-body`, `busy`, `rate-limited`, `clock-unset`, `send-failed`.
   With an answer come its SNR at the relay and, when the answer returned a path, that path,
   which mccontrol can send direct along next time.
-- `get mqtt.relay` answers `> own, forwarded 3, answered 2, refused 1, burst, 39.9 s airtime
+- `get relay` answers `> own, forwarded 3, answered 2, refused 1, burst, 39.9 s airtime
   left, floods today 1 of 100`, the counts since boot, or `> off`. Bit 4 of the alive message's flags says the
   node relays.
 
 Anything that is not a forward of the owner's is dropped in silence and counted in
-`get mqtt.cmd` as unverified, as a command is.
+`get cmd` as unverified, as a command is.
 
 **The zero-hop flag** is for the target, on every lou-20 image. Flags bit `0x02` in a `0xC2`
 request, inside the signature, says: answer with one transmission and no path. The target then

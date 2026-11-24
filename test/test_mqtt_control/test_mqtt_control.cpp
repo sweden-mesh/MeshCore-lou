@@ -306,8 +306,8 @@ TEST(Allowlist, WithoutAutoReplyEverythingElseIsUnchanged) {
   // Only auto-reply's own commands change verdict; the boundary rule still decides what
   // is one of them, so `get autoreplyx` and `triggerX` were never admitted either way.
   const char* others[] = {
-    "ver", "get name", "region", "neighbors", "get mqtt.cmd", "get stats", "get ota",
-    "set ota.auto on", "mqtt.cmd ping", "region put se-jkp *", "set mqtt.iata JKG", "reboot",
+    "ver", "get name", "region", "neighbors", "get cmd", "get stats", "get ota",
+    "set ota.auto on", "cmd ping", "region put se-jkp *", "set mqtt.iata JKG", "reboot",
     "set prv.key 00", "erase", "advert", "get autoreplyx", "triggerX", "set autoreplyX on",
   };
   for (const char* c : others) {
@@ -419,22 +419,22 @@ TEST(Allowlist, BlocksTheCommandsThatWouldOwnTheNode) {
 }
 
 TEST(Allowlist, TheControlPlaneCannotBeSwitchedOffRemotely) {
-  // A signed `set mqtt.cmd.slot 0`, or a slot with no broker behind it, would
+  // A signed `set cmd.slot 0`, or a slot with no broker behind it, would
   // leave the node listening nowhere, and only someone at its serial port could
   // undo that. The commands that decide where the node listens stay local.
-  EXPECT_FALSE(allowed("set mqtt.cmd off"));
-  EXPECT_FALSE(allowed("set mqtt.cmd.slot 0"));
-  EXPECT_FALSE(allowed("set mqtt.cmd.slot 2"));
+  EXPECT_FALSE(allowed("set cmd off"));
+  EXPECT_FALSE(allowed("set cmd.slot 0"));
+  EXPECT_FALSE(allowed("set cmd.slot 2"));
 }
 
 TEST(Allowlist, TheCommandKeyIsNeitherWritableNorReadable) {
   // Rotating the key that authorises signed commands must not itself be a signed
   // command. MqttControl also refuses both to any non-zero sender_timestamp, which
   // mqttCtrlSenderStamp guarantees every MQTT command carries.
-  EXPECT_FALSE(allowed("set mqtt.cmd.pubkey "
+  EXPECT_FALSE(allowed("set cmd.pubkey "
                        "AA04792D7804529FABF230B32DC8F7FA494D1B3280F153B2215C305E4FD654DC"));
-  EXPECT_FALSE(allowed("set mqtt.cmd.pubkey"));
-  EXPECT_FALSE(allowed("get mqtt.cmd.pubkey"));
+  EXPECT_FALSE(allowed("set cmd.pubkey"));
+  EXPECT_FALSE(allowed("get cmd.pubkey"));
 }
 
 // ---- the slot the control plane rides --------------------------------------
@@ -498,7 +498,7 @@ TEST(Allowlist, IsNotFooledByPrefixTricks) {
   // And the secrets are denied by bare prefix, so no suffix reaches them.
   EXPECT_FALSE(allowed("get prv.keyx"));
   EXPECT_FALSE(allowed("set passwordx y"));
-  EXPECT_FALSE(allowed("get mqtt.cmd.pubkeyx"));
+  EXPECT_FALSE(allowed("get cmd.pubkeyx"));
 }
 
 TEST(Allowlist, RequiresTheCommandToStartWithTheAllowedText) {
@@ -879,7 +879,7 @@ TEST(SensorReadout, TheReadsTravelOnBothRoadsAndTheDebugSwitchOnNeither) {
     EXPECT_TRUE(mqttCtrlMeshCommandAllowed(c, strlen(c), false, false)) << c;   // an image without an uplink
     EXPECT_FALSE(mqttCtrlIsTransmitCommand(c, strlen(c))) << c;
   }
-  for (const char* c : { "set mqtt.cmd.debug on", "set mqtt.cmd.debug off" }) {
+  for (const char* c : { "set cmd.debug on", "set cmd.debug off" }) {
     EXPECT_TRUE(mqttCtrlCommandDenied(c, strlen(c))) << c;
     EXPECT_FALSE(mqttCtrlMeshCommandAllowed(c, strlen(c), true, false)) << c;
   }
@@ -993,7 +993,7 @@ TEST(CommandKeyCaller, ThePlaneNeverSetsTheKeyWhateverTheDenyListSays) {
 }
 
 TEST(CommandKeyCaller, TheDenyListRefusesTheKeyOnItsOwn) {
-  const char* key_cmds[] = { "set mqtt.cmd.pubkey 0123", "get mqtt.cmd.pubkey" };
+  const char* key_cmds[] = { "set cmd.pubkey 0123", "get cmd.pubkey" };
   for (const char* c : key_cmds) {
     EXPECT_TRUE(mqttCtrlCommandDenied(c, strlen(c))) << c;
     EXPECT_FALSE(mqttCtrlMeshCommandAllowed(c, strlen(c), true, true)) << c;
@@ -1307,9 +1307,9 @@ TEST(Allowlist, ADeniedFamilyCannotBeReachedByRunningIntoAnotherWord) {
   // denied name cannot be dodged by a suffix: the boundary is what the CLI's own
   // unbounded memcmp would then match, so both sides are pinned.
   EXPECT_FALSE(allowed("set radio.fem.rxgain 1"));
-  EXPECT_FALSE(allowed("set mqtt.cmd.slot 2"));
+  EXPECT_FALSE(allowed("set cmd.slot 2"));
   EXPECT_TRUE(allowed("set radio.watchdog on") == false);   // under the radio family, denied
-  EXPECT_TRUE(allowed("set mqtt.interval 5"));              // not mqtt.cmd
+  EXPECT_TRUE(allowed("set mqtt.interval 5"));              // not cmd
   EXPECT_TRUE(allowed("set latency 1") == true);            // `set lat` with a boundary only
   EXPECT_FALSE(allowed("set lat 57.78"));
   EXPECT_FALSE(allowed("set lat.x 1"));
@@ -1323,7 +1323,7 @@ TEST(Allowlist, NothingAResultMayNeverCarryCanBeRead) {
     "get prv.key", "get password", "get guest.password",
     "get wifi.pwd", "get wifi.ssid", "get bridge.secret", "get alert.psk",
     "get snmp.community", "get mqtt.email",
-    "get mqtt.owner", "get mqtt.cmd.pubkey", "get owner.info", "get tls.x",
+    "get mqtt.owner", "get cmd.pubkey", "get owner.info", "get tls.x",
     "get mqtt1.password", "get mqtt1.username", "get mqtt1.token",
     "get mqtt2.password", "get mqtt6.token", "get mqtt3.username x",
     "get lat", "get lon",
@@ -1331,11 +1331,11 @@ TEST(Allowlist, NothingAResultMayNeverCarryCanBeRead) {
   for (const char* command : never) EXPECT_FALSE(allowed(command)) << command;
   // The public key is what names the node to the whole mesh, so it is readable;
   // a broker's host name is settable over this plane now, so reading it back is
-  // part of the same job. `get mqtt.cmd` is state and counter, not the key.
+  // part of the same job. `get cmd` is state and counter, not the key.
   EXPECT_TRUE(allowed("get public.key"));
   EXPECT_TRUE(allowed("get mqtt1.server"));
   EXPECT_TRUE(allowed("get mqtt1.preset"));
-  EXPECT_TRUE(allowed("get mqtt.cmd"));
+  EXPECT_TRUE(allowed("get cmd"));
 }
 
 TEST(Allowlist, TheWideningAddedNoPrivilegedCommand) {
@@ -1364,9 +1364,9 @@ TEST(Denylist, TheStandardMqttSettingsTravelButTheControlSlotAndKeyDoNot) {
   EXPECT_TRUE(allowed("set mqtt.iata GOT"));
   EXPECT_TRUE(allowed("set mqtt.interval 10"));
   EXPECT_TRUE(allowed("set mqtt.status on"));
-  EXPECT_FALSE(allowed("set mqtt.cmd off"));
-  EXPECT_FALSE(allowed("set mqtt.cmd.slot 0"));
-  EXPECT_FALSE(allowed("set mqtt.cmd.pubkey 00"));
+  EXPECT_FALSE(allowed("set cmd off"));
+  EXPECT_FALSE(allowed("set cmd.slot 0"));
+  EXPECT_FALSE(allowed("set cmd.pubkey 00"));
 }
 
 TEST(Denylist, RebootIsAdmittedAndTheRestOfTheDestructiveGroupIsNot) {
@@ -1571,7 +1571,7 @@ TEST(GoldenRead, TheSameReadIsRefusedAtAnotherNode) {
 
 TEST(PrivateKey, GuardOne_AnMqttCommandNeverCarriesTheLocalPrivilegeMarker) {
   // sender_timestamp 0 is not a clock reading, it is "the caller is physically
-  // present". It gates get/set prv.key, get/set mqtt.cmd.pubkey and erase.
+  // present". It gates get/set prv.key, get/set cmd.pubkey and erase.
   // If an MQTT command could execute with 0, every one of those gates would open.
   EXPECT_NE(0u, mqttCtrlSenderStamp(0));
 
@@ -1728,7 +1728,7 @@ TEST(Topics, TheWholeKeyFormFitsTheSignedMessageAndIsRefusedWhenItCannot) {
   EXPECT_FALSE(mqttCtrlBuildTopic("JKG", "", "cmd", out, sizeof(out)));
 }
 
-// ---- `set mqtt.cmd on` picks a slot (2026-10-08) -------------------------------------
+// ---- `set cmd on` picks a slot (2026-10-08) -------------------------------------
 
 // The last argument is "this board runs two slots at once", which is "no PSRAM".
 static const bool PSRAM = false, NO_PSRAM = true;
@@ -1787,7 +1787,7 @@ TEST(AutoSlot, NoFreeSlotIsSaidNotGuessed) {
   EXPECT_EQ(-1, mqttCtrlPickSlot(NULL, 6, NO_PSRAM));
 }
 
-// ---- `get mqtt.cmd` says what was refused unverified (bench, LOUTEST 2026-11-16) ----------
+// ---- `get cmd` says what was refused unverified (bench, LOUTEST 2026-11-16) ----------
 
 TEST(Unverified, ResultNamesAreMccontrolsAndFollowTheEnum) {
   EXPECT_STREQ("ok", mqttCtrlResultName(MQTTCTRL_OK));
@@ -1807,7 +1807,7 @@ TEST(Unverified, TheNoteNamesTheCountAndTheLastReason) {
   EXPECT_STREQ("", out);                                     // nothing refused, nothing said
   mqttCtrlRefusalNote(3, MQTTCTRL_ERR_SIG_INVALID, out, sizeof(out));
   EXPECT_STREQ(", unverified 3 (last sig-invalid)", out);
-  // fits beside a day-old `get mqtt.cmd` line in the 160-byte reply; the caller passes what
+  // fits beside a day-old `get cmd` line in the 160-byte reply; the caller passes what
   // is left of it, so a longer one is cut, never overrun
   mqttCtrlRefusalNote(65535, MQTTCTRL_ERR_BROADCAST_TRANSMIT, out, sizeof(out));
   EXPECT_LE(strlen(out) + strlen("> on, counter 1794734056, slot 3 connected, /cmd subscribed, "
@@ -1818,22 +1818,22 @@ TEST(Unverified, TheNoteNamesTheCountAndTheLastReason) {
   EXPECT_STREQ(", unverifie", tiny);
 }
 
-// ---- `set mqtt.cmd on [<host>]`: the shared broker or a region's own (RB-2) ----------
+// ---- `set cmd on [<host>]`: the shared broker or a region's own (RB-2) ----------
 
 TEST(SlotPlan, TheBareFormIsTheMccontrolPresetAsBefore) {
   MqttCtrlSlotPlan plan;
-  ASSERT_EQ(MQTTCTRL_SETUP_PRESET, mqttCtrlPlanSlot("set mqtt.cmd on", &plan));
+  ASSERT_EQ(MQTTCTRL_SETUP_PRESET, mqttCtrlPlanSlot("set cmd on", &plan));
   EXPECT_STREQ("mccontrol", plan.preset);
   EXPECT_STREQ("", plan.server);       // the preset names the server and the audience
   EXPECT_STREQ("", plan.audience);
   EXPECT_EQ(MQTTPacketFilter::kAllPacketTypes, plan.filter);
-  ASSERT_EQ(MQTTCTRL_SETUP_PRESET, mqttCtrlPlanSlot("set mqtt.cmd on  ", &plan));
+  ASSERT_EQ(MQTTCTRL_SETUP_PRESET, mqttCtrlPlanSlot("set cmd on  ", &plan));
   EXPECT_STREQ("mccontrol", plan.preset);
 }
 
 TEST(SlotPlan, AHostIsACustomSlotOnThatBroker) {
   MqttCtrlSlotPlan plan;
-  ASSERT_EQ(MQTTCTRL_SETUP_HOST, mqttCtrlPlanSlot("set mqtt.cmd on mqtt.meshcore-vgr.se", &plan));
+  ASSERT_EQ(MQTTCTRL_SETUP_HOST, mqttCtrlPlanSlot("set cmd on mqtt.meshcore-vgr.se", &plan));
   EXPECT_STREQ("custom", plan.preset);
   EXPECT_STREQ("mqtts://mqtt.meshcore-vgr.se:8883", plan.server);
   EXPECT_STREQ("mqtt.meshcore-vgr.se", plan.audience);
@@ -1841,7 +1841,7 @@ TEST(SlotPlan, AHostIsACustomSlotOnThatBroker) {
   // the longest host that fits the slot's server field, exactly
   std::string longest(MQTTCTRL_HOST_MAX - 3, 'a');
   longest += ".se";
-  ASSERT_EQ(MQTTCTRL_SETUP_HOST, mqttCtrlPlanSlot(("set mqtt.cmd on " + longest).c_str(), &plan));
+  ASSERT_EQ(MQTTCTRL_SETUP_HOST, mqttCtrlPlanSlot(("set cmd on " + longest).c_str(), &plan));
   EXPECT_EQ("mqtts://" + longest + ":8883", std::string(plan.server));
   EXPECT_EQ(sizeof(plan.server) - 1, strlen(plan.server));
 }
@@ -1849,36 +1849,36 @@ TEST(SlotPlan, AHostIsACustomSlotOnThatBroker) {
 TEST(SlotPlan, ABadHostIsRefused) {
   MqttCtrlSlotPlan plan;
   const char* bad[] = {
-    "set mqtt.cmd on mqtts://mqtt.meshcore-vgr.se:8883",   // a URL, not a name
-    "set mqtt.cmd on mqtt.meshcore-vgr.se:8883",
-    "set mqtt.cmd on mqtt.meshcore-vgr.se/x",
-    "set mqtt.cmd on mqtt meshcore-vgr.se",
-    "set mqtt.cmd on .meshcore-vgr.se",
-    "set mqtt.cmd on meshcore-vgr.se.",
-    "set mqtt.cmd on mqtt_meshcore.se",
-    "set mqtt.cmd on m\xc3\xa4sh.se",
+    "set cmd on mqtts://mqtt.meshcore-vgr.se:8883",   // a URL, not a name
+    "set cmd on mqtt.meshcore-vgr.se:8883",
+    "set cmd on mqtt.meshcore-vgr.se/x",
+    "set cmd on mqtt meshcore-vgr.se",
+    "set cmd on .meshcore-vgr.se",
+    "set cmd on meshcore-vgr.se.",
+    "set cmd on mqtt_meshcore.se",
+    "set cmd on m\xc3\xa4sh.se",
   };
   for (const char* c : bad) {
     EXPECT_EQ(MQTTCTRL_SETUP_BAD_HOST, mqttCtrlPlanSlot(c, &plan)) << c;
   }
   std::string too_long(MQTTCTRL_HOST_MAX - 2, 'a');
   too_long += ".se";
-  EXPECT_EQ(MQTTCTRL_SETUP_BAD_HOST, mqttCtrlPlanSlot(("set mqtt.cmd on " + too_long).c_str(), &plan));
+  EXPECT_EQ(MQTTCTRL_SETUP_BAD_HOST, mqttCtrlPlanSlot(("set cmd on " + too_long).c_str(), &plan));
 }
 
 TEST(SlotPlan, OtherCommandsAreNotThisOne) {
   MqttCtrlSlotPlan plan;
-  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("set mqtt.cmd off", &plan));
-  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("set mqtt.cmd only", &plan));
-  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("set mqtt.cmd.slot 3", &plan));
-  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("get mqtt.cmd", &plan));
+  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("set cmd off", &plan));
+  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("set cmd only", &plan));
+  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("set cmd.slot 3", &plan));
+  EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot("get cmd", &plan));
   EXPECT_EQ(MQTTCTRL_SETUP_NOT_ON, mqttCtrlPlanSlot(NULL, &plan));
 }
 
 TEST(SlotPlan, NeverOverThePlane) {
   // Pointing the plane at another broker cuts the line it would arrive on, and hands the
-  // node to whoever runs that broker: serial only, like every `set mqtt.cmd`.
-  const char* c = "set mqtt.cmd on mqtt.meshcore-vgr.se";
+  // node to whoever runs that broker: serial only, like every `set cmd`.
+  const char* c = "set cmd on mqtt.meshcore-vgr.se";
   EXPECT_FALSE(mqttCtrlCommandAllowed(c, strlen(c), true));
   EXPECT_FALSE(mqttCtrlCommandAllowed(c, strlen(c), false));
 }
@@ -1903,7 +1903,7 @@ TEST(SlotPlan, TheBareFormPutsACustomSlotBackOnThePreset) {
   char audience[64] = "mqtt.meshcore-vgr.se";
   uint16_t filter = 0x0001;
   MqttCtrlSlotPlan plan;
-  ASSERT_EQ(MQTTCTRL_SETUP_PRESET, mqttCtrlPlanSlot("set mqtt.cmd on", &plan));
+  ASSERT_EQ(MQTTCTRL_SETUP_PRESET, mqttCtrlPlanSlot("set cmd on", &plan));
   mqttCtrlApplySlotPlan(&plan, preset, sizeof(preset), server, sizeof(server), audience,
                         sizeof(audience), &filter);
   EXPECT_STREQ("mccontrol", preset);
@@ -1916,7 +1916,7 @@ TEST(SlotPlan, TheHostFormRewritesTheSlotAsBefore) {
   char preset[24] = "mccontrol", server[64] = "", audience[64] = "";
   uint16_t filter = 0;
   MqttCtrlSlotPlan plan;
-  ASSERT_EQ(MQTTCTRL_SETUP_HOST, mqttCtrlPlanSlot("set mqtt.cmd on mqtt.meshcore-vgr.se", &plan));
+  ASSERT_EQ(MQTTCTRL_SETUP_HOST, mqttCtrlPlanSlot("set cmd on mqtt.meshcore-vgr.se", &plan));
   mqttCtrlApplySlotPlan(&plan, preset, sizeof(preset), server, sizeof(server), audience,
                         sizeof(audience), &filter);
   EXPECT_STREQ("custom", preset);
@@ -1956,11 +1956,11 @@ TEST(PlaneSlot, EverythingElseIsLeftAlone) {
   EXPECT_FALSE(mqttCtrlTouchesSlot("get mqtt2.preset", 2));             // a read
   EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt.analyzer.euro on", 2));
   EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt.iata JKG", 2));
-  EXPECT_FALSE(mqttCtrlTouchesSlot("set mqtt.cmd.slot 0", 2));          // the way out
+  EXPECT_FALSE(mqttCtrlTouchesSlot("set cmd.slot 0", 2));          // the way out
   EXPECT_FALSE(mqttCtrlTouchesSlot(nullptr, 2));
 }
 
-// ---- `mqtt.cmd ping` (TODO 15, ar-12) -------------------------------------------------
+// ---- `cmd ping` (TODO 15, ar-12) -------------------------------------------------
 
 static const uint8_t* bytes(const char* s) { return (const uint8_t *) s; }
 
@@ -2091,15 +2091,15 @@ TEST(Ping, TheAnswerNamesTheStepThatFailed) {
   mqttCtrlPingAnswer(MQTTCTRL_PING_NO_PONG, 3, 0, NULL, out, sizeof(out));
   EXPECT_STREQ("Err - no pong in 10 s: /cmd is not subscribed or the broker is not answering", out);
   mqttCtrlPingAnswer(MQTTCTRL_PING_OFF, 0, 0, NULL, out, sizeof(out));
-  EXPECT_STREQ("Err - the command plane is off: set mqtt.cmd on", out);
+  EXPECT_STREQ("Err - the command plane is off: set cmd on", out);
 }
 
 TEST(Ping, IsAdmittedOverThePlaneExactlyAndIsNoTransmit) {
   // Abuse rule 6: an owner-signed read inside the command budget; nothing on the air.
-  EXPECT_TRUE(allowed("mqtt.cmd ping"));
-  EXPECT_FALSE(allowed("mqtt.cmd ping all"));
-  EXPECT_FALSE(allowed("mqtt.cmd"));
-  EXPECT_FALSE(mqttCtrlIsTransmitCommand("mqtt.cmd ping", 13));
+  EXPECT_TRUE(allowed("cmd ping"));
+  EXPECT_FALSE(allowed("cmd ping all"));
+  EXPECT_FALSE(allowed("cmd"));
+  EXPECT_FALSE(mqttCtrlIsTransmitCommand("cmd ping", 13));
 }
 
 // ---- signed results: r2 (2026-10-08, ar-11) ------------------------------------------
@@ -2180,7 +2180,7 @@ TEST(Denylist, TheAutomaticUpdateSettingsTravelAndSoDoesTheUpdateItself) {
 static const char* const known_commands[] = {
   "ver", "get name", "get autoreply", "region", "neighbors", "get radio", "get repeat",
   "get flood.max", "get flood.max.unscoped", "get txdelay", "get direct.txdelay", "get rxdelay",
-  "get af", "get cad", "get int.thresh", "get mqtt.status", "get mqtt.cmd", "get mqtt.iata",
+  "get af", "get cad", "get int.thresh", "get mqtt.status", "get cmd", "get mqtt.iata",
   "get mqtt.interval", "board", "memory", "clock", "ota check", "get stats", "get ota",
   "set autoreply on", "set autoreply.mode flood", "set autoreply.hops 3", "set autoreply.delay 60",
   "set autoreply.direct.flood on", "set autoreply.private on", "set autoreply.region se-jkp",
@@ -2195,9 +2195,9 @@ static const char* const known_commands[] = {
   "set mqtt2.username mcoar", "set mqtt2.password x", "set mqtt3.preset custom",
   "set name Foo", "reboot", "clkreboot", "clear stats", "neighbor.remove 4AC61A7F",
   "powersaving on", "gps on", "set ota.auto on", "set ota.check.hours 12",
-  "mqtt.cmd ping", "set autoreply.legacy off", "ota update",
+  "cmd ping", "set autoreply.legacy off", "ota update",
   // the denied groups
-  "set prv.key 00", "set public.key 00", "set mqtt.cmd off", "set mqtt.cmd.slot 2", "get mqtt.cmd.pubkey",
+  "set prv.key 00", "set public.key 00", "set cmd off", "set cmd.slot 2", "get cmd.pubkey",
   "set wifi.pwd x", "get wifi.ssid", "password x", "get guest.password", "set alert.psk 00",
   "get bridge.secret", "get snmp.community", "get mqtt.owner", "set owner.info x", "get tls.x",
   "get prv.key", "get mqtt1.password", "get mqtt6.token", "erase", "start webconfig",
@@ -2384,7 +2384,7 @@ TEST(MeshRoad, TheCounterIsSharedAcrossTheRoads) {
 TEST(MeshRoad, TheRepairAllowanceIsTheMeshRoadsAlone) {
   const char* repair[] = {
     "set wifi.ssid HomeNet", "set wifi.ssid My Net 5G", "set wifi.pwd hunter2",
-    "set mqtt.cmd on", "set mqtt.cmd on mqtt-meshcore.louie.se", "reboot",
+    "set cmd on", "set cmd on mqtt-meshcore.louie.se", "reboot",
   };
   for (const char* c : repair) {
     EXPECT_TRUE(mqttCtrlMeshCommandAllowed(c, strlen(c), true)) << c;
@@ -2393,8 +2393,8 @@ TEST(MeshRoad, TheRepairAllowanceIsTheMeshRoadsAlone) {
   // Everything else the deny list holds stays denied on the mesh road too.
   const char* still[] = {
     "set wifi.ssid", "set wifi.pwd", "set wifi.pwdx", "set wifi.ssid.x y", "get wifi.pwd",
-    "get wifi.ssid", "set mqtt.cmd off", "set mqtt.cmd.slot 2", "set mqtt.cmd.pubkey 00",
-    "set mqtt.cmd.mesh on", "set mqtt.cmd onx", "get mqtt.cmd.pubkey", "set prv.key 00",
+    "get wifi.ssid", "set cmd off", "set cmd.slot 2", "set cmd.pubkey 00",
+    "set cmd.mesh on", "set cmd onx", "get cmd.pubkey", "set prv.key 00",
     "get prv.key", "erase", "set password x", "set freq 869.6", "set radio 1", "set lat 1",
     "set role x", "set repeat off", "advert", "time 1900000000", "log",
     "SET WIFI.PWD x", "Set wifi.ssid x", "start ota", "get mqtt1.password",
@@ -2514,9 +2514,9 @@ TEST(Relay, ModesParseAndDescribe) {
 }
 
 TEST(Relay, TheOwnerSwitchesItOverThePlaneAndNothingUnderMqttCmdOpens) {
-  // `mqtt.relay` is outside `mqtt.cmd`, so the deny list admits it on both roads, with or
+  // `relay` is outside `cmd`, so the deny list admits it on both roads, with or
   // without auto-reply, and needs no exception.
-  for (const char* c : { "set mqtt.relay own", "set mqtt.relay off", "get mqtt.relay" }) {
+  for (const char* c : { "set relay own", "set relay off", "get relay" }) {
     EXPECT_FALSE(mqttCtrlCommandDenied(c, strlen(c))) << c;
     EXPECT_TRUE(mqttCtrlCommandAllowed(c, strlen(c), true)) << c;
     EXPECT_TRUE(mqttCtrlCommandAllowed(c, strlen(c), false)) << c;
@@ -2524,9 +2524,9 @@ TEST(Relay, TheOwnerSwitchesItOverThePlaneAndNothingUnderMqttCmdOpens) {
     EXPECT_FALSE(mqttCtrlIsTransmitCommand(c, strlen(c))) << c;
   }
   // The plane's own settings stay where they were, the name the research first gave it too.
-  for (const char* c : { "set mqtt.cmd off", "set mqtt.cmd.relay own", "set mqtt.cmd.relay off",
-                         "set mqtt.cmd.mesh on", "set mqtt.cmd.slot 2", "set mqtt.cmd.pubkey 00",
-                         "get mqtt.cmd.pubkey" }) {
+  for (const char* c : { "set cmd off", "set cmd.relay own", "set cmd.relay off",
+                         "set cmd.mesh on", "set cmd.slot 2", "set cmd.pubkey 00",
+                         "get cmd.pubkey" }) {
     EXPECT_TRUE(mqttCtrlCommandDenied(c, strlen(c))) << c;
     EXPECT_FALSE(mqttCtrlCommandAllowed(c, strlen(c), true)) << c;
   }
@@ -2954,8 +2954,8 @@ TEST(MeshOnly, ACommandIsAcceptedWithNoUplink) {
 
 TEST(MeshOnly, TheUplinksRepairsAndItsUpdateAreRefused) {
   const char* refused[] = {
-    "set wifi.ssid HomeNet", "set wifi.pwd hunter2", "set mqtt.cmd on",
-    "set mqtt.cmd on mqtt-meshcore.louie.se", "ota update", "ota check", "mqtt.cmd ping",
+    "set wifi.ssid HomeNet", "set wifi.pwd hunter2", "set cmd on",
+    "set cmd on mqtt-meshcore.louie.se", "ota update", "ota check", "cmd ping",
     "OTA UPDATE", "set mqtt1.preset meshat.se", "set mqtt2.server mqtt.example.org", "SET MQTT6.PORT 1883",
   };
   const uint32_t now = 1795000000 - 60;

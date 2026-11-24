@@ -48,7 +48,7 @@ a permission; it is the starting position everyone already has.
 | What it is | The repeater's own keypair, the one it has always had | A keypair **you** generate, for commanding your fleet |
 | What it does | Mesh addressing, encryption, direct messages | Signs remote commands |
 | Where the **private** half lives | On the node | **With you. Never on a node, never at the broker.** |
-| Where the **public** half lives | Advertised on the mesh | On each node you provision, as `mqtt.cmd.pubkey` |
+| Where the **public** half lives | Advertised on the mesh | On each node you provision, as `cmd.pubkey` |
 
 **A node never holds a secret that can command anything — not even itself.** It stores 64 hex
 characters: the *public* half of your signing key. That is enough to check a signature and
@@ -63,15 +63,15 @@ authorises commands.
 ### Turning it on
 
 ```
-set mqtt.cmd.pubkey <64 hex characters>   # serial, or a remote admin's first key — the PUBLIC half of your signing key
-set mqtt.cmd on
-set mqtt.cmd.slot <n>                 # the MQTT slot to listen and answer on; reboot to apply
-get mqtt.cmd                          # state, and the highest command counter seen
+set cmd.pubkey <64 hex characters>   # serial, or a remote admin's first key — the PUBLIC half of your signing key
+set cmd on
+set cmd.slot <n>                 # the MQTT slot to listen and answer on; reboot to apply
+get cmd                          # state, and the highest command counter seen
 ```
 
-All three are needed, and `mqtt.cmd.slot` must name a slot on a broker that allows
-subscriptions — the stats presets do not. See `docs/mqtt-control.md`. `mqtt.cmd on` with no
-command key refuses everything. **`set mqtt.cmd.pubkey` cannot be done over the plane**, and a
+All three are needed, and `cmd.slot` must name a slot on a broker that allows
+subscriptions — the stats presets do not. See `docs/mqtt-control.md`. `cmd on` with no
+command key refuses everything. **`set cmd.pubkey` cannot be done over the plane**, and a
 remote admin may only give a keyless node its first key, with a non-default admin password of
 8 characters or more; replacing a key is serial or the local console only, so a leaked admin
 password cannot repoint a node that already has an owner's key.
@@ -79,7 +79,7 @@ password cannot repoint a node that already has an owner's key.
 This is not `mqtt.owner`. That one is the Observer firmware's ownership claim sent to the stats
 services, and stays yours; the command key is shared by the whole fleet you command.
 
-To turn it off again: `set mqtt.cmd off`.
+To turn it off again: `set cmd off`.
 
 ### What a node checks before it obeys
 
@@ -99,7 +99,7 @@ In this order, and it stops at the first failure:
    There is no general `set`, no `erase`, and no way to change the command key
 
 Two things are deliberately out of reach of the remote path no matter what it carries:
-`set prv.key`, `erase` and `set mqtt.cmd.pubkey`, which require a locally-privileged caller (or,
+`set prv.key`, `erase` and `set cmd.pubkey`, which require a locally-privileged caller (or,
 for a keyless node's first key only, a remote admin); and a broadcast that would make every node
 transmit at once. Nor does a remote admin start what opens the board to anyone in Wi-Fi or BLE
 range with no password of its own: `start ota` on ESP32 (the OTA hotspot and uploader) and the
