@@ -41,14 +41,14 @@ struct MqttCommandRunner {
  *
  * A login to the broker this rides on costs nothing to make, and any login may
  * publish a command to any node. Nothing here trusts the transport: a command is
- * executed only if it carries an Ed25519 signature by the key set with 'set mqtt.cmd.pubkey' over the
+ * executed only if it carries an Ed25519 signature by the key set with 'set cmd.pubkey' over the
  * topic and body together, its counter has never been seen before, it has not
  * expired, it is on the allowlist, and the rate limiter still has budget.
  *
  * The decisions are all in src/helpers/MqttControlLogic.h, where they are attacked
  * on the host (test/test_mqtt_control). This class is the state, the key and the I/O.
  *
- * Off unless 'set mqtt.cmd on', deaf until 'set mqtt.cmd.slot <n>' names the MQTT slot
+ * Off unless 'set cmd on', deaf until 'set cmd.slot <n>' names the MQTT slot
  * to listen on (read at boot), and inert regardless without a key.
  */
 // What drain() reports back so the caller can publish a result that names the
@@ -117,7 +117,7 @@ public:
   bool isEnabled() const { return _enabled; }
   uint32_t counter() const { return _counter; }
   uint8_t slot() const { return _slot; }
-  // `set mqtt.cmd on` with no slot configured chooses one (MyMesh::autoSetupMqttControl).
+  // `set cmd on` with no slot configured chooses one (MyMesh::autoSetupMqttControl).
   void setSlotAndEnable(uint8_t slot) { _slot = slot; _enabled = true; save(); }
   const char* pubkey() const { return _pubkey; }
   uint8_t keyVia() const { return _key_via; }
@@ -208,7 +208,7 @@ public:
   MqttCtrlResult meshCommand(const Mcc3Command& cmd, uint32_t now, bool open,
                              MqttCommandRunner* runner, char* reply, bool* answer);
 
-  // 'slot_count' bounds 'set mqtt.cmd.slot'; see mqttCtrlParseSlot. 'caller' says who may
+  // 'slot_count' bounds 'set cmd.slot'; see mqttCtrlParseSlot. 'caller' says who may
   // touch the key (mqttCtrlKeySetRefusal); 'password' and 'guest_password' are the node's,
   // which a remote admin's first install is judged by.
   bool handleCommand(MqttCtrlKeyCaller caller, const char* password, const char* guest_password,

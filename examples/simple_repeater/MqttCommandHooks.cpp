@@ -1,5 +1,5 @@
 // The command plane's side of the repeater: its topics on the bridge, the queue a
-// signed command waits in, the result it publishes, `mqtt.cmd ping`, and the mesh road.
+// signed command waits in, the result it publishes, `cmd ping`, and the mesh road.
 // Compiled only with WITH_MQTT_COMMAND; without the Observer bridge only the mesh road
 // is (mesh only). The relay is in MqttRelayHooks.cpp. MyMesh reaches it through Fork.
 #include "MyMesh.h"
@@ -12,7 +12,7 @@
 
 #ifdef WITH_MQTT_BRIDGE
 
-// `set mqtt.cmd on` with no slot configured, the one line a fresh node needs
+// `set cmd on` with no slot configured, the one line a fresh node needs
 // (operator decision 2026-10-08): take a free slot (mqttCtrlPickSlot says which:
 // slot 2 first on a board that runs two at once, else 3 up), give it what
 // mqttCtrlPlanSlot says -- the `mccontrol` preset, or with a host a custom slot on a
@@ -31,7 +31,7 @@ void Fork::autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply) {
   const bool two_slot_board = MQTTBridge::getMaxActiveSlots() <= 2;
   int idx = mqttCtrlSetupSlot(_mqtt_control.slot(), presets, RUNTIME_MQTT_SLOTS, two_slot_board);
   if (idx < 0) {
-    strcpy(reply, "Err - no free slot 3-6: set mqttN.preset none on one, or set mqtt.cmd.slot <n>");
+    strcpy(reply, "Err - no free slot 3-6: set mqttN.preset none on one, or set cmd.slot <n>");
     return;
   }
   // A slot that already runs something (analyzer-eu in slot 2, or the plane's own) frees
@@ -39,7 +39,7 @@ void Fork::autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply) {
   const bool was_analyzer = strcasecmp(presets[idx], MQTTCTRL_SLOT2_DEFAULT) == 0;
   if (mqttCtrlPresetFree(presets[idx]) && _mesh.bridge != NULL && !_mesh.bridge->hasRoomForAnotherSlot()) {
     sprintf(reply, "Err - this board runs %d slots at once and all are taken: turn one off "
-                   "(set mqtt2.preset none) and send 'set mqtt.cmd on' again",
+                   "(set mqtt2.preset none) and send 'set cmd on' again",
             MQTTBridge::getMaxActiveSlots());
     return;
   }
@@ -164,7 +164,7 @@ void Fork::loopAlive() {
   if (n > 0) _mesh.bridge->publishControlRetained(_alive_topic, payload, n, MQTTCTRL_RESULT_QOS);
 }
 
-// `mqtt.cmd ping`: the broker echoes a ping on our own /ping as a pong on our own /cmd,
+// `cmd ping`: the broker echoes a ping on our own /ping as a pong on our own /cmd,
 // so a pong proves the slot is up, the publish went through, the /cmd subscription
 // holds and the broker is judging this node's topics -- the whole plane, on the spot.
 // Nothing waits here: the ping is armed and sent, and loopMqttPing settles it when the
@@ -186,7 +186,7 @@ void Fork::pingMqttControl(char* reply) {
   mesh::Utils::toHex(nonce, raw, sizeof(raw));
   char payload[sizeof(MQTTCTRL_PING_PREFIX) + MQTTCTRL_PING_NONCE_LEN];
   if (!mqttCtrlArmPing(&_ping, nonce, payload, sizeof(payload), millis())) {
-    strcpy(reply, "Err - a ping is already waiting: read 'get mqtt.cmd'");
+    strcpy(reply, "Err - a ping is already waiting: read 'get cmd'");
     return;
   }
   if (!_mesh.bridge->publishControlResult(_ctrl_ping_topic, payload, strlen(payload), MQTTCTRL_RESULT_QOS)) {
@@ -195,7 +195,7 @@ void Fork::pingMqttControl(char* reply) {
     return;
   }
   _ping_started = true;
-  strcpy(reply, "OK - ping sent, read 'get mqtt.cmd' for the pong");
+  strcpy(reply, "OK - ping sent, read 'get cmd' for the pong");
 }
 
 // Settles a ping in flight. A ping that came over the plane has its result held back
@@ -213,7 +213,7 @@ void Fork::loopMqttPing() {
 
 #endif
 
-// `get mqtt.cmd` on one line: on/off and the counter as before, then the slot's
+// `get cmd` on one line: on/off and the counter as before, then the slot's
 // connection, whether the broker acknowledged the /cmd subscription, how long ago
 // the key last vouched for a command, and how many arrived that it did not.
 void Fork::describeMqttControl(char* reply) {
@@ -286,8 +286,8 @@ void Fork::loopMqttControl() {
     _mqtt_control.discard();
     _ctrl_unverified++;
     _ctrl_last_unverified = ready;
-    debugLine("mqtt: a command discarded, no usable mqtt.cmd.pubkey");
-    MESH_DEBUG_PRINTLN("MqttControl: no usable mqtt.cmd.pubkey, command discarded");
+    debugLine("mqtt: a command discarded, no usable cmd.pubkey");
+    MESH_DEBUG_PRINTLN("MqttControl: no usable cmd.pubkey, command discarded");
     return;
   }
 
@@ -296,7 +296,7 @@ void Fork::loopMqttControl() {
     _mqtt_control.discard();
     _ctrl_unverified++;
     _ctrl_last_unverified = MQTTCTRL_ERR_NO_OWNER_KEY;
-    MESH_DEBUG_PRINTLN("MqttControl: mqtt.cmd.pubkey unreadable, command discarded");
+    MESH_DEBUG_PRINTLN("MqttControl: cmd.pubkey unreadable, command discarded");
     return;
   }
 
@@ -345,7 +345,7 @@ void Fork::loopMqttControl() {
 // has no region, in which case there is no control plane to answer on.
 // The v2 key (TODO 17a): X25519 of this node's identity and the command key, through
 // HKDF with this node's command topic. Derived when the key it was made from is not the
-// one now set -- at boot, and after `set mqtt.cmd.pubkey` -- and never otherwise: every
+// one now set -- at boot, and after `set cmd.pubkey` -- and never otherwise: every
 // v2 message after that costs symmetric work only.
 void Fork::refreshMqttControlV2Key() {
   const char* owner_hex = _mqtt_control.pubkey();
@@ -414,7 +414,7 @@ void Fork::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome
 }
 
 void Fork::ControlLink::onControlMessage(const char* topic, const uint8_t* payload, size_t len) {
-  // A pong is the broker's answer to `mqtt.cmd ping`, never a command: it is taken
+  // A pong is the broker's answer to `cmd ping`, never a command: it is taken
   // here, before any parsing, and goes no further whether it matches or not.
   if (mqttCtrlIsPong(payload, len)) {
     mqttCtrlTakePong(&fork._ping, payload, len, millis());
@@ -537,7 +537,7 @@ void Fork::ControlLink::runCommand(uint32_t sender_timestamp, char* command, cha
 // The command plane's own verbs, and the guard that keeps every other command off the
 // slot the plane rides.
 bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* command, char* reply) {
-  if (strcmp(command, "get mqtt.cmd") == 0) {
+  if (strcmp(command, "get cmd") == 0) {
     describeMqttControl(reply);
     return true;
   }
@@ -550,17 +550,17 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
     formatSensors(reply);
     return true;
   }
-  if (strcmp(command, "get mqtt.cmd.debug") == 0) {
+  if (strcmp(command, "get cmd.debug") == 0) {
     sprintf(reply, "> %s", _ctrl_debug ? "on" : "off");
     return true;
   }
   // The serial console's alone: the lines go nowhere else, and it lasts until the next boot.
-  if (memcmp(command, "set mqtt.cmd.debug ", 19) == 0) {
-    const bool on = strcmp(&command[19], "on") == 0;
+  if (memcmp(command, "set cmd.debug ", 14) == 0) {
+    const bool on = strcmp(&command[14], "on") == 0;
     if (sender_timestamp != 0 || mesh_admin) {
       strcpy(reply, "Err - the serial console only");
-    } else if (!on && strcmp(&command[19], "off") != 0) {
-      strcpy(reply, "Err - use: set mqtt.cmd.debug on|off");
+    } else if (!on && strcmp(&command[14], "off") != 0) {
+      strcpy(reply, "Err - use: set cmd.debug on|off");
     } else {
       _ctrl_debug = on;
       strcpy(reply, "OK");
@@ -571,7 +571,7 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
   MqttCtrlSlotPlan plan;
   const MqttCtrlSetup setup = mqttCtrlPlanSlot(command, &plan);
   if (setup == MQTTCTRL_SETUP_BAD_HOST) {
-    sprintf(reply, "Err - use: set mqtt.cmd on [<broker host name, up to %d characters>]",
+    sprintf(reply, "Err - use: set cmd on [<broker host name, up to %d characters>]",
             MQTTCTRL_HOST_MAX);
     return true;
   }
@@ -579,32 +579,32 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
     autoSetupMqttControl(plan, reply);
     return true;
   }
-  if (strcmp(command, "mqtt.cmd ping") == 0) {
+  if (strcmp(command, "cmd ping") == 0) {
     pingMqttControl(reply);
     return true;
   }
-  if (strcmp(command, "get mqtt.cmd.mesh") == 0) {
+  if (strcmp(command, "get cmd.mesh") == 0) {
     mqttCtrlMeshDescribe(_mqtt_control.meshMode(), _mesh_down_since, millis(), reply, MQTTCTRL_MAX_REPLY);
     return true;
   }
-  if (memcmp(command, "set mqtt.cmd.mesh ", 18) == 0) {
+  if (memcmp(command, "set cmd.mesh ", 13) == 0) {
     uint8_t mode;
-    if (!mqttCtrlMeshParseMode(&command[18], &mode)) {
-      strcpy(reply, "Err - use: set mqtt.cmd.mesh off|on|auto");
+    if (!mqttCtrlMeshParseMode(&command[13], &mode)) {
+      strcpy(reply, "Err - use: set cmd.mesh off|on|auto");
       return true;
     }
     _mqtt_control.setMeshMode(mode);
     strcpy(reply, "OK");
     return true;
   }
-  if (strcmp(command, "get mqtt.relay") == 0) {
+  if (strcmp(command, "get relay") == 0) {
     describeRelay(reply);
     return true;
   }
-  if (memcmp(command, "set mqtt.relay ", 15) == 0) {
+  if (memcmp(command, "set relay ", 10) == 0) {
     uint8_t mode;
-    if (!mqttCtrlRelayParseMode(&command[15], &mode)) {
-      strcpy(reply, "Err - use: set mqtt.relay off|own");
+    if (!mqttCtrlRelayParseMode(&command[10], &mode)) {
+      strcpy(reply, "Err - use: set relay off|own");
       return true;
     }
     _mqtt_control.setRelayMode(mode);
@@ -612,7 +612,7 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
     return true;
   }
   if (mqttCtrlTouchesSlot(command, _mqtt_control.slot())) {
-    sprintf(reply, "Err - slot %d is the command plane's: move it with set mqtt.cmd.slot first (not over the plane)",
+    sprintf(reply, "Err - slot %d is the command plane's: move it with set cmd.slot first (not over the plane)",
             _mqtt_control.slot());
     return true;
   }
@@ -635,7 +635,7 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
   }
   if (!mqttCtrlMeshIsRequest(data, len)) return false;
   if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) {
-    debugLine("mesh: a request (old scheme) heard, not listening: mqtt.cmd %s, mesh %s",
+    debugLine("mesh: a request (old scheme) heard, not listening: cmd %s, mesh %s",
               _mqtt_control.isEnabled() ? "on" : "off", mqttCtrlMeshModeName(_mqtt_control.meshMode()));
     return true;
   }
@@ -674,7 +674,7 @@ bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh
 void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                              const uint8_t* data, size_t len) {
   if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) {
-    debugLine("mesh: a request heard, not listening: mqtt.cmd %s, mesh %s",
+    debugLine("mesh: a request heard, not listening: cmd %s, mesh %s",
               _mqtt_control.isEnabled() ? "on" : "off", mqttCtrlMeshModeName(_mqtt_control.meshMode()));
     return;
   }
@@ -712,7 +712,7 @@ void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
 
 // The mcc3 keys (IATA-2): X25519 of this node's identity and the command key, through HKDF
 // with this node's key. Derived when the key they were made from is not the one now set --
-// at boot, after `set mqtt.cmd.pubkey` -- and never otherwise.
+// at boot, after `set cmd.pubkey` -- and never otherwise.
 void Fork::refreshMcc3Keys() {
   const char* owner_hex = _mqtt_control.pubkey();
   if (strcmp(owner_hex, _mqtt_control.mcc3KeyFor()) == 0) return;

@@ -88,7 +88,7 @@ get mqtt3.preset
 get mqtt4.preset
 get mqtt5.preset
 get mqtt6.preset
-get mqtt.cmd.slot
+get cmd.slot
 get mqtt.presets
 ```
 
@@ -97,7 +97,7 @@ get mqtt.presets
 - `get mqttN.preset` -> `> <preset>` (`none`, `analyzer-us`, `analyzer-eu`, `meshat.se`,
   `mccontrol`, `custom`, ...). **This is what each slot holds.** A board without PSRAM runs
   slots 1-3 only; `mqtt4`-`mqtt6` there show what is stored, which does nothing.
-- `get mqtt.cmd.slot` -> `> 0 (none)` or `> <N>`. If it is `> <N>`, also run
+- `get cmd.slot` -> `> 0 (none)` or `> <N>`. If it is `> <N>`, also run
   `get mqtt<N>.server` and `get mqtt<N>.username` and write down the answers.
 - `get mqtt.presets` lists the preset **names this build knows**, not what the slots hold. It
   answers in pages, without the `> `: `analyzer-us,analyzer-eu,nz-analyzer,...,<name>... next:<n>`,
@@ -234,7 +234,7 @@ A token-login preset needs nothing else. If the answer is
 
 **Slot 2:** the command plane's slot rule (step 8) uses whatever slot 2 holds, so set slot 2
 to the value you read, also if it is unchanged. **Skip this if step 1 showed
-`get mqtt.cmd.slot` -> `> 2`**: slot 2 is then the plane's, the set is refused with
+`get cmd.slot` -> `> 2`**: slot 2 is then the plane's, the set is refused with
 `Err - slot 2 is the command plane's: ...`, and step 8b handles slot 2.
 
 ```
@@ -247,7 +247,7 @@ What happens to slot 2 in step 8:
 
 - **Board without PSRAM** (runs two slots at once). Slot 1 is the observer's, slot 2 becomes
   the command plane's when it holds `none` or `analyzer-eu`. Any other preset there is a
-  collector the owner chose. It is left alone, and `set mqtt.cmd on` is refused (see step 8)
+  collector the owner chose. It is left alone, and `set cmd on` is refused (see step 8)
   until it is turned off with `set mqtt2.preset none`.
 - **Board with PSRAM.** Slot 2 is never taken. The plane goes to the first free slot of 3-6.
 
@@ -328,12 +328,12 @@ command plane rather than on site: `region put <region>`, `region save`,
 ### 8a. The key
 
 ```
-get mqtt.cmd.pubkey                 -> > <64 hex> | > (not set)
-set mqtt.cmd.pubkey <CMD_PUBKEY>    -> OK
-get mqtt.cmd.pubkey                 -> > <CMD_PUBKEY>
+get cmd.pubkey                 -> > <64 hex> | > (not set)
+set cmd.pubkey <CMD_PUBKEY>    -> OK
+get cmd.pubkey                 -> > <CMD_PUBKEY>
 ```
 
-The **public** key only. `Err - use: set mqtt.cmd.pubkey <64 hex characters, the PUBLIC key>`
+The **public** key only. `Err - use: set cmd.pubkey <64 hex characters, the PUBLIC key>`
 means a typo or the wrong length.
 
 ### 8b. The slot
@@ -341,17 +341,17 @@ means a typo or the wrong length.
 Every node goes through the same four steps, so the plane always ends on the slot the
 firmware's rule picks.
 
-**1. Release the old slot, if any.** Read `get mqtt.cmd.slot` (step 1 noted it).
+**1. Release the old slot, if any.** Read `get cmd.slot` (step 1 noted it).
 
 ```
-get mqtt.cmd.slot              -> > 0 (none) | > <N>
-set mqtt.cmd.slot 0            -> OK - reboot to apply
-get mqtt.cmd.slot              -> > 0 (none)
+get cmd.slot              -> > 0 (none) | > <N>
+set cmd.slot 0            -> OK - reboot to apply
+get cmd.slot              -> > 0 (none)
 ```
 
 **2. Only if it was `<N>` (not 0):** turn off the old slot. This order is required: while the
 plane holds slot N, `set mqtt<N>.preset none` is refused with
-`Err - slot <N> is the command plane's: move it with set mqtt.cmd.slot first (not over the plane)`.
+`Err - slot <N> is the command plane's: move it with set cmd.slot first (not over the plane)`.
 
 ```
 get mqtt<N>.preset             -> > custom | > mccontrol
@@ -362,13 +362,13 @@ get mqtt<N>.preset             -> > none
 This removes a plane slot an older release set up by hand (`custom`), and it frees a
 `mccontrol` slot that an older release put on slot 3 or above, so step 3 picks again.
 
-**3. Turn the plane on.** With the slot at 0, `set mqtt.cmd on` chooses the slot, gives it the
+**3. Turn the plane on.** With the slot at 0, `set cmd on` chooses the slot, gives it the
 built-in `mccontrol` preset (`mqtts://mqtt-meshcore.louie.se:8883`, token login, packets on), and
 enables the plane:
 
 ```
-get mqtt.cmd                   -> > <on|off>, counter <n>, no slot
-set mqtt.cmd on
+get cmd                   -> > <on|off>, counter <n>, no slot
+set cmd on
 ```
 
 The reply depends on the board and on slot 2:
@@ -377,19 +377,19 @@ The reply depends on the board and on slot 2:
 |---|---|---|
 | no PSRAM | `analyzer-eu` | `OK - slot 2 (was analyzer-eu, now off), mccontrol (mqtts://mqtt-meshcore.louie.se:8883), packets on; reboot to apply` |
 | no PSRAM | `none` | `OK - slot 2, mccontrol (mqtts://mqtt-meshcore.louie.se:8883), packets on; reboot to apply` |
-| no PSRAM | another collector | `Err - this board runs 2 slots at once and all are taken: turn one off (set mqtt2.preset none) and send 'set mqtt.cmd on' again` |
+| no PSRAM | another collector | `Err - this board runs 2 slots at once and all are taken: turn one off (set mqtt2.preset none) and send 'set cmd on' again` |
 | PSRAM | anything | `OK - slot 3, mccontrol (mqtts://mqtt-meshcore.louie.se:8883), packets on; reboot to apply` (the first free slot of 3-6) |
-| PSRAM, 3-6 all used | anything | `Err - no free slot 3-6: set mqttN.preset none on one, or set mqtt.cmd.slot <n>` |
+| PSRAM, 3-6 all used | anything | `Err - no free slot 3-6: set mqttN.preset none on one, or set cmd.slot <n>` |
 
 On a refusal, turn off the slot it names (with the owner's agreement if it is their
-collector), read it back, and send `set mqtt.cmd on` again.
+collector), read it back, and send `set cmd on` again.
 
 **4. Read it back.**
 
 ```
-get mqtt.cmd.slot              -> > 2   (no PSRAM)  |  > 3   (PSRAM)
+get cmd.slot              -> > 2   (no PSRAM)  |  > 3   (PSRAM)
 get mqtt<slot>.preset          -> > mccontrol
-get mqtt.cmd                   -> > on, counter <n>, slot <slot> ...
+get cmd                   -> > on, counter <n>, slot <slot> ...
 ```
 
 Only `on` and the slot number count here. The rest of the line describes the MQTT session
@@ -447,8 +447,8 @@ again in 30 s. `(disc)` or `(fail)`: see the symptom table. A board with PSRAM m
 ### The command plane, end to end
 
 ```
-mqtt.cmd ping                  -> OK - ping sent, read 'get mqtt.cmd' for the pong
-get mqtt.cmd                   -> > on, counter <n>, slot <slot> connected, /cmd subscribed, last command none yet, ping pong in <ms> ms
+cmd ping                  -> OK - ping sent, read 'get cmd' for the pong
+get cmd                   -> > on, counter <n>, slot <slot> connected, /cmd subscribed, last command none yet, ping pong in <ms> ms
 ```
 
 The four fields to check:
@@ -458,13 +458,13 @@ The four fields to check:
 | `slot <slot> ...` | `connected` | `not connected`: WiFi, clock, the slot (symptom table) |
 | `/cmd ...` | `subscribed` | `not subscribed`: the broker refused or has not acknowledged the subscription |
 | `last command ...` | `none yet` until a signed command arrives | |
-| `unverified <n> (last ...)` | absent | lou-18: commands arrived but were refused unanswered; `sig-invalid`: `get mqtt.cmd.pubkey` is not the sender's key; `no-owner-key`: set it |
+| `unverified <n> (last ...)` | absent | lou-18: commands arrived but were refused unanswered; `sig-invalid`: `get cmd.pubkey` is not the sender's key; `no-owner-key`: set it |
 | `ping ...` | `pong in <ms> ms` | `waiting`: read again in a few seconds; `no pong in 10 s`: /cmd subscription, or the broker does not answer pings; `publish refused` |
 
-If the ping cannot go out, `mqtt.cmd ping` says so at once:
+If the ping cannot go out, `cmd ping` says so at once:
 `Err - slot <slot> not connected`, `Err - publish refused`,
-`Err - the command plane is off: set mqtt.cmd on`, or
-`Err - a ping is already waiting: read 'get mqtt.cmd'`.
+`Err - the command plane is off: set cmd on`, or
+`Err - a ping is already waiting: read 'get cmd'`.
 
 The ping proves the slot is connected, publishing and subscribed, and that the broker judges
 this node's topics. The node keeps repeating while it waits.
@@ -477,7 +477,7 @@ get mqtt.stats
 
 -> `> Free=<n> Max=<n> q:<n>/<n> Outbox=<n> drops=<n>/<n> | s1=<ok>/<err> jwt s<slot>=<ok>/<err> jwt`
 
-Wait one minute, send `mqtt.cmd ping` once more, then:
+Wait one minute, send `cmd ping` once more, then:
 
 ```
 get mqtt.stats
@@ -533,14 +533,14 @@ The `ver` reply must not carry `(unsigned)` or `BAD SIGNATURE`. A signed answer 
 | `set autoreply on` says `OK - on, but no channel yet: set autoreply.region <name>` | `get mqtt.iata` is `> <IATA>`? `get autoreply.legacy` is `> on`? Fix those rather than setting a region |
 | no reply to `test` | `get autoreply` starts `> on`; the phone's channel is `#test-<iata>`, lower case; the 5-min cooldown per sender; wait 120 s |
 | `Error: preset '<preset>' is already assigned to slot <N>` | `set mqtt<N>.preset none`, then set slot 1 again |
-| `Err - slot <N> is the command plane's: ...` | intended. Move the plane first: `set mqtt.cmd.slot 0` (serial only) |
-| `set mqtt.cmd on` took slot 2 and `analyzer-eu` is gone | intended on a board without PSRAM: slot 2 is the plane's |
-| `Err - this board runs 2 slots at once and all are taken: ...` | slot 2 holds a collector the owner chose; `set mqtt2.preset none` with their agreement, then `set mqtt.cmd on` |
-| `Err - no free slot 3-6: ...` | `set mqttN.preset none` on one of 3-6, then `set mqtt.cmd on` |
+| `Err - slot <N> is the command plane's: ...` | intended. Move the plane first: `set cmd.slot 0` (serial only) |
+| `set cmd on` took slot 2 and `analyzer-eu` is gone | intended on a board without PSRAM: slot 2 is the plane's |
+| `Err - this board runs 2 slots at once and all are taken: ...` | slot 2 holds a collector the owner chose; `set mqtt2.preset none` with their agreement, then `set cmd on` |
+| `Err - no free slot 3-6: ...` | `set mqttN.preset none` on one of 3-6, then `set cmd on` |
 | `get mqtt.status` shows `(wait)` | WiFi or clock not ready: `get wifi.status`, `get mqtt.ntp`; read again in 30 s |
 | a slot `(disc)`/`(fail)`, or missing from `get mqtt.stats`, or its ok not climbing | `get wifi.status`; `get mqtt.ntp`; `get mqtt<N>.preset`; a `set mqttN.preset` reply with `(won't connect: 2-slot limit on this hardware)` means too many slots are on |
 | `get wifi.status` shows `no_ssid` / `connect_failed` | `set wifi.ssid` / `set wifi.pwd` again, `reboot` |
-| `get mqtt.cmd` shows `no slot` | step 8 not done, or `set mqtt.cmd.slot 0` was the last command: do 8b step 3 |
-| `get mqtt.cmd` shows `not connected` | the plane's slot in `get mqtt.status`; WiFi; clock |
-| `get mqtt.cmd` shows `not subscribed` or `ping no pong in 10 s` | read again after a minute; if it stays, the broker side needs a look; the node is still configured right |
-| mccontrol gets no answer later | `mqtt.cmd ping` on the node first; then check `get mqtt.cmd.pubkey` is your key |
+| `get cmd` shows `no slot` | step 8 not done, or `set cmd.slot 0` was the last command: do 8b step 3 |
+| `get cmd` shows `not connected` | the plane's slot in `get mqtt.status`; WiFi; clock |
+| `get cmd` shows `not subscribed` or `ping no pong in 10 s` | read again after a minute; if it stays, the broker side needs a look; the node is still configured right |
+| mccontrol gets no answer later | `cmd ping` on the node first; then check `get cmd.pubkey` is your key |

@@ -65,7 +65,7 @@ static inline bool forkOpensBoardToRange(const char* command, bool network_up, b
 // The serial console's line editor, one received byte at a time. A terminal sends what its
 // keys make: 0x08 or 0x7F for the key that erases, ESC [ ... for the arrow keys. Stored as
 // they came, those bytes stayed in the command out of sight -- the terminal had already
-// drawn their effect -- so `set mqtt.cmd on` typed with one correction read as an unknown
+// drawn their effect -- so `set cmd on` typed with one correction read as an unknown
 // config, and a line after an arrow key as an unknown command (bench, LOUTEST 2026-11-16).
 // Erasing takes back the last character, a UTF-8 one whole; an escape sequence and every
 // other control byte but the line's own '\r' is dropped. `esc` is the caller's, zero to

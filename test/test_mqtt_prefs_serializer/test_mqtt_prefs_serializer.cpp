@@ -142,7 +142,7 @@ TEST(MQTTPrefsSerializer, RoundTripsEveryGroupAndNumericSlotKeys) {
   EXPECT_EQ(1, loaded.network_setup_complete);
 }
 
-// `set mqtt.cmd on [<host>]` writes the command slot into these prefs and saves them; what
+// `set cmd on [<host>]` writes the command slot into these prefs and saves them; what
 // it wrote is what the next boot reads back (lou-18 saved the node prefs instead, and the
 // host form never survived a reboot).
 static MQTTPrefs roundTripCommandSlot(const char* command, MQTTPrefs source, int idx) {
@@ -167,14 +167,14 @@ static MQTTPrefs roundTripCommandSlot(const char* command, MQTTPrefs source, int
 TEST(MQTTPrefsSerializer, TheCommandSlotSurvivesTheReboot) {
   MQTTPrefs source = defaults();
   strcpy(source.mqtt_slot_preset[2], "mccontrol");
-  MQTTPrefs loaded = roundTripCommandSlot("set mqtt.cmd on mqtt.meshcore-vgr.se", source, 2);
+  MQTTPrefs loaded = roundTripCommandSlot("set cmd on mqtt.meshcore-vgr.se", source, 2);
   EXPECT_STREQ("custom", loaded.mqtt_slot_preset[2]);
   EXPECT_STREQ("mqtts://mqtt.meshcore-vgr.se:8883", loaded.mqtt_slot_host[2]);
   EXPECT_STREQ("mqtt.meshcore-vgr.se", loaded.mqtt_slot_audience[2]);
   EXPECT_EQ(MQTTPacketFilter::kAllPacketTypes, loaded.mqtt_slot_packet_filter[2]);
 
   // and bare, the same slot goes back to the preset, with nothing of the custom one kept
-  loaded = roundTripCommandSlot("set mqtt.cmd on", loaded, 2);
+  loaded = roundTripCommandSlot("set cmd on", loaded, 2);
   EXPECT_STREQ("mccontrol", loaded.mqtt_slot_preset[2]);
   EXPECT_STREQ("", loaded.mqtt_slot_host[2]);
   EXPECT_STREQ("", loaded.mqtt_slot_audience[2]);

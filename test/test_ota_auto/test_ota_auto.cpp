@@ -121,7 +121,7 @@ TEST(OtaProof, WhileThePlaneListensOnlyACommandDoes) {
 }
 
 TEST(OtaProof, APlaneThatIsOffOrSlotlessFallsBackToTheBridge) {
-  // An rc image with mqtt.cmd off or no slot, topics or key: no command can come, so
+  // An rc image with cmd off or no slot, topics or key: no command can come, so
   // without the bridge proof every new image would roll back at the next reboot and,
   // with ota.auto on, be pulled again -- the loop this rule exists to break.
   const uint32_t ten = 10UL * 60UL * 1000UL;

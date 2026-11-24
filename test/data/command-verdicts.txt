@@ -14,7 +14,7 @@ allowed|get af
 allowed|get cad
 allowed|get int.thresh
 allowed|get mqtt.status
-allowed|get mqtt.cmd
+allowed|get cmd
 allowed|get mqtt.iata
 allowed|get mqtt.interval
 allowed|board
@@ -74,14 +74,14 @@ allowed|powersaving on
 allowed|gps on
 allowed|set ota.auto on
 allowed|set ota.check.hours 12
-allowed|mqtt.cmd ping
+allowed|cmd ping
 allowed|set autoreply.legacy off
 allowed|ota update
 denied|set prv.key 00
 denied|set public.key 00
-denied|set mqtt.cmd off
-denied|set mqtt.cmd.slot 2
-denied|get mqtt.cmd.pubkey
+denied|set cmd off
+denied|set cmd.slot 2
+denied|get cmd.pubkey
 denied|set wifi.pwd x
 denied|get wifi.ssid
 denied|password x

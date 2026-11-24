@@ -119,7 +119,7 @@ enum MqttCtrlResult {
   // A transmit command addressed to every node in the region at once. Refused on
   // principle rather than on budget -- see mqttCtrlTransmitTopicResult.
   MQTTCTRL_ERR_BROADCAST_TRANSMIT,
-  // A command over the mesh while the mesh road is closed: `mqtt.cmd.mesh auto` and the
+  // A command over the mesh while the mesh road is closed: `cmd.mesh auto` and the
   // broker reachable, or not yet down long enough. Send it over MQTT instead.
   MQTTCTRL_ERR_MESH_CLOSED,
 };
@@ -136,7 +136,7 @@ static inline const char* mqttCtrlResultName(int result) {
   return names[result];
 }
 
-// What `get mqtt.cmd` adds about commands refused before the key vouched for them: a
+// What `get cmd` adds about commands refused before the key vouched for them: a
 // missing or wrong command key, a broken envelope. Those are never answered, since anyone
 // on the broker can send one, so this line is the only place they show; without it a node
 // with the wrong key looked exactly like one that never received anything (bench, LOUTEST
@@ -223,7 +223,7 @@ static inline bool mqttCtrlParseU32(const char* start, size_t len, uint32_t* out
   return true;
 }
 
-// The MQTT slot commands arrive on and results leave by, as 'set mqtt.cmd.slot'
+// The MQTT slot commands arrive on and results leave by, as 'set cmd.slot'
 // takes it: 0 for none, else 1..slot_count. One slot, not all of them, because the
 // stats presets refuse subscriptions -- the control plane rides a broker of its own.
 // 'slot_count' is the board's runtime slot array, not its active cap: the cap counts
@@ -348,7 +348,7 @@ static inline bool mqttCtrlBuildTopic(const char* iata, const char* leaf, const 
   return n > 0 && (size_t)n < out_size && (size_t)n <= MQTTCTRL_MAX_TOPIC;
 }
 
-// Which MQTT slot `set mqtt.cmd on` takes when none is configured (2026-10-08):
+// Which MQTT slot `set cmd on` takes when none is configured (2026-10-08):
 // the first of slots 3..6 whose preset is `none`. `presets` is the per-slot preset
 // name, `slot_count` how many the build has. Returns the 0-based index, or -1 when
 // every candidate is in use -- then the caller says so rather than picks.
@@ -379,7 +379,7 @@ static inline int mqttCtrlPickSlot(const char* const* presets, int slot_count,
   return -1;
 }
 
-// What `set mqtt.cmd on [<host>]` gives the command slot (RB-2, 2026-11-16). Bare, the
+// What `set cmd on [<host>]` gives the command slot (RB-2, 2026-11-16). Bare, the
 // `mccontrol` preset: the shared broker, the default for every region. With a host, a
 // region's own broker as a custom slot -- server `mqtts://<host>:8883`, the host as the
 // login token's audience -- which is what the custom-slot lines of the regional sites
@@ -393,7 +393,7 @@ static inline int mqttCtrlPickSlot(const char* const* presets, int slot_count,
 #define MQTTCTRL_HOST_MAX         50     // "mqtts://" + 50 + ":8883" + NUL is 64
 
 enum MqttCtrlSetup {
-  MQTTCTRL_SETUP_NOT_ON,      // not `set mqtt.cmd on [...]`
+  MQTTCTRL_SETUP_NOT_ON,      // not `set cmd on [...]`
   MQTTCTRL_SETUP_PRESET,      // bare: the mccontrol preset
   MQTTCTRL_SETUP_HOST,        // a region's own broker, as a custom slot
   MQTTCTRL_SETUP_BAD_HOST
@@ -411,10 +411,10 @@ static inline bool mqttCtrlBrokerHostValid(const char* host) {
 }
 
 static inline MqttCtrlSetup mqttCtrlPlanSlot(const char* command, MqttCtrlSlotPlan* plan) {
-  if (command == NULL || plan == NULL || strncmp(command, "set mqtt.cmd on", 15) != 0) {
+  if (command == NULL || plan == NULL || strncmp(command, "set cmd on", 10) != 0) {
     return MQTTCTRL_SETUP_NOT_ON;
   }
-  const char* host = &command[15];
+  const char* host = &command[10];
   if (host[0] != 0 && host[0] != ' ') return MQTTCTRL_SETUP_NOT_ON;
   while (*host == ' ') host++;
   memset(plan, 0, sizeof(*plan));
@@ -430,7 +430,7 @@ static inline MqttCtrlSetup mqttCtrlPlanSlot(const char* command, MqttCtrlSlotPl
   return MQTTCTRL_SETUP_HOST;
 }
 
-// The slot `set mqtt.cmd on [<host>]` writes: the plane's own when it has one -- bare,
+// The slot `set cmd on [<host>]` writes: the plane's own when it has one -- bare,
 // that puts it back on the preset; with a host, that moves it -- else the one
 // mqttCtrlPickSlot picks. -1 when there is none.
 static inline int mqttCtrlSetupSlot(int plane_slot, const char* const* presets, int slot_count,
@@ -454,7 +454,7 @@ static inline void mqttCtrlApplySlotPlan(const MqttCtrlSlotPlan* plan, char* pre
 // `set mqttN.<anything>` for that slot, and `set mqtt.analyzer.us|eu ...`, which write
 // slots 1 and 2 whatever they hold. Each would take the plane off its slot in silence --
 // over the plane itself, a command that cuts the line it arrived on -- so the caller
-// refuses it with the reason. Moving the plane is `set mqtt.cmd.slot`, serial only.
+// refuses it with the reason. Moving the plane is `set cmd.slot`, serial only.
 // Matched on the command with leading spaces dropped and runs of spaces collapsed,
 // since the CLI's own parser reads `set mqtt.analyzer.eu  off` as an off.
 static inline bool mqttCtrlTouchesSlot(const char* command, int cmd_slot) {
@@ -475,7 +475,7 @@ static inline bool mqttCtrlTouchesSlot(const char* command, int cmd_slot) {
   return strncmp(norm, analyzer, len) == 0 && (norm[len] == ' ' || norm[len] == 0);
 }
 
-// ---- `mqtt.cmd ping` (operator 2026-10-10) -------------------------------------------
+// ---- `cmd ping` (operator 2026-10-10) -------------------------------------------
 //
 // Proves the whole plane on the spot: the node publishes `ping|<nonce>` on
 // meshcore/<IATA>/<own key>/ping, and the command broker -- never another client --
@@ -583,7 +583,7 @@ static inline void mqttCtrlPingAnswer(MqttCtrlPingStep step, int slot, uint32_t 
                link != NULL ? link : "?");
       break;
     case MQTTCTRL_PING_OFF:
-      snprintf(out, out_size, "Err - the command plane is off: set mqtt.cmd on");
+      snprintf(out, out_size, "Err - the command plane is off: set cmd on");
       break;
     case MQTTCTRL_PING_NOT_CONNECTED:
       snprintf(out, out_size, "Err - slot %d not connected", slot);
@@ -679,8 +679,8 @@ static inline bool mqttCtrlPrefixWithBoundary(const char* command, size_t len,
 //  1. A command must start with an ADMITTED VERB (`set`, `get`, `region`, ...).
 //     A verb the CLI grows later does not reach the mesh until someone adds it.
 //  2. It must match no DENIED FAMILY. Families use the boundary rule, so
-//     `set mqtt.cmd` denies `set mqtt.cmd`, `set mqtt.cmd.slot 2` and
-//     `set mqtt.cmd.pubkey ...` alike, and `set radio` denies every `radio.*`.
+//     `set cmd` denies `set cmd`, `set cmd.slot 2` and
+//     `set cmd.pubkey ...` alike, and `set radio` denies every `radio.*`.
 //  3. Reads of credentials are denied by family too, and the per-slot broker
 //     credentials (`get mqttN.password`, `.token`, `.username`) by a digit rule,
 //     since there are six slots and the number is not part of the name.
@@ -722,7 +722,7 @@ static inline bool mqttCtrlCommandDenied(const char* command, size_t len) {
     // undoes that. The standard Observer MQTT settings (mqttN.*, mqtt.presets,
     // mqtt.iata, mqtt.*) are deliberately NOT here: a broker may go away and
     // another must be reachable without a visit (operator, 2026-10-08).
-    "set mqtt.cmd", "get mqtt.cmd.pubkey",
+    "set cmd", "get cmd.pubkey",
     // credentials and ownership: a result is published where anyone can read it,
     // and a write of these is a takeover of something other than the node.
     "set wifi.pwd", "get wifi.pwd", "set wifi.ssid", "get wifi.ssid",
@@ -765,7 +765,7 @@ static inline bool mqttCtrlCommandDenied(const char* command, size_t len) {
     "get prv", "set prv", "get password", "set password", "get guest.password",
     "get wifi.pwd", "set wifi.pwd", "get alert.psk", "set alert.psk",
     "get bridge.secret", "set bridge.secret", "get snmp.community", "set snmp.community",
-    "get mqtt.cmd.pubkey", "set mqtt.cmd", "get tls", "set tls",
+    "get cmd.pubkey", "set cmd", "get tls", "set tls",
   };
   for (size_t i = 0; i < sizeof(secrets) / sizeof(secrets[0]); i++) {
     size_t plen = strlen(secrets[i]);
@@ -813,7 +813,7 @@ static inline bool mqttCtrlCommandAllowed(const char* command, size_t len, bool 
     { "clear stats", true },       // resets counters, nothing else
     { "ota check", true },         // reports the available build; flashes nothing
     { "ota update", true },        // one node at a time: never on the broadcast topic
-    { "mqtt.cmd ping", true },     // a ping to the broker and back; nothing on the air
+    { "cmd ping", true },     // a ping to the broker and back; nothing on the air
   };
   for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++) {
     bool ok = verbs[i].exact
@@ -985,7 +985,7 @@ static inline bool mqttCtrlBroadcastRefused(const char* command, size_t len) {
 //
 // Zero is not a clock reading in this CLI, it is a privilege marker: it means the
 // caller is physically present (serial, ethernet, the web portal), and it is what
-// gates `get prv.key`, `set prv.key`, `set mqtt.cmd.pubkey` and `erase`. A remote
+// gates `get prv.key`, `set prv.key`, `set cmd.pubkey` and `erase`. A remote
 // command that reached the CLI with 0 would be handed exactly the privilege those
 // gates exist to withhold.
 //
@@ -1001,7 +1001,7 @@ static inline uint32_t mqttCtrlSenderStamp(uint32_t now) {
   return now == 0 ? 1 : now;
 }
 
-// Who asks for the command key (`set`/`get mqtt.cmd.pubkey`). Named by the caller, never
+// Who asks for the command key (`set`/`get cmd.pubkey`). Named by the caller, never
 // read off the clock: the plane runs its commands with a non-zero sender_timestamp exactly
 // as a remote admin's arrive, so "not 0" would let the plane through, and the deny list
 // would be the only gate left on the key.
@@ -1210,18 +1210,18 @@ static inline MqttCtrlResult mqttCtrlMeshParse(const uint8_t* data, size_t len,
 // command is plain text. Matched as the CLI matches, case and all, and only with a value:
 // `set wifi.pwdx` and a bare `set wifi.ssid` stay denied. Everything else denied stays denied.
 static inline bool mqttCtrlMeshAllowance(const char* command, size_t len) {
-  static const char* const with_value[] = { "set wifi.ssid ", "set wifi.pwd ", "set mqtt.cmd on " };
+  static const char* const with_value[] = { "set wifi.ssid ", "set wifi.pwd ", "set cmd on " };
   for (size_t i = 0; i < sizeof(with_value) / sizeof(with_value[0]); i++) {
     size_t plen = strlen(with_value[i]);
     if (len > plen && strncmp(command, with_value[i], plen) == 0) return true;
   }
-  return len == 15 && strncmp(command, "set mqtt.cmd on", 15) == 0;
+  return len == 10 && strncmp(command, "set cmd on", 10) == 0;
 }
 
 // 'uplink' says whether this image has Wi-Fi and MQTT (WITH_MQTT_BRIDGE). Without them the
 // mesh road is the plane's only road (operator 2026-11-16, plan phase 5) and the deny list
 // applies in full: the allowance repairs an uplink there is none of, and `ota check`,
-// `ota update`, `mqtt.cmd ping` and the broker slots' settings (`set mqttN.<leaf>`) need one.
+// `ota update`, `cmd ping` and the broker slots' settings (`set mqttN.<leaf>`) need one.
 // Refused as not-allowed, as a trigger is on an image without auto-reply, rather than left to
 // the CLI to answer "unknown".
 static inline bool mqttCtrlNeedsUplink(const char* command, size_t len) {
@@ -1229,7 +1229,7 @@ static inline bool mqttCtrlNeedsUplink(const char* command, size_t len) {
   if (len > hlen + 1 && strncasecmp(command, "set mqtt", hlen) == 0 &&
       command[hlen] >= '0' && command[hlen] <= '9' && command[hlen + 1] == '.') return true;
   return mqttCtrlExactCommand(command, len, "ota check") || mqttCtrlExactCommand(command, len, "ota update") ||
-         mqttCtrlExactCommand(command, len, "mqtt.cmd ping");
+         mqttCtrlExactCommand(command, len, "cmd ping");
 }
 
 static inline bool mqttCtrlMeshCommandAllowed(const char* command, size_t len, bool auto_reply,
@@ -1259,7 +1259,7 @@ static inline MqttCtrlResult mqttCtrlAuthoriseMesh(const MqttCtrlEnvelope* env,
   return MQTTCTRL_OK;
 }
 
-// `set mqtt.cmd.mesh off|on|auto`. Auto, the default (operator ruling 2026-11-16), opens the
+// `set cmd.mesh off|on|auto`. Auto, the default (operator ruling 2026-11-16), opens the
 // road once the command slot has been down 15 minutes, so a node whose broker answers never
 // takes commands over the air. Zero is auto, so a file written before the setting reads so.
 enum MqttCtrlMeshMode : uint8_t {
@@ -1314,7 +1314,7 @@ static inline const char* mqttCtrlMeshRegion(bool uplink, const char* iata) {
   return uplink ? iata : MQTTCTRL_MESH_ONLY_REGION;
 }
 
-// `get mqtt.cmd.mesh`: the mode and whether the road is open now, and why not.
+// `get cmd.mesh`: the mode and whether the road is open now, and why not.
 static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint32_t now_ms,
                                         char* out, size_t out_size) {
   if (out == NULL || out_size == 0) return;
@@ -1330,7 +1330,7 @@ static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint3
   }
 }
 
-// What `get mqtt.cmd` adds about the mesh road.
+// What `get cmd` adds about the mesh road.
 static inline void mqttCtrlMeshNote(uint8_t mode, uint32_t ok, uint32_t refused, char* out,
                                     size_t out_size) {
   if (out == NULL || out_size == 0) return;
@@ -1525,9 +1525,9 @@ static inline size_t mqttCtrlMeshFormatResponse(uint8_t* out, size_t room, uint3
 //
 // An Observer node on the plane sends its owner's mesh-road request to a node the broker does
 // not reach, and publishes what comes back (MqttControlV3.h has the envelope and the order of
-// the checks). `set mqtt.relay off|own`: own, the default (operator 2026-11-20), serves the
+// the checks). `set relay off|own`: own, the default (operator 2026-11-20), serves the
 // holder of this node's command key and nobody else. Zero is own, so a file written before
-// the setting reads so. The name is outside `mqtt.cmd` on purpose: the deny list refuses
+// the setting reads so. The name is outside `cmd` on purpose: the deny list refuses
 // everything under that, and the owner may switch relaying over the plane.
 enum MqttCtrlRelayMode : uint8_t {
   MQTTCTRL_RELAY_OWN = 0,
@@ -1613,7 +1613,7 @@ struct MqttCtrlRelayBudget {
   }
 };
 
-// `get mqtt.relay`: the mode, what the relay has done since boot, the quarter it is in with
+// `get relay`: the mode, what the relay has done since boot, the quarter it is in with
 // the airtime left of it, and the day's floods.
 static inline void mqttCtrlRelayDescribe(uint8_t mode, uint32_t forwarded, uint32_t answered,
                                          uint32_t refused, uint8_t phase, uint32_t left_ms,

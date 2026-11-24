@@ -105,7 +105,7 @@ static bool namesTheCommandKey(JsonVariantConst v) {
 }
 
 // The status message goes to every slot, the public Observer brokers among them, and a
-// command-key fingerprint there groups nodes by owner. It stays with `get mqtt.cmd.pubkey`.
+// command-key fingerprint there groups nodes by owner. It stays with `get cmd.pubkey`.
 TEST(MQTTPayloadBuilder, StatusNeverCarriesTheCommandKey) {
   JsonDocument scratch;
   char buffer[1024];

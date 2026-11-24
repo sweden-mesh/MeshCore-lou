@@ -35,7 +35,7 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 
 // The node's own MQTT-originated commands run with the RTC time rather than 0.
 // Zero is not a clock, it is a privilege signal: 'set prv.key', 'erase' and
-// replacing 'mqtt.cmd.pubkey' are gated on it, and serial and the web CLI both rely
+// replacing 'cmd.pubkey' are gated on it, and serial and the web CLI both rely
 // on physical or password authentication as their boundary. A remote caller has
 // neither, so it must never present itself as local. The deny list in
 // MqttControlLogic.h is the independent second guard on the same door.
@@ -335,9 +335,9 @@ bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
   // the plane reaches neither, and its deny list refuses both as the second, independent
   // guard. The public half only, and the name says so: a private seed is also 64 hex
   // characters, and nothing here could tell the two apart.
-  bool set_key = memcmp(command, "set mqtt.cmd.pubkey", 19) == 0
-                 && (command[19] == 0 || command[19] == ' ');
-  if (set_key || strcmp(command, "get mqtt.cmd.pubkey") == 0) {
+  bool set_key = memcmp(command, "set cmd.pubkey", 14) == 0
+                 && (command[14] == 0 || command[14] == ' ');
+  if (set_key || strcmp(command, "get cmd.pubkey") == 0) {
     if (caller == MQTTCTRL_KEY_REMOTE) {
       strcpy(reply, "Err - serial only");
       return true;
@@ -359,7 +359,7 @@ bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
       strcpy(reply, refusal);
       return true;
     }
-    const char* key = command[19] ? &command[20] : "";
+    const char* key = command[14] ? &command[15] : "";
     if (key[0] == 0 && caller == MQTTCTRL_KEY_LOCAL) {
       _pubkey[0] = 0;
       _key_via = MQTTCTRL_KEY_VIA_USB;
@@ -371,7 +371,7 @@ bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
       save();
       strcpy(reply, "OK");
     } else {
-      strcpy(reply, "Err - use: set mqtt.cmd.pubkey <64 hex characters, the PUBLIC key>");
+      strcpy(reply, "Err - use: set cmd.pubkey <64 hex characters, the PUBLIC key>");
     }
     return true;
   }
@@ -380,10 +380,10 @@ bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
   // Read once at boot, when the bridge registers its subscriptions; a live change
   // would have to move them between clients from another core, for a setting that
   // changes about once in a node's life.
-  if (memcmp(command, "set mqtt.cmd.slot ", 18) == 0) {
+  if (memcmp(command, "set cmd.slot ", 13) == 0) {
     uint8_t slot = 0;
-    if (!mqttCtrlParseSlot(&command[18], slot_count, &slot)) {
-      sprintf(reply, "Err - use: set mqtt.cmd.slot 0-%d", slot_count);
+    if (!mqttCtrlParseSlot(&command[13], slot_count, &slot)) {
+      sprintf(reply, "Err - use: set cmd.slot 0-%d", slot_count);
       return true;
     }
     _slot = slot;
@@ -392,7 +392,7 @@ bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
     return true;
   }
 
-  if (strcmp(command, "get mqtt.cmd.slot") == 0) {
+  if (strcmp(command, "get cmd.slot") == 0) {
     if (_slot == 0) strcpy(reply, "> 0 (none)");
     else sprintf(reply, "> %d", _slot);
     return true;
@@ -417,10 +417,10 @@ bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
   }
 #endif
 
-  if (memcmp(command, "set mqtt.cmd ", 13) == 0) {
+  if (memcmp(command, "set cmd ", 8) == 0) {
     bool on = false;
-    if (!forkParseOnOff(&command[13], &on)) {
-      strcpy(reply, "Err - use: set mqtt.cmd on [<broker host>]|off");
+    if (!forkParseOnOff(&command[8], &on)) {
+      strcpy(reply, "Err - use: set cmd on [<broker host>]|off");
       return true;
     }
     _enabled = on;
@@ -429,7 +429,7 @@ bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
     return true;
   }
 
-  if (strcmp(command, "get mqtt.cmd") == 0) {
+  if (strcmp(command, "get cmd") == 0) {
     sprintf(reply, "> %s, counter %d", _enabled ? "on" : "off", (uint32_t)_counter);
     return true;
   }
