@@ -2476,6 +2476,49 @@ TEST(MeshRoad, AClockStepOverMqttIsRefused) {
   EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&step.env, 0, 1795000000, true));
 }
 
+// `rekey <43 base64url characters>`: 32 bytes, the whole form, nothing else.
+TEST(Rekey, OnlyTheWholeFormNamesAKey) {
+  char hex[65];
+  // 32 bytes 00..1F, base64url without padding
+  const char* ok = "rekey AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+  ASSERT_EQ(49u, strlen(ok));
+  ASSERT_TRUE(mqttCtrlRekeyParse(ok, strlen(ok), hex));
+  EXPECT_STREQ("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F", hex);
+  EXPECT_LE(strlen(ok), (size_t)57) << "it must fit the mesh road";
+  for (const char* c : { "rekey", "rekey ", "rekey AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh",
+                         "rekey AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8A", "rekeyAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8x",
+                         "Rekey AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", "rekey AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwd*h8" }) {
+    EXPECT_FALSE(mqttCtrlRekeyParse(c, strlen(c), hex)) << c;
+  }
+  EXPECT_TRUE(mqttCtrlIsRekey("rekey", 5));
+  EXPECT_TRUE(mqttCtrlIsRekey("rekey x", 7));
+  EXPECT_FALSE(mqttCtrlIsRekey("rekeyx", 6));
+  EXPECT_FALSE(mqttCtrlIsRekey("get rekey", 9));
+}
+
+// The deny list admits it on both roads, with or without an uplink: it is how a key is replaced
+// without a visit. `set cmd.pubkey` stays out of the plane's reach.
+TEST(Rekey, ThePlaneAdmitsItAndStillRefusesTheSerialWay) {
+  const char* c = "rekey AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+  EXPECT_TRUE(mqttCtrlCommandAllowed(c, strlen(c), true));
+  EXPECT_TRUE(mqttCtrlMeshCommandAllowed(c, strlen(c), true, true));
+  EXPECT_TRUE(mqttCtrlMeshCommandAllowed(c, strlen(c), false, false));
+  const char* serial = "set cmd.pubkey 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F";
+  EXPECT_FALSE(mqttCtrlCommandAllowed(serial, strlen(serial), true));
+  EXPECT_FALSE(mqttCtrlMeshCommandAllowed(serial, strlen(serial), true, true));
+}
+
+// A waiting key waits an hour, across millis() wrapping, and not at all when none was offered.
+TEST(Rekey, AWaitingKeyWaitsAnHour) {
+  EXPECT_FALSE(mqttCtrlRekeyWaiting(false, 0, 10));
+  EXPECT_TRUE(mqttCtrlRekeyWaiting(true, 1000, 1000));
+  EXPECT_TRUE(mqttCtrlRekeyWaiting(true, 1000, 1000 + MQTTCTRL_REKEY_WAIT_MS - 1));
+  EXPECT_FALSE(mqttCtrlRekeyWaiting(true, 1000, 1000 + MQTTCTRL_REKEY_WAIT_MS));
+  EXPECT_TRUE(mqttCtrlRekeyWaiting(true, 0xFFFFFF00UL, 0x00000100UL));
+  EXPECT_STREQ("rekey", mqttCtrlKeyViaName(MQTTCTRL_KEY_VIA_REKEY));
+  EXPECT_STREQ("usb", mqttCtrlKeyViaName(9));
+}
+
 TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   const uint32_t unset = 1715770351 + 3600;           // the firmware's 2024 default, an hour up
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(unset, 1795000000));

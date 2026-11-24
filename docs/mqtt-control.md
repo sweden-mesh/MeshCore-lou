@@ -675,3 +675,21 @@ replay, and the console's `time` only ever moves a clock forward, so a clock tha
 still a serial visit. Over MQTT `time` stays denied: an Observer node has NTP, and a broker can
 hold a command back. What is left to weigh: whoever holds the command key can push a mesh-only
 node's clock far ahead once, after which the owner's commands expire until someone visits it.
+
+## Replacing the command key without a visit: `rekey`
+
+`rekey <new PUBLIC key>` is a command like any other, signed by the key in use, on MQTT or the
+mesh. The key is 32 bytes as 43 base64url characters, so the command fits the mesh road. The new
+key only waits, in RAM, for 60 minutes or until the next boot; the key in use stays the key. The
+moment a command arrives that the waiting key signed, it takes over: the node saves it (`get
+cmd.pubkey` on the console then says `set via rekey`), derives its keys and seals the answer and
+its next alive to it. A mistyped or lost key therefore changes nothing: no command signed by it
+ever comes. The console has no `rekey`; `set cmd.pubkey` there is unchanged and stays out of the
+plane's reach. What `rekey` cannot stop: whoever holds a node's command key can replace it before
+the owner does, and then only a serial visit gets the node back.
+
+## Joining the log lines
+
+With `set cmd.debug on`, the relay's lines name the request's own counter beside the forward's
+(`relay: forward 7, request 1795513703, sent direct`), and the target's name the same counter
+(`mesh: a request, counter 1795513703`, `mesh: the answer to 1795513703`). mccontrol shows it too.

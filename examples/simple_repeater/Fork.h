@@ -104,6 +104,7 @@ class Fork {
   bool handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* command, char* reply);
   void describeMqttControl(char* reply);
   void refreshMcc3Keys();
+  void refreshRekeyKeys();
   bool onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                      const uint8_t* data, size_t len);
   void onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
@@ -143,6 +144,7 @@ class Fork {
     uint8_t rid[MCC3_RID_LEN];               // where the result goes
     uint32_t tag;                            // what the answer must begin with
     uint32_t counter;
+    uint32_t request;                        // the request's own counter, for the log (0: an old request)
     uint8_t sent;                            // MCC3_SENT_DIRECT or MCC3_SENT_FLOOD
     unsigned long since;                     // millis() the request went out
   } _relay_wait;

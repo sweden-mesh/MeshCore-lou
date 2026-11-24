@@ -804,6 +804,7 @@ static inline bool mqttCtrlCommandAllowed(const char* command, size_t len, bool 
     { "gps", false },              // gps on/off
     { "powersaving", false },      // powersaving on/off
     { "clock", false },            // the clock, and `clock sync` to the node's own now
+    { "rekey", false },            // a new command key offered by the one in use (mqttCtrlRekeyParse)
     // Exact: the bare command and nothing else.
     { "ver", true },
     { "reboot", true },
@@ -1050,10 +1051,61 @@ static inline const char* mqttCtrlKeySetRefusal(MqttCtrlKeyCaller caller, bool k
 }
 
 // How the key was set, kept with it in /mqttcontrol and shown to the owner.
-enum MqttCtrlKeyVia { MQTTCTRL_KEY_VIA_USB = 0, MQTTCTRL_KEY_VIA_ADMIN = 1 };
+enum MqttCtrlKeyVia { MQTTCTRL_KEY_VIA_USB = 0, MQTTCTRL_KEY_VIA_ADMIN = 1, MQTTCTRL_KEY_VIA_REKEY = 2 };
 
 static inline const char* mqttCtrlKeyViaName(uint8_t via) {
-  return via == MQTTCTRL_KEY_VIA_ADMIN ? "admin" : "usb";
+  return via == MQTTCTRL_KEY_VIA_ADMIN ? "admin" : via == MQTTCTRL_KEY_VIA_REKEY ? "rekey" : "usb";
+}
+
+// ---- `rekey`: a new command key, offered by the old one (operator 2026-11-24) ----------
+// Replacing a key was serial only, which on a solar node in a tree is a climb. `rekey <key>`,
+// signed by the key in use like any command, names a new PUBLIC key: 32 bytes as 43 base64url
+// characters, so the whole command fits the mesh road's 57. The new key only WAITS, in RAM, for
+// an hour or until the next boot; the old one stays the key. It takes over the moment a
+// command arrives that the new key signed, which proves somebody holds its private half: a
+// mistyped or lost key therefore changes nothing. Never from the console, where `set
+// cmd.pubkey` is; and what it cannot stop is the thief of a key rekeying before its owner does.
+#define MQTTCTRL_REKEY_WAIT_MS   (60UL * 60UL * 1000UL)
+#define MQTTCTRL_REKEY_B64_LEN   43
+
+static inline bool mqttCtrlIsRekey(const char* command, size_t len) {
+  return command != NULL && len >= 5 && strncmp(command, "rekey", 5) == 0 && (len == 5 || command[5] == ' ');
+}
+
+// The new key as 64 upper-case hex characters in 'hex_out' (65 bytes), or false: not the
+// whole form, or not 32 bytes.
+static inline bool mqttCtrlRekeyParse(const char* command, size_t len, char* hex_out) {
+  if (!mqttCtrlIsRekey(command, len) || len != 6 + MQTTCTRL_REKEY_B64_LEN) return false;
+  // 43 base64url characters are 258 bits: 32 bytes and two spare bits, which must be zero.
+  uint8_t key[32];
+  uint32_t acc = 0;
+  int bits = 0, n = 0;
+  for (int i = 0; i < MQTTCTRL_REKEY_B64_LEN; i++) {
+    const char ch = command[6 + i];
+    int v = ch >= 'A' && ch <= 'Z' ? ch - 'A' : ch >= 'a' && ch <= 'z' ? ch - 'a' + 26
+          : ch >= '0' && ch <= '9' ? ch - '0' + 52 : ch == '-' ? 62 : ch == '_' ? 63 : -1;
+    if (v < 0) return false;
+    acc = (acc << 6) | (uint32_t)v;
+    bits += 6;
+    if (bits >= 8 && n < 32) {
+      bits -= 8;
+      key[n++] = (uint8_t)(acc >> bits);
+      acc &= (1u << bits) - 1;
+    }
+  }
+  if (n != 32 || acc != 0) return false;
+  static const char digits[] = "0123456789ABCDEF";
+  for (int i = 0; i < 32; i++) {
+    hex_out[2 * i] = digits[key[i] >> 4];
+    hex_out[2 * i + 1] = digits[key[i] & 15];
+  }
+  hex_out[64] = 0;
+  return true;
+}
+
+// Is a key that was offered at 'since' still waiting at 'now'? millis(), across its wrap.
+static inline bool mqttCtrlRekeyWaiting(bool offered, unsigned long since, unsigned long now) {
+  return offered && (uint32_t)((uint32_t)now - (uint32_t)since) < MQTTCTRL_REKEY_WAIT_MS;
 }
 
 // The key's first 8 hex characters, what a remote admin sees. "" when no key is set. 'out'
@@ -1732,7 +1784,7 @@ static inline bool mqttCtrlConfigDecode(const uint8_t* buf, size_t len, int slot
   if (ver >= 7 && len >= MQTTCTRL_CONFIG_LEN) c->relay_mode = buf[MQTTCTRL_CONFIG_LEN_6];
   if (c->mesh_mode > MQTTCTRL_MESH_OFF) c->mesh_mode = MQTTCTRL_MESH_AUTO;
   if (c->relay_mode > MQTTCTRL_RELAY_OFF) c->relay_mode = MQTTCTRL_RELAY_OWN;
-  if (c->key_via > MQTTCTRL_KEY_VIA_ADMIN) c->key_via = MQTTCTRL_KEY_VIA_USB;
+  if (c->key_via > MQTTCTRL_KEY_VIA_REKEY) c->key_via = MQTTCTRL_KEY_VIA_USB;
   if (c->slot > slot_count) c->slot = 0;
   if (c->alive_minutes != 0 && (c->alive_minutes < MQTTCTRL_ALIVE_MIN_MINUTES ||
                                 c->alive_minutes > MQTTCTRL_ALIVE_MAX_MINUTES)) c->alive_minutes = 0;

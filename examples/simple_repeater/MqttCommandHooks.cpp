@@ -270,6 +270,8 @@ void Fork::describeMqttControl(char* reply) {
 void Fork::loopMqttControl() {
   refreshMqttControlV2Key();
   refreshMcc3Keys();
+  refreshRekeyKeys();
+  if (_mqtt_control.rekeyJustDone()) debugLine("rekey: the new key signed a command and is the key now");
   const bool up = _mesh.bridge != NULL && _mesh.bridge->controlSlotConnected();
   _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
   if (_mesh.bridge != NULL) loopAlive();
@@ -687,6 +689,24 @@ void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
                                        [](void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t n) {
                                          return ((const mesh::Identity*)ctx)->verify(sig, msg, (int)n);
                                        }, &owner, &cmd);
+  // Not the key's: a key that waits (`rekey`) is tried, and takes over if it signed this.
+  if (result == MQTTCTRL_ERR_COMMAND_CHARS || result == MQTTCTRL_ERR_SIG_INVALID) {
+    refreshRekeyKeys();
+    const Mcc3Keys* waiting = _mqtt_control.rekeyKeys(millis());
+    mesh::Identity next;
+    if (waiting != NULL && mesh::Utils::fromHex(next.pub_key, PUB_KEY_SIZE, _mqtt_control.rekeyWaiting(millis()))) {
+      MqttCtrlResult again = mcc3MeshOpen(waiting, _mesh.self_id.pub_key, _mqtt_control.counter(), data, len,
+                                          [](void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t n) {
+                                            return ((const mesh::Identity*)ctx)->verify(sig, msg, (int)n);
+                                          }, &next, &cmd);
+      if (again == MQTTCTRL_OK) {
+        _mqtt_control.rekeyTakeOver();
+        _mqtt_control.rekeyJustDone();
+        debugLine("rekey: the new key signed a request and is the key now");
+        result = MQTTCTRL_OK;
+      }
+    }
+  }
   if (result != MQTTCTRL_OK) {
     _mesh_refused++;
     debugLine("mesh: a request refused before it ran: %s%s", mqttCtrlResultName(result),
@@ -731,6 +751,24 @@ void Fork::refreshMcc3Keys() {
     _mqtt_control.setMcc3Keys(keys, "", _mesh.self_id.pub_key);
   }
   memset(&keys, 0, sizeof(keys));
+}
+
+// The keys of a command key that waits (`rekey`), derived once when it is offered.
+void Fork::refreshRekeyKeys() {
+  const char* next_hex = _mqtt_control.rekeyWaiting(millis());
+  if (next_hex[0] == 0 || strcmp(next_hex, _mqtt_control.rekeyKeyFor()) == 0) return;
+  uint8_t next[PUB_KEY_SIZE];
+  if (!mesh::Utils::fromHex(next, PUB_KEY_SIZE, next_hex)) return;
+  Mcc3Keys keys;
+  uint8_t shared[PUB_KEY_SIZE];
+  char node_hex[PUB_KEY_SIZE * 2 + 1];
+  _mesh.self_id.calcSharedSecret(shared, next);
+  mesh::Utils::toHex(node_hex, _mesh.self_id.pub_key, PUB_KEY_SIZE);
+  mcc3DeriveKeys(shared, node_hex, &keys);
+  memset(shared, 0, sizeof(shared));
+  _mqtt_control.setRekeyKeys(keys, next_hex);
+  memset(&keys, 0, sizeof(keys));
+  debugLine("rekey: a new key waits, %.8s...", next_hex);
 }
 
 // Back the way upstream answers a login (chooseReplyRoute): a flooded request gets its path
@@ -780,7 +818,7 @@ void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   if (out == NULL) return;
   const uint32_t air_ms = _mesh._radio->getEstAirtimeFor(out->getRawLength());
   _mqtt_control.meshAnswered(now, air_ms);
-  debugLine("mesh: the answer, %u bytes, %u ms on the air, %s, in %u ms", (unsigned)n, (unsigned)air_ms,
+  debugLine("mesh: the answer to %u, %u bytes, %u ms on the air, %s, in %u ms", (unsigned)counter, (unsigned)n, (unsigned)air_ms,
             zero_hop ? "no hops" : path_return ? "flooded with its path"
               : route == mesh::REPLY_ROUTE_DIRECT_OUT_PATH ? "along the way back" : "flooded", (unsigned)delay_millis);
   if (path_return) {
