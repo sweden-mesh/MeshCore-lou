@@ -82,6 +82,22 @@ services, and stays yours; the command key is one key for all of one owner's nod
 
 To turn it off again: `set cmd off`.
 
+Coming from lou-18, where these were `mqtt.cmd`: [Upgrading from lou-18](mqtt-control.md#upgrading-from-lou-18).
+
+### What else the plane does (lou-20)
+
+Each is described in [`docs/mqtt-control.md`](mqtt-control.md); the links go to the section.
+
+| | |
+|---|---|
+| `set relay off\|own`, `get relay` | An Observer node sends its owner's command over the air to a node the broker does not reach, and returns the answer unread. Default `own`: for the holder of its own command key only. One at a time, on a fixed budget: airtime 5 % of 15 minutes, then 1 % of the next 15; floods one a minute, then one in five minutes, 100 a day. [Relaying](mqtt-control.md#relaying-one-nodes-mqtt-for-another-nodes-command-lou-20) |
+| `set cmd.mesh off\|on\|auto` | When an Observer node takes signed commands over the mesh, from a companion radio or a relay. Default `auto`: once its broker has been unreachable for 15 minutes. A mesh-only image always does, and has no such setting. [Over the mesh](mqtt-control.md#over-the-mesh-when-wi-fi-or-the-broker-is-down-lou-19), [Mesh only](mqtt-control.md#mesh-only-boards-without-wi-fi) |
+| `set alive.interval <5-1440>` | An Observer node with a command key publishes one sealed, retained message that only its owner's key opens: version, name, region, uptime, clock. It is how the tools find a node. Minutes, default 15. [Alive](mqtt-control.md#mcc3-keyed-by-the-node-sealed-to-its-owner-lou-20) |
+| `rekey <new public key>` | Replaces the command key from afar, signed by the key in use. The new key takes over when it first signs a command, within 60 minutes. Not a console command. [rekey](mqtt-control.md#replacing-the-command-key-without-a-visit-rekey) |
+| `time <epoch>` | Mends a clock that fell behind. Admitted over the mesh only, never over MQTT. [time](mqtt-control.md#mending-a-clock-over-the-mesh-time-epoch) |
+| `get sensors` | The node's battery, MCU temperature and sensors on one line, on either road. [What may be sent](mqtt-control.md#what-may-be-sent) |
+| `set cmd.debug on\|off` | Prints the plane's decisions on the serial console until the next restart. Serial only. [Joining the log lines](mqtt-control.md#joining-the-log-lines) |
+
 ### What a node checks before it obeys
 
 In this order, and it stops at the first failure:
@@ -106,7 +122,12 @@ transmit at once. Nor does a remote admin start what opens the board to anyone i
 range with no password of its own: `start ota` on ESP32 (the OTA hotspot and uploader) and the
 web portal's setup access point (`start webconfig ap`, or `start webconfig` with no
 network to join) answer only serial and the local console. On nRF52 a remote admin still
-starts BLE DFU with `start ota`, as on stock MeshCore (operator 2026-11-17).
+starts BLE DFU with `start ota`, as on stock MeshCore (operator 2026-11-17). The refused
+command is answered `Err - serial only: it opens the board to anyone in Wi-Fi/BLE range`.
+
+**Every password login is throttled** (lou-20): a sender that gives a wrong password 5 times is
+not answered for 10 minutes from the fifth, whatever it sends. The count is kept per sender
+key, so a stranger's guesses do not lock the owner out, and it is cleared by a restart.
 
 ### What this does not defend against
 
@@ -180,7 +201,7 @@ To turn it off again: `set autoreply off`.
 | `set autoreply.slots <1-64>` | `16` | How many slots the window is cut into. More is not better: past about one slot per 4 s they become narrower than the replies they separate. |
 | `set autoreply.region <name>` | *(none)* | The test channel `#test-<name>` and the region every reply is scoped to; it must be in the region table. `a-z0-9` groups joined by single hyphens, 3-25 characters. Empty: no region channel, and replies mirror the request's scope. |
 | `set autoreply.legacy on\|off` | `on` | Also answer on `#test-<iata>`, from `mqtt.iata` -- the channel releases before ar-12 used -- so an upgrade never silences a node. |
-| `set autoreply.national auto\|off\|<region>` | `auto` | Also answer on `#test-<country>`, the country found in the region table (`se` for `se-jkp`), or the region named; its replies flood in that region (lou-19). |
+| `set autoreply.national auto\|off\|<region>` | `auto` | Also answer on `#test-<country>`, the country found in the region table (`se` for `se-jkp`), or the region named; its replies flood in that region (lou-19). A reply there costs the whole country airtime: send one `test`, wait two minutes, do not repeat it. [The national channel](autoreply.md) |
 | `set autoreply.mode flood\|private\|direct` | `flood` | How a request that names no mode is answered. `private` and `direct` answer with a text message to the requester alone, and only when the request carries their key. |
 | `set autoreply.private on\|off` | `on` | Whether a test request sent to this repeater alone, off the channel, is answered. On since 2026-09-20: a private request is answered privately, and one that is never answered reads like a dead repeater. |
 | `get autoreply` | — | Current state, in one line. |

@@ -37,11 +37,23 @@ What the features do:
 - **Remote control** ([docs/mqtt-control.md](docs/mqtt-control.md)): console commands sent over
   MQTT or over the mesh, signed with the owner's Ed25519 key and checked on the node. The key is
   set by cable, once over the admin login for a node without one, and replaced with `rekey`.
-  Identity, radio and destructive commands are refused. An Observer node also relays its
-  owner's commands to the owner's nodes without Wi-Fi, and announces itself to its owner so the
-  tools find it. On stock boards remote control works over the mesh only. Sent with
-  [mccontrol](https://mccontrol.meshcoresverige.se). From lou-20 the settings are `cmd`
-  (`set cmd on`); the `mqtt.cmd` names of lou-18 are gone.
+  Identity, radio and destructive commands are refused. On stock boards remote control works
+  over the mesh only. Sent with [mccontrol](https://mccontrol.meshcoresverige.se). From lou-20
+  the settings are `cmd` (`set cmd on`); the `mqtt.cmd` names of lou-18 are gone:
+  [upgrading from lou-18](docs/mqtt-control.md#upgrading-from-lou-18). Also from lou-20:
+  - [The relay](docs/mqtt-control.md#relaying-one-nodes-mqtt-for-another-nodes-command-lou-20): an Observer node
+    sends its owner's commands over the air to the owner's nodes without Wi-Fi and returns the
+    answers, one at a time, on a fixed airtime and flood budget. `set relay off|own`.
+  - [Over the mesh](docs/mqtt-control.md#over-the-mesh-when-wi-fi-or-the-broker-is-down-lou-19): an Observer node
+    takes the same signed commands from a companion radio when its broker is down.
+    `set cmd.mesh off|on|auto`.
+  - [The alive message](docs/mqtt-control.md#mcc3-keyed-by-the-node-sealed-to-its-owner-lou-20): an Observer node
+    announces itself, sealed to its owner, so the tools find it. `set alive.interval <5-1440>`
+    (minutes).
+  - [`time <epoch>`](docs/mqtt-control.md#mending-a-clock-over-the-mesh-time-epoch) mends a clock that fell
+    behind, over the mesh only; [`get sensors`](docs/mqtt-control.md#what-may-be-sent) reads the node's sensors;
+    [`set cmd.debug on|off`](docs/mqtt-control.md#joining-the-log-lines) prints the plane's decisions on the
+    serial console.
 - **Signed OTA** ([docs/ota.md](docs/ota.md)): every Observer flavour. `ota update` fetches the
   latest release of its own flavour over Wi-Fi and installs it only if the signature checks out.
   The stock flavour has none.

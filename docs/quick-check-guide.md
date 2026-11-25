@@ -32,6 +32,10 @@ features the node has ([`fork.md`](fork.md)):
 On core MeshCore the image is flashed as upstream's are (a `.uf2` or `.zip` for nRF52), not by
 the Observer flasher.
 
+**An `rc` or `arrc` image on core MeshCore is mesh only** (no `_observer_mqtt` in the file's
+name, no `-observer` in `ver`): it has no Wi-Fi, no MQTT and no slot. Of section 8 do 8a and
+8c. Sections 5, 6, 8b and 9, and the ping and the MQTT counters in 11, are for Observer images.
+
 ---
 
 ## 0. What to bring
@@ -325,6 +329,9 @@ command plane rather than on site: `region put <region>`, `region save`,
 
 ## 8. The command plane (remote control with your key)
 
+8a is for every `rc` and `arrc` image. 8b is for Observer images, which reach a broker; a
+mesh-only image does 8c in its place.
+
 ### 8a. The key
 
 ```
@@ -397,6 +404,35 @@ started at the last boot and is read after the reboot in step 10.
 
 After this, `set mqtt.analyzer.eu on` on a no-PSRAM board is refused with the same
 `Err - slot 2 is the command plane's: ...` line. That is intended.
+
+### 8c. A mesh-only image: no slot, no broker
+
+For an `rc` or `arrc` image on a board without the Observer (lou-20). Do 8a, skip 8b, then:
+
+```
+get cmd                   -> > off, counter <n>, mesh only, mesh on ok 0 refused 0
+set cmd on                -> OK
+get cmd                   -> > on, counter <n>, mesh only, mesh on ok 0 refused 0
+```
+
+No reboot is needed. `mesh only` says the image has no broker. `mesh on` says the node takes
+signed commands over the mesh, which it always does there while `cmd` is on. `ok` and `refused`
+count the requests heard since the last restart.
+
+The node sends no alive message, so the tools do not find it: add it by its whole public key
+(`get public.key`, step 1). Then send one command, through your own companion radio or
+through an Observer node of yours on lou-20 (the relay):
+
+```
+mccontrol add <name> <64 hex public key>
+mccontrol send <name> ver --via mesh            # through your companion radio
+mccontrol send <name> ver --via relay:<relay>   # an Observer node of yours sends it
+```
+
+The answer to a flooded request comes 15 to 30 s later. On the node, `get cmd` then shows
+`ok 1` and the command's counter. No answer and `refused` one higher: `set cmd.debug on` on
+the serial console prints why, for each request heard, until the next restart. The road, its
+budget and the relay: [`mqtt-control.md`](mqtt-control.md), "Mesh only" and "Relaying".
 
 ## 9. Automatic updates (`ota.auto`)
 
@@ -514,7 +550,8 @@ try again.
 From anywhere with a network connection:
 
 ```
-mccontrol discover <IATA> --add   # the node should be listed
+mccontrol discover --add          # lou-20: your nodes, from their alive messages
+mccontrol discover <IATA> --add   # lou-19 and older
 mccontrol send <node> ver         # <...>-<version> (Build: <date>)
 mccontrol send <node> get autoreply
 ```
