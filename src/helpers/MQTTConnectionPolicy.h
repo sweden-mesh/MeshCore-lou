@@ -221,8 +221,40 @@ static inline bool renewalAttemptAllowed(uint32_t now, uint32_t last_attempt) {
   return elapsedMs(now, last_attempt) >= kRenewalThrottleMs;
 }
 
-static inline bool jwtClockAvailable(bool ntp_synced, uint32_t current_time) {
-  return ntp_synced || current_time >= kJwtClockThreshold;
+// How far the node's clock can be trusted.
+enum class ClockTrust : uint8_t {
+  NeverSet,    // the power-on placeholder, or nothing usable
+  Unverified,  // plausibly real (kept over a soft reset, a clock chip, set by hand),
+               // but no server has confirmed it
+  Verified,    // an NTP server answered
+};
+
+// What a finished time sync leaves. A server's answer verifies. Without one a usable
+// fallback clock is believed but not verified, and a clock no source vouches for stays
+// what it was. One answer verifies for good: a later sync that reaches no server (the
+// hourly refresh on a flaky link) does not send the node back to asking every 30 s.
+static inline ClockTrust clockTrustAfterSync(ClockTrust before, bool server_answered,
+                                             bool fallback_usable) {
+  if (server_answered || before == ClockTrust::Verified) return ClockTrust::Verified;
+  return fallback_usable ? ClockTrust::Unverified : before;
+}
+
+// The time sync keeps asking on its short schedule until a server has answered.
+static inline bool clockVerified(ClockTrust trust) { return trust == ClockTrust::Verified; }
+
+// A login token carries the time it was made, and a broker refuses one from the past. A
+// clock nobody set is nine months back or more, so a JWT slot waits for a clock; an
+// unverified one is good enough to try, and the stale-token pass mends it if a later
+// sync moves the clock. The wall clock's value is not asked: the power-on placeholder
+// is later than any threshold that could be put here.
+static inline bool jwtClockAvailable(ClockTrust trust) {
+  return trust != ClockTrust::NeverSet;
+}
+
+// Slots are set up once the first time sync has finished, whatever it found: a slot that
+// signs in with a password needs no clock, and a JWT slot is held by jwtClockAvailable().
+static inline bool slotMayStart(bool uses_jwt, ClockTrust trust) {
+  return !uses_jwt || jwtClockAvailable(trust);
 }
 
 // How a given MQTT slot fares at bridge setup on this hardware. MQTTBridge's
@@ -324,6 +356,16 @@ static inline ClockSource chooseFallbackClock(bool validating_server, uint32_t s
     return ClockSource::Rtc;
   }
   return ClockSource::None;
+}
+
+// Whether a time the sync accepted is written to the clocks. A server's answer is, and a
+// chip's reading is copied into libc. The system clock taken as its own fallback already
+// holds that time: it is written once, when the node first gets a clock, so that a clock
+// chip receives it, and never again. Each write drops the fraction of a second, and at one
+// retry every 30 s that would be a clock losing minutes a day.
+static inline bool acceptedClockNeedsWriting(bool server_answered, ClockSource fallback,
+                                             ClockTrust before) {
+  return server_answered || fallback == ClockSource::Rtc || before == ClockTrust::NeverSet;
 }
 
 } // namespace MQTTConnectionPolicy

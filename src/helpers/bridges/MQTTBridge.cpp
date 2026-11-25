@@ -721,7 +721,8 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, MQTTPrefs *obs, mesh::PacketManager *mg
       _network(&activeNetworkLink()),
       _queue_count(0),
       _last_status_publish(0), _last_status_retry(0), _status_interval(300000),
-      _last_ntp_sync(0), _ntp_synced(false), _ntp_sync_pending(false), _slots_setup_done(false), _max_active_slots(RUNTIME_MQTT_SLOTS),
+      _last_ntp_sync(0), _ntp_synced(false),
+      _clock_trust(MQTTConnectionPolicy::ClockTrust::NeverSet), _ntp_sync_pending(false), _slots_setup_done(false), _max_active_slots(RUNTIME_MQTT_SLOTS),
       _ntp_force_requested(false), _ntp_force_done(false), _ntp_force_result(false),
       _ntp_diag_requested(false), _ntp_diag_done(false), _ntp_diag_count(0),
       // Default to UTC; setRules() will be called from syncTimeWithNTP when a
@@ -1366,7 +1367,8 @@ void MQTTBridge::initializeNetworkInTask() {
   // not race the first DNS lookup after a bridge restart.
   if (!_network->begin(_obs->wifi_ssid, _obs->wifi_password)) {
     MQTT_DEBUG_PRINTLN("%s network initialization failed", _network->mediumName());
-  } else if (_network->isConnected() && !_ntp_synced && !_ntp_sync_pending) {
+  } else if (_network->isConnected() && !MQTTConnectionPolicy::clockVerified(_clock_trust) &&
+             !_ntp_sync_pending) {
     _ntp_sync_pending = true;
   }
 
@@ -1479,8 +1481,8 @@ void MQTTBridge::mqttTaskLoop() {
     // run the multi-second sync sequence back-to-back forever.
     const bool network_connected = _network->isConnected();
     _ntp_sync_pending = NetworkPolicy::ntpPendingAfterConnectivitySample(
-        _ntp_synced, _ntp_sync_pending, network_was_connected,
-        network_connected);
+        MQTTConnectionPolicy::clockVerified(_clock_trust), _ntp_sync_pending,
+        network_was_connected, network_connected);
     network_was_connected = network_connected;
     if (_ntp_sync_pending && network_connected) {
       _ntp_sync_pending = false;
@@ -1488,12 +1490,15 @@ void MQTTBridge::mqttTaskLoop() {
       syncTimeWithNTP();
     }
 
-    // Retry NTP every 30s if initial sync failed (slots can't start without valid time)
+    // Retry NTP every 30s until a server has answered. A fallback clock lets the slots
+    // run but does not end the asking: it may be wrong, and only a server can say.
     if (NetworkPolicy::ntpRetryDue(
-            _ntp_synced, network_connected, (uint32_t)now,
-            (uint32_t)last_ntp_attempt)) {
+            MQTTConnectionPolicy::clockVerified(_clock_trust), network_connected,
+            (uint32_t)now, (uint32_t)last_ntp_attempt)) {
       last_ntp_attempt = now;
-      syncTimeWithNTP();
+      syncTimeWithNTP(/*force=*/false, /*primary_only=*/false,
+                      NetworkPolicy::ntpRetryAttemptsPerServer(
+                          MQTTConnectionPolicy::jwtClockAvailable(_clock_trust)));
     }
 
     // Process a CLI-requested forced NTP sync (queued from Core 1). Running it here
@@ -1515,8 +1520,10 @@ void MQTTBridge::mqttTaskLoop() {
       _ntp_diag_done = true;  // set last so the waiter sees populated results
     }
 
-    // Deferred slot setup: wait until NTP is synced so JWT tokens get valid timestamps.
-    // This avoids wasted TLS handshakes that get rejected due to bad token times.
+    // Deferred slot setup: wait until the first time sync has finished so JWT tokens get
+    // valid timestamps. This avoids wasted TLS handshakes that get rejected due to bad
+    // token times. If it found no clock, setupSlot() holds the JWT slots back and the
+    // password slots start.
     if (_ntp_synced && !_slots_setup_done) {
       _slots_setup_done = true;
 
@@ -1992,6 +1999,17 @@ bool MQTTBridge::setupSlot(int index) {
 
   if (!slot.enabled) {
     teardownSlot(index);
+    return false;
+  }
+
+  // A login minted from a clock nobody set is refused as expired, so a JWT slot waits for
+  // one. Not stamped as an attempt: nothing was tried, maintainSlotConnections() does not
+  // come back here while the clock is missing, and should come back at once when it is not.
+  const bool wants_jwt = (slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT) ||
+                         (!slot.preset && slot.audience[0] != '\0');
+  if (!MQTTConnectionPolicy::slotMayStart(wants_jwt, _clock_trust)) {
+    MQTT_DEBUG_PRINTLN("MQTT%d waits for a clock: no NTP server answered and none was set",
+                       index + 1);
     return false;
   }
 
@@ -2610,9 +2628,7 @@ void MQTTBridge::maintainSlotConnections() {
   bool time_synced = (current_time >= 1000000000); // After year 2001
 
   // JWT tokens require valid timestamps
-  unsigned long clock_sec = current_time;
-  bool can_do_jwt = MQTTConnectionPolicy::jwtClockAvailable(
-      _ntp_synced, static_cast<uint32_t>(clock_sec));
+  bool can_do_jwt = MQTTConnectionPolicy::jwtClockAvailable(_clock_trust);
 
   // Count connected slots to inform reconnect decisions
   int connected_count = 0;
@@ -4765,6 +4781,7 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
   }
 
   bool ntp_ok = false;
+  bool server_answered = false;
   unsigned long epochTime = 0;
   const uint32_t kMinValidEpoch = kNtpMinValidEpoch;
   const char* ntp_server_used = nullptr;
@@ -4783,6 +4800,7 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
       if (probeNtpServer(server, kMinValidEpoch, &probed_epoch, &why)) {
         epochTime = probed_epoch;
         ntp_ok = true;
+        server_answered = true;
         ntp_server_used = server;
       } else {
         MQTT_DEBUG_PRINTLN("NTP: %s rejected (%s)", server, why ? why : "no reply");
@@ -4817,6 +4835,7 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
   // all. Keep the behaviour, but as its own decision rather than as a claim about a
   // server that never replied. Not on the validation path — `set mqtt.ntp` asks
   // whether that server works, and the clock cannot answer for it.
+  MQTTConnectionPolicy::ClockSource fallback_source = MQTTConnectionPolicy::ClockSource::None;
   if (!ntp_ok) {
     const unsigned long system_time = (unsigned long)time(nullptr);
     // On a cold boot with a detected RTC chip these disagree: ESP32RTCClock::begin()
@@ -4826,11 +4845,11 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
     // it is; taking the placeholder for a clock would mint logins nine months old.
     const unsigned long rtc_time = _rtc ? (unsigned long)_rtc->getCurrentTime() : 0;
     const uint32_t uptime_secs = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    const MQTTConnectionPolicy::ClockSource source = MQTTConnectionPolicy::chooseFallbackClock(
+    fallback_source = MQTTConnectionPolicy::chooseFallbackClock(
         primary_only, (uint32_t)system_time, (uint32_t)rtc_time, (uint32_t)kMinValidEpoch,
         neverSetClockBaseline(), uptime_secs);
-    if (source != MQTTConnectionPolicy::ClockSource::None) {
-      const bool from_rtc = (source == MQTTConnectionPolicy::ClockSource::Rtc);
+    if (fallback_source != MQTTConnectionPolicy::ClockSource::None) {
+      const bool from_rtc = (fallback_source == MQTTConnectionPolicy::ClockSource::Rtc);
       epochTime = from_rtc ? rtc_time : system_time;
       ntp_ok = true;
       MQTT_DEBUG_PRINTLN("No NTP server answered; continuing on the existing %s: %lu",
@@ -4850,10 +4869,18 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
     // time. Everything downstream reads time(nullptr) — the stale-token test below, and
     // the iat of every JWT minted from here on — so once _ntp_synced is true that call
     // has to already return the epoch we accepted.
-    struct timeval accepted;
-    accepted.tv_sec = (time_t)epochTime;
-    accepted.tv_usec = 0;
-    settimeofday(&accepted, nullptr);
+    //
+    // The system clock taken as its own fallback already holds this time. It is written
+    // once, to hand the time to a clock chip, and not again: each write drops the
+    // fraction of a second, and the retry comes every 30 s until a server answers.
+    const bool write_clock = MQTTConnectionPolicy::acceptedClockNeedsWriting(
+        server_answered, fallback_source, _clock_trust);
+    if (write_clock) {
+      struct timeval accepted;
+      accepted.tv_sec = (time_t)epochTime;
+      accepted.tv_usec = 0;
+      settimeofday(&accepted, nullptr);
+    }
 
     // Keep the process timezone at UTC without starting lwIP's SNTP. This used
     // to be configTime(0, 0, ntp_server_used), whose timezone side effect is all
@@ -4864,24 +4891,26 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
     setenv("TZ", "UTC0", 1);
     tzset();
 
-    if (_rtc) {
+    if (_rtc && write_clock) {
       _rtc->setCurrentTime(epochTime);
     }
 
     s_never_set_clock_magic = 0;  // the clock is somebody's now
 
-    bool was_ntp_synced = _ntp_synced;
+    // Slots already minted from a clock only if it was usable before this sync.
+    const bool had_clock = MQTTConnectionPolicy::jwtClockAvailable(_clock_trust);
+    _clock_trust = MQTTConnectionPolicy::clockTrustAfterSync(_clock_trust, server_answered, true);
     _ntp_synced = true;
     _last_ntp_sync = millis();
     sync_in_progress = false;
 
     MQTT_DEBUG_PRINTLN("Time synced: %lu (via %s)", epochTime,
-        ntp_server_used ? ntp_server_used : "existing clock");
+        ntp_server_used ? ntp_server_used : "existing clock, not verified by a server");
 
     // If slots are already set up and the time jumped significantly (e.g., SNTP
     // initially returned stale RTC time, then a later sync corrected it), re-issue
     // credentials for every JWT slot the correction left holding an expired token.
-    if (_slots_setup_done && was_ntp_synced) {
+    if (_slots_setup_done && had_clock) {
       unsigned long current_time = (unsigned long)time(nullptr);
       // Every slot, not _max_active_slots: that is a count of positions, never an
       // index bound. Which indices hold those positions is not contiguous — a slot can
@@ -4956,6 +4985,13 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
   }
 
   MQTT_DEBUG_PRINTLN("NTP sync failed");
+  if (!primary_only) {
+    // No server and no clock. The pass is still over: the slots that need no clock may
+    // start, and the 30 s retry goes on because nothing was verified. Not on the
+    // validation path, which asks about one server and settles nothing else.
+    _ntp_synced = true;
+    _last_ntp_sync = millis();
+  }
   sync_in_progress = false;
   return false;
 }

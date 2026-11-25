@@ -203,10 +203,54 @@ TEST(MQTTConnectionPolicy, RenewalThrottleHasExactBoundaryAndHandlesRollover) {
   EXPECT_TRUE(Policy::renewalAttemptAllowed(30000U, last));
 }
 
-TEST(MQTTConnectionPolicy, JwtClockNeedsNtpOrAReasonableWallClock) {
-  EXPECT_FALSE(Policy::jwtClockAvailable(false, Policy::kJwtClockThreshold - 1U));
-  EXPECT_TRUE(Policy::jwtClockAvailable(false, Policy::kJwtClockThreshold));
-  EXPECT_TRUE(Policy::jwtClockAvailable(true, 0U));
+using Policy::ClockTrust;
+
+TEST(ClockTrust, AJwtSlotWaitsForAClockSomebodySet) {
+  EXPECT_FALSE(Policy::jwtClockAvailable(ClockTrust::NeverSet));
+  // Kept over a soft reset, read from a chip or set by hand: good enough to try.
+  EXPECT_TRUE(Policy::jwtClockAvailable(ClockTrust::Unverified));
+  EXPECT_TRUE(Policy::jwtClockAvailable(ClockTrust::Verified));
+}
+
+TEST(ClockTrust, APasswordSlotNeedsNoClock) {
+  EXPECT_TRUE(Policy::slotMayStart(false, ClockTrust::NeverSet));
+  EXPECT_TRUE(Policy::slotMayStart(false, ClockTrust::Unverified));
+  EXPECT_TRUE(Policy::slotMayStart(false, ClockTrust::Verified));
+  EXPECT_FALSE(Policy::slotMayStart(true, ClockTrust::NeverSet));
+  EXPECT_TRUE(Policy::slotMayStart(true, ClockTrust::Unverified));
+  EXPECT_TRUE(Policy::slotMayStart(true, ClockTrust::Verified));
+}
+
+TEST(ClockTrust, OnlyAServersAnswerVerifies) {
+  EXPECT_FALSE(Policy::clockVerified(ClockTrust::NeverSet));
+  EXPECT_FALSE(Policy::clockVerified(ClockTrust::Unverified));
+  EXPECT_TRUE(Policy::clockVerified(ClockTrust::Verified));
+
+  EXPECT_EQ(ClockTrust::Verified, Policy::clockTrustAfterSync(ClockTrust::NeverSet, true, false));
+  EXPECT_EQ(ClockTrust::Verified, Policy::clockTrustAfterSync(ClockTrust::Unverified, true, false));
+  EXPECT_EQ(ClockTrust::Verified, Policy::clockTrustAfterSync(ClockTrust::Verified, true, true));
+}
+
+TEST(ClockTrust, AFallbackClockIsBelievedButNotVerified) {
+  EXPECT_EQ(ClockTrust::Unverified,
+            Policy::clockTrustAfterSync(ClockTrust::NeverSet, false, true));
+  EXPECT_EQ(ClockTrust::Unverified,
+            Policy::clockTrustAfterSync(ClockTrust::Unverified, false, true));
+}
+
+TEST(ClockTrust, NoServerAndNoClockChangesNothing) {
+  EXPECT_EQ(ClockTrust::NeverSet,
+            Policy::clockTrustAfterSync(ClockTrust::NeverSet, false, false));
+  EXPECT_EQ(ClockTrust::Unverified,
+            Policy::clockTrustAfterSync(ClockTrust::Unverified, false, false));
+}
+
+TEST(ClockTrust, OneAnswerVerifiesForGood) {
+  // The hourly refresh reaching no server does not start the 30 s asking again.
+  EXPECT_EQ(ClockTrust::Verified,
+            Policy::clockTrustAfterSync(ClockTrust::Verified, false, true));
+  EXPECT_EQ(ClockTrust::Verified,
+            Policy::clockTrustAfterSync(ClockTrust::Verified, false, false));
 }
 
 TEST(MQTTConnectionPolicy, WifiBackoffLadderStartsAtFifteenSecondsAndSaturates) {
@@ -459,6 +503,17 @@ TEST(FallbackClock, TheFloorItselfIsAccepted) {
             Policy::chooseFallbackClock(false, kFloor - 1, kFloor, kFloor, 0, 0));
   EXPECT_EQ(ClockSource::None,
             Policy::chooseFallbackClock(false, kFloor - 1, kFloor - 1, kFloor, 0, 0));
+}
+
+TEST(FallbackClock, TheSystemClockIsNotWrittenBackOnEveryRetry) {
+  // A server's answer and a chip's reading are always written.
+  EXPECT_TRUE(Policy::acceptedClockNeedsWriting(true, ClockSource::None, ClockTrust::Verified));
+  EXPECT_TRUE(Policy::acceptedClockNeedsWriting(false, ClockSource::Rtc, ClockTrust::Unverified));
+  // The system clock as its own fallback: once, so a chip gets it, then left alone.
+  EXPECT_TRUE(Policy::acceptedClockNeedsWriting(false, ClockSource::System, ClockTrust::NeverSet));
+  EXPECT_FALSE(
+      Policy::acceptedClockNeedsWriting(false, ClockSource::System, ClockTrust::Unverified));
+  EXPECT_FALSE(Policy::acceptedClockNeedsWriting(false, ClockSource::System, ClockTrust::Verified));
 }
 
 int main(int argc, char** argv) {

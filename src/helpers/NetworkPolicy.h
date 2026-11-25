@@ -150,15 +150,23 @@ static inline const char* diagnosticReasonName(
   return "unknown";
 }
 
+// `verified` is "an NTP server has answered", not "the node has a clock": a node running
+// on a fallback clock, or on none, keeps asking until a server answers.
 static constexpr bool ntpPendingAfterConnectivitySample(
-    bool synced, bool pending, bool was_connected, bool connected) {
-  return pending || (!synced && connected && !was_connected);
+    bool verified, bool pending, bool was_connected, bool connected) {
+  return pending || (!verified && connected && !was_connected);
 }
 
-static constexpr bool ntpRetryDue(bool synced, bool connected,
+static constexpr bool ntpRetryDue(bool verified, bool connected,
                                   uint32_t now_ms, uint32_t last_attempt_ms) {
-  return !synced && connected &&
+  return !verified && connected &&
          (uint32_t)(now_ms - last_attempt_ms) >= kNtpRetryMs;
+}
+
+// A retry while the node already runs on a clock asks each server once: the slots are
+// up, and the walk blocks the task that publishes for them.
+static constexpr int ntpRetryAttemptsPerServer(bool clock_usable) {
+  return clock_usable ? 1 : 2;
 }
 
 static constexpr NetworkMedium bootSelection(bool ethernet_connected,

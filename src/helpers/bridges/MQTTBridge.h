@@ -17,6 +17,7 @@
 #include "helpers/AlertFaultPolicy.h"
 #include "helpers/MQTTEffectiveConfig.h"
 #include "helpers/MQTTClientState.h"
+#include "helpers/MQTTConnectionPolicy.h"   // ClockTrust
 #include <atomic>
 
 #ifdef WITH_SNMP
@@ -274,7 +275,10 @@ private:
   // probeNtpServer); nothing listens between syncs.
   WiFiUDP _ntp_udp;
   unsigned long _last_ntp_sync;
+  // The first time sync has finished and slots may be set up. Not "the clock is right":
+  // that is _clock_trust, and only Verified stops the 30 s retry.
   bool _ntp_synced;
+  MQTTConnectionPolicy::ClockTrust _clock_trust;
   bool _ntp_sync_pending;  // Flag to trigger NTP sync from loop() instead of event handler
   bool _slots_setup_done;  // Deferred: slots set up after NTP sync
   int _max_active_slots;   // Runtime limit: 5 with PSRAM, 2 without

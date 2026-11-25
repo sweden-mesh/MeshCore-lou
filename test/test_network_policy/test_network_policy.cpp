@@ -177,6 +177,22 @@ TEST(NetworkPolicy, FailedNtpSyncWaitsForThirtySecondRetryBoundary) {
   EXPECT_TRUE(NetworkPolicy::ntpRetryDue(false, true, 10, 0xffff8000u));
 }
 
+TEST(NetworkPolicy, NtpKeepsAskingUntilAServerHasAnswered) {
+  // The flag is "a server answered". A node on a fallback clock is not verified, so the
+  // 30 s retry and the sync on a link coming up both go on; one answer ends them.
+  const bool unverified = false, verified = true;
+  EXPECT_TRUE(NetworkPolicy::ntpRetryDue(unverified, true, 30000, 0));
+  EXPECT_TRUE(NetworkPolicy::ntpRetryDue(unverified, true, 90000, 60000));
+  EXPECT_FALSE(NetworkPolicy::ntpRetryDue(verified, true, 90000, 0));
+  EXPECT_TRUE(NetworkPolicy::ntpPendingAfterConnectivitySample(unverified, false, false, true));
+  EXPECT_FALSE(NetworkPolicy::ntpPendingAfterConnectivitySample(verified, false, false, true));
+}
+
+TEST(NetworkPolicy, ARetryOnARunningClockAsksEachServerOnce) {
+  EXPECT_EQ(2, NetworkPolicy::ntpRetryAttemptsPerServer(false));
+  EXPECT_EQ(1, NetworkPolicy::ntpRetryAttemptsPerServer(true));
+}
+
 TEST(NetworkPolicy, StartOtaUsesReachableSelectedNetworkByDefault) {
   EXPECT_TRUE(NetworkPolicy::startOtaUsesSelectedNetwork(false, true));
   EXPECT_FALSE(NetworkPolicy::startOtaUsesSelectedNetwork(false, false));
