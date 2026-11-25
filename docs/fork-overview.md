@@ -1,8 +1,9 @@
 # The fork: MeshCore Observer with auto-reply and signed remote control
 
 **This is the standard [MeshCore Observer](https://observer.gessaman.com/) firmware, plus two
-features**, each of which an image may or may not carry: from lou-14 they are built in any
-combination ([fork.md](fork.md)), and an image's version says which (`...-lou-14-arrc-...`).
+features**. From lou-21 an Observer image carries both, each off until a setting switches it
+on; up to lou-20 an image carried one or both, and its version says which
+(`...-lou-14-arrc-...`, [fork.md](fork.md)).
 Core MeshCore images of the fork carry auto-reply, remote control over the mesh, or both.
 
 Everything Observer does is still here and unchanged — MQTT uplink to all six broker slots,
@@ -82,7 +83,8 @@ services, and stays yours; the command key is one key for all of one owner's nod
 
 To turn it off again: `set cmd off`.
 
-Coming from lou-18, where these were `mqtt.cmd`: [Upgrading from lou-18](mqtt-control.md#upgrading-from-lou-18).
+Coming from lou-20 or older (lou-18 named these `mqtt.cmd`):
+[Upgrading to lou-21](mqtt-control.md#upgrading-to-lou-21).
 
 ### What else the plane does (lou-20)
 
@@ -103,9 +105,10 @@ Each is described in [`docs/mqtt-control.md`](mqtt-control.md); the links go to 
 In this order, and it stops at the first failure:
 
 1. the feature is on, and a command key is provisioned
-2. the **Ed25519 signature** verifies against that key — over the topic *and* the payload
-   together, so a command signed for one node cannot be replayed at another, and a per-node
-   command cannot be replayed as a broadcast
+2. the command opens under the key the node shares with its owner, and the **Ed25519
+   signature** inside verifies against the command key. The signature covers the node's own
+   key and the road, so a command signed for one node cannot be replayed at another, and one
+   sent over MQTT cannot be replayed over the mesh
 3. the **counter** is strictly greater than the highest one this node has stored — a captured
    command cannot be replayed later. The counter is stored *before* the command runs
 4. the command has **not expired**, and a node with no trusted clock fails closed
@@ -117,8 +120,8 @@ In this order, and it stops at the first failure:
 
 Two things are deliberately out of reach of the remote path no matter what it carries:
 `set prv.key`, `erase` and `set cmd.pubkey`, which require a locally-privileged caller (or,
-for a keyless node's first key only, a remote admin); and a broadcast that would make every node
-transmit at once. Nor does a remote admin start what opens the board to anyone in Wi-Fi or BLE
+for a keyless node's first key only, a remote admin); and a publish that would make every node
+transmit at once, because no topic is addressed to more than one node. Nor does a remote admin start what opens the board to anyone in Wi-Fi or BLE
 range with no password of its own: `start ota` on ESP32 (the OTA hotspot and uploader) and the
 web portal's setup access point (`start webconfig ap`, or `start webconfig` with no
 network to join) answer only serial and the local console. On nRF52 a remote admin still
@@ -132,9 +135,9 @@ key, so a stranger's guesses do not lock the owner out, and it is cleared by a r
 ### What this does not defend against
 
 **Availability.** Anyone can flood the broker, and the node's rate limit is what bounds the
-airtime that costs you — not the broker traffic. **Confidentiality of old-scheme commands.** From lou-20
-commands and results are sealed between the node and the holder of its command key; only the
-old v1 scheme, accepted until lou-21, is readable on the broker.
+airtime that costs you — not the broker traffic. **Who is addressed, and when.** Commands and
+results are sealed between the node and the holder of its command key, and the broker reads
+neither. It still sees which node a message is for, when it came and how long it is.
 
 Full detail, including the wire format and every refusal code, is in
 [`docs/mqtt-control.md`](mqtt-control.md).

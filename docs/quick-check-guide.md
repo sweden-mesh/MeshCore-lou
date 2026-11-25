@@ -29,6 +29,11 @@ features the node has ([`fork.md`](fork.md)):
 | 9 Automatic updates | yes | yes | yes | -- (no pull OTA) |
 | 11 On-site checks | all | auto-reply, MQTT counters, phone test | command plane, MQTT counters | auto-reply, phone test |
 
+From lou-21 an Observer board has one image, `arrc`. The `ar (Observer)` column, and `rc` for
+an Observer board, are for nodes still on an older release. A node that reached `arrc` by its
+own update from `ar` or `rc` has the feature it lacked switched off: section 7 or 8 turns it
+on.
+
 On core MeshCore the image is flashed as upstream's are (a `.uf2` or `.zip` for nRF52), not by
 the Observer flasher.
 
@@ -421,7 +426,7 @@ count the requests heard since the last restart.
 
 The node sends no alive message, so the tools do not find it: add it by its whole public key
 (`get public.key`, step 1). Then send one command, through your own companion radio or
-through an Observer node of yours on lou-20 (the relay):
+through an Observer node of yours on lou-20 or later (the relay):
 
 ```
 mccontrol add <name> <64 hex public key>
@@ -475,8 +480,8 @@ get mqtt.status                -> > msgs: on, 1: meshat.se (ok), <slot>: mccontr
 ```
 
 In `get mqtt.status`, `(wait)` means the slot is still waiting for WiFi or the clock: read
-again in 30 s. `(disc)` or `(fail)`: see the symptom table. A board with PSRAM may list
-`2: analyzer-eu (ok)` as well.
+again in 30 s. `(no clock)` or `(refused: clock?)` (lou-21), `(disc)` or `(fail)`: see the
+symptom table. A board with PSRAM may list `2: analyzer-eu (ok)` as well.
 
 ## 11. On-site checks
 
@@ -551,8 +556,7 @@ try again.
 From anywhere with a network connection:
 
 ```
-mccontrol discover --add          # lou-20: your nodes, from their alive messages
-mccontrol discover <IATA> --add   # lou-19 and older
+mccontrol discover --add          # your nodes, from their alive messages
 mccontrol send <node> ver         # <...>-<version> (Build: <date>)
 mccontrol send <node> get autoreply
 ```
@@ -580,6 +584,9 @@ The `ver` reply must not carry `(unsigned)` or `BAD SIGNATURE`. A signed answer 
 | `get wifi.status` shows `no_ssid` / `connect_failed` | `set wifi.ssid` / `set wifi.pwd` again, `reboot` |
 | `get cmd` shows `no slot` | step 8 not done, or `set cmd.slot 0` was the last command: do 8b step 3 |
 | `get cmd` shows `not connected` | the plane's slot in `get mqtt.status`; WiFi; clock |
-| `get cmd` shows `not subscribed` or `ping no pong in 10 s` | read again after a minute; if it stays, the broker side needs a look; the node is still configured right |
+| `get mqtt.status` shows `(refused: clock?)` (lou-21) | the broker refused the slot's token and no NTP server has confirmed the clock. `get mqttN.diag` says `clock not verified: run time <epoch> or check NTP`. The node retries the time sync every 30 s; if it stays, `get mqtt.ntp`, the network's NTP, or `time <epoch>` on the console |
+| `get mqtt.status` shows `(no clock)` (lou-21) | the clock was never set, and a token slot waits for one: the same cure |
+| `get cmd` shows `/cmd not subscribed` | the broker has not answered the subscription yet: read again after a minute |
 | `get cmd` shows `/cmd refused` (lou-21) | the command server refused the plane's topic to this login: `set cmd on`, `reboot` |
+| `get cmd` shows `/cmd subscribed` and `ping no pong in 10 s` | send `cmd ping` again after a minute; if it stays, the broker side needs a look; the node is configured right |
 | mccontrol gets no answer later | `cmd ping` on the node first; then check `get cmd.pubkey` is your key |
