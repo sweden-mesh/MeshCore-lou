@@ -368,4 +368,45 @@ static inline bool acceptedClockNeedsWriting(bool server_answered, ClockSource f
   return server_answered || fallback == ClockSource::Rtc || before == ClockTrust::NeverSet;
 }
 
+// A refused login asks for a time sync: a token minted from a wrong clock is refused as
+// expired or not yet valid, and the broker's refusal is the only word of it the node gets.
+// One slot's run of refusals with no connection between them is a streak.
+struct RefusalResyncState {
+  uint8_t refused;      // refusals in this streak, saturating
+  bool synced;          // a sync was asked for in this streak
+  uint8_t synced_step;  // the reconnect backoff step it was asked at
+};
+
+// Several slots refused in the same minute share one sync.
+static const uint32_t kRefusalResyncMinGapSecs = 60UL;
+
+static inline void refusalStreakNote(RefusalResyncState& st) {
+  if (st.refused < 0xFF) st.refused++;
+}
+
+static inline void refusalStreakEnded(RefusalResyncState& st) {
+  st.refused = 0;
+  st.synced = false;
+  st.synced_step = 0;
+}
+
+// Not one sync per attempt. A clock no server has confirmed is asked about once per
+// backoff step of the streak; a verified clock once per streak, because the broker may
+// still be right (a server answered long ago and the clock has since been set wrong).
+// `secs_since_forced` is the time since the last sync a refusal asked for, on any slot;
+// pass UINT32_MAX when there has been none.
+static inline bool refusalResyncDue(const RefusalResyncState& st, uint8_t backoff_step,
+                                    bool clock_verified, uint32_t secs_since_forced) {
+  if (st.refused == 0) return false;
+  if (secs_since_forced < kRefusalResyncMinGapSecs) return false;
+  if (!st.synced) return true;
+  if (clock_verified) return false;
+  return backoff_step != st.synced_step;
+}
+
+static inline void refusalResyncTaken(RefusalResyncState& st, uint8_t backoff_step) {
+  st.synced = true;
+  st.synced_step = backoff_step;
+}
+
 } // namespace MQTTConnectionPolicy

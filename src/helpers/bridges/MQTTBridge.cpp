@@ -795,6 +795,8 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, MQTTPrefs *obs, mesh::PacketManager *mg
     _slots[i].allocated_buffer_size = 0;
     _slot_reconfigure_pending[i] = false;
     _slot_force_jwt_mint[i] = false;
+    _slot_refused_pending[i] = false;
+    MQTTConnectionPolicy::refusalStreakEnded(_slot_refusal_resync[i]);
     _status_publish_pending[i] = false;
     _slot_attempt_pending[i] = false;
   }
@@ -1394,6 +1396,8 @@ void MQTTBridge::mqttTaskLoop() {
   // initializing from the live value would then defer NTP until its retry.
   bool network_was_connected = false;
   unsigned long last_ntp_attempt = 0;
+  unsigned long last_refusal_resync = 0;
+  bool refusal_resync_ever = false;
 
   // Main task loop
   #ifdef MQTT_MEMORY_DEBUG
@@ -1499,6 +1503,40 @@ void MQTTBridge::mqttTaskLoop() {
       syncTimeWithNTP(/*force=*/false, /*primary_only=*/false,
                       NetworkPolicy::ntpRetryAttemptsPerServer(
                           MQTTConnectionPolicy::jwtClockAvailable(_clock_trust)));
+    }
+
+    // A refused login asks for a time sync, at most one per backoff step of a slot's
+    // streak of refusals (one per streak once a server has verified the clock).
+    bool refusal_resync = false;
+    for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) {
+      if (_slots[i].connected) {
+        MQTTConnectionPolicy::refusalStreakEnded(_slot_refusal_resync[i]);
+      }
+      if (!_slot_refused_pending[i]) continue;
+      _slot_refused_pending[i] = false;
+      const bool slot_jwt = (_slots[i].preset && _slots[i].preset->auth_type == MQTT_AUTH_JWT) ||
+                            (!_slots[i].preset && _slots[i].audience[0] != '\0');
+      if (!_slots[i].enabled || !slot_jwt) continue;  // a password does not depend on the clock
+      MQTTConnectionPolicy::refusalStreakNote(_slot_refusal_resync[i]);
+      const uint32_t since_secs = refusal_resync_ever
+          ? (uint32_t)(now - last_refusal_resync) / 1000UL : UINT32_MAX;
+      // Not stopped by an earlier slot in this pass: the one sync below is theirs too.
+      if (MQTTConnectionPolicy::refusalResyncDue(
+              _slot_refusal_resync[i], _slots[i].reconnect_backoff,
+              MQTTConnectionPolicy::clockVerified(_clock_trust), since_secs)) {
+        MQTTConnectionPolicy::refusalResyncTaken(_slot_refusal_resync[i],
+                                                 _slots[i].reconnect_backoff);
+        refusal_resync = true;
+        MQTT_DEBUG_PRINTLN("MQTT%d was refused: asking the NTP servers again", i + 1);
+      }
+    }
+    if (refusal_resync && network_connected) {
+      refusal_resync_ever = true;
+      last_refusal_resync = now;
+      last_ntp_attempt = now;
+      // Every server, once each, as the hourly refresh does. A corrected clock mends the
+      // tokens in syncTimeWithNTP(); the refusal already made the slot mint a new one.
+      syncTimeWithNTP(/*force=*/true, /*primary_only=*/false, /*attempts_per_server=*/1);
     }
 
     // Process a CLI-requested forced NTP sync (queued from Core 1). Running it here
@@ -1858,6 +1896,9 @@ bool MQTTBridge::ensureSlotClient(int index) {
             ? (uint8_t)error.connect_return_code : 0;
     if (error.error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
       _slot_force_jwt_mint[index] = true;
+      // The clock may be why. This is the MQTT library's task: only a flag, and the
+      // bridge task decides whether a time sync is due.
+      _slot_refused_pending[index] = true;
       // Broker rejected the MQTT CONNECT itself — not a transport failure.
       // return code: 1=protocol, 2=client-id rejected, 3=server unavailable,
       // 4=bad username/password, 5=not authorized. Codes 3/4/5 point at a
@@ -2572,6 +2613,8 @@ void MQTTBridge::teardownSlot(int index, TeardownReason reason) {
   slot.last_deferred_log_ms = 0;
   // The refusal that set this belonged to the credentials being cleared here.
   _slot_force_jwt_mint[index] = false;
+  _slot_refused_pending[index] = false;
+  MQTTConnectionPolicy::refusalStreakEnded(_slot_refusal_resync[index]);
 }
 
 // A stopped client needs connect(): reconnect() is a documented no-op on one, so reaching

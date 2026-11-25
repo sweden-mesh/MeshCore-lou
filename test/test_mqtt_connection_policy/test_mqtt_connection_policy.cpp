@@ -516,6 +516,77 @@ TEST(FallbackClock, TheSystemClockIsNotWrittenBackOnEveryRetry) {
   EXPECT_FALSE(Policy::acceptedClockNeedsWriting(false, ClockSource::System, ClockTrust::Verified));
 }
 
+using Policy::RefusalResyncState;
+static const uint32_t kNoForcedSyncYet = 0xFFFFFFFFu;
+
+TEST(RefusalResync, NoRefusalAsksForNothing) {
+  RefusalResyncState st = {};
+  EXPECT_FALSE(Policy::refusalResyncDue(st, 0, false, kNoForcedSyncYet));
+  EXPECT_FALSE(Policy::refusalResyncDue(st, 3, true, kNoForcedSyncYet));
+}
+
+TEST(RefusalResync, TheFirstRefusalOfAStreakAsksWhateverTheClock) {
+  RefusalResyncState st = {};
+  Policy::refusalStreakNote(st);
+  EXPECT_TRUE(Policy::refusalResyncDue(st, 0, false, kNoForcedSyncYet));
+  // A verified clock too: the broker may be right.
+  EXPECT_TRUE(Policy::refusalResyncDue(st, 0, true, kNoForcedSyncYet));
+}
+
+TEST(RefusalResync, NotOncePerAttempt) {
+  RefusalResyncState st = {};
+  Policy::refusalStreakNote(st);
+  Policy::refusalResyncTaken(st, 1);
+  // Refused twice more on the same backoff step, long after the sync.
+  Policy::refusalStreakNote(st);
+  EXPECT_FALSE(Policy::refusalResyncDue(st, 1, false, 600));
+  Policy::refusalStreakNote(st);
+  EXPECT_FALSE(Policy::refusalResyncDue(st, 1, false, 6000));
+}
+
+TEST(RefusalResync, AnUnverifiedClockAsksAgainOnEachBackoffStep) {
+  RefusalResyncState st = {};
+  Policy::refusalStreakNote(st);
+  Policy::refusalResyncTaken(st, 1);
+  Policy::refusalStreakNote(st);
+  EXPECT_TRUE(Policy::refusalResyncDue(st, 2, false, 600));
+  Policy::refusalResyncTaken(st, 2);
+  EXPECT_FALSE(Policy::refusalResyncDue(st, 2, false, 600));
+  // The ladder ends at step 4 and stays there: one sync, then no more.
+  Policy::refusalResyncTaken(st, 4);
+  Policy::refusalStreakNote(st);
+  EXPECT_FALSE(Policy::refusalResyncDue(st, 4, false, 600));
+}
+
+TEST(RefusalResync, AVerifiedClockAsksOncePerStreak) {
+  RefusalResyncState st = {};
+  Policy::refusalStreakNote(st);
+  Policy::refusalResyncTaken(st, 0);
+  Policy::refusalStreakNote(st);
+  EXPECT_FALSE(Policy::refusalResyncDue(st, 1, true, 600));
+  EXPECT_FALSE(Policy::refusalResyncDue(st, 4, true, 86400));
+  // A connection ends the streak, and the next refusal starts a new one.
+  Policy::refusalStreakEnded(st);
+  EXPECT_FALSE(Policy::refusalResyncDue(st, 0, true, 86400));
+  Policy::refusalStreakNote(st);
+  EXPECT_TRUE(Policy::refusalResyncDue(st, 0, true, 86400));
+}
+
+TEST(RefusalResync, SlotsRefusedTogetherShareOneSync) {
+  RefusalResyncState other = {};
+  Policy::refusalStreakNote(other);
+  EXPECT_FALSE(Policy::refusalResyncDue(other, 0, false, 0));
+  EXPECT_FALSE(Policy::refusalResyncDue(other, 0, false, Policy::kRefusalResyncMinGapSecs - 1));
+  EXPECT_TRUE(Policy::refusalResyncDue(other, 0, false, Policy::kRefusalResyncMinGapSecs));
+}
+
+TEST(RefusalResync, TheRefusalCountSaturates) {
+  RefusalResyncState st = {};
+  for (int i = 0; i < 300; i++) Policy::refusalStreakNote(st);
+  EXPECT_EQ(255, st.refused);
+  EXPECT_TRUE(Policy::refusalResyncDue(st, 0, true, kNoForcedSyncYet));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

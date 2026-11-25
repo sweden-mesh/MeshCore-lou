@@ -290,6 +290,11 @@ private:
   // callback sets this and the bridge loop consumes it; byte access is atomic.
   volatile bool _slot_force_jwt_mint[RUNTIME_MQTT_SLOTS];
 
+  // A refusal also asks for a time sync (the clock may be why). Set by the same
+  // callback, consumed by the bridge task, which owns the streak state beside it.
+  volatile bool _slot_refused_pending[RUNTIME_MQTT_SLOTS];
+  MQTTConnectionPolicy::RefusalResyncState _slot_refusal_resync[RUNTIME_MQTT_SLOTS];
+
   // Pending on-connect status publish: set from the onConnect callback (which
   // runs on the esp-mqtt event task, NOT this bridge task), consumed by the MQTT
   // task (Core 0). publishStatusToSlot() touches the shared status doc/buffer/
