@@ -28,6 +28,8 @@
 #include <esp_tls.h>
 #include <esp_random.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
+#include "../ESP32Board.h"   // RTC_TIME_MIN, pinned against the policy's copy below
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -4607,6 +4609,30 @@ void MQTTBridge::refreshNTP() {
   syncTimeWithNTP(/*force=*/true, /*primary_only=*/false, /*attempts_per_server=*/1);
 }
 
+// A never-set clock, remembered across a soft reset. ESP32RTCClock::begin() restores the
+// clock after one, so a node that ran ten minutes on the power-on placeholder comes back
+// ten minutes past it with its uptime at zero, and the placeholder alone would call that
+// a set clock. A power cycle scrambles these, and the magic then fails.
+static RTC_NOINIT_ATTR uint32_t s_never_set_clock_time;
+static RTC_NOINIT_ATTR uint32_t s_never_set_clock_magic;
+static const uint32_t kNeverSetClockMagic = 0x4E53434BUL;
+
+static_assert(MQTTConnectionPolicy::kPowerOnClockEpoch == RTC_TIME_MIN,
+              "kPowerOnClockEpoch must be what ESP32RTCClock::begin() seeds the clock with");
+
+static uint32_t neverSetClockBaseline() {
+  if (s_never_set_clock_magic == kNeverSetClockMagic &&
+      s_never_set_clock_time > MQTTConnectionPolicy::kPowerOnClockEpoch) {
+    return s_never_set_clock_time;
+  }
+  return MQTTConnectionPolicy::kPowerOnClockEpoch;
+}
+
+static void rememberNeverSetClock(uint32_t system_time) {
+  s_never_set_clock_time = system_time;
+  s_never_set_clock_magic = kNeverSetClockMagic;
+}
+
 // One validated NTP exchange with one named server, on a fresh ephemeral socket.
 //
 // Replaces NTPClient, which accepted any datagram that arrived on its fixed
@@ -4794,18 +4820,25 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
   if (!ntp_ok) {
     const unsigned long system_time = (unsigned long)time(nullptr);
     // On a cold boot with a detected RTC chip these disagree: ESP32RTCClock::begin()
-    // stamps libc with a 2024 placeholder on power-on, AutoDiscoverRTCClock::begin()
-    // never copies the chip into it, and getCurrentTime() reads the chip. Asking libc
-    // alone would reject a board that knows exactly what time it is.
+    // stamps libc with its power-on placeholder (1 March 2026, past kMinValidEpoch),
+    // AutoDiscoverRTCClock::begin() never copies the chip into it, and getCurrentTime()
+    // reads the chip. Asking libc alone would reject a board that knows exactly what time
+    // it is; taking the placeholder for a clock would mint logins nine months old.
     const unsigned long rtc_time = _rtc ? (unsigned long)_rtc->getCurrentTime() : 0;
+    const uint32_t uptime_secs = (uint32_t)(esp_timer_get_time() / 1000000LL);
     const MQTTConnectionPolicy::ClockSource source = MQTTConnectionPolicy::chooseFallbackClock(
-        primary_only, (uint32_t)system_time, (uint32_t)rtc_time, (uint32_t)kMinValidEpoch);
+        primary_only, (uint32_t)system_time, (uint32_t)rtc_time, (uint32_t)kMinValidEpoch,
+        neverSetClockBaseline(), uptime_secs);
     if (source != MQTTConnectionPolicy::ClockSource::None) {
       const bool from_rtc = (source == MQTTConnectionPolicy::ClockSource::Rtc);
       epochTime = from_rtc ? rtc_time : system_time;
       ntp_ok = true;
       MQTT_DEBUG_PRINTLN("No NTP server answered; continuing on the existing %s: %lu",
           from_rtc ? "RTC" : "system clock", epochTime);
+    } else if (!primary_only) {
+      // Still the placeholder counting up: keep the reading for the next boot.
+      rememberNeverSetClock((uint32_t)system_time);
+      MQTT_DEBUG_PRINTLN("No NTP server answered and the clock was never set: %lu", system_time);
     }
   }
 
@@ -4834,6 +4867,8 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
     if (_rtc) {
       _rtc->setCurrentTime(epochTime);
     }
+
+    s_never_set_clock_magic = 0;  // the clock is somebody's now
 
     bool was_ntp_synced = _ntp_synced;
     _ntp_synced = true;

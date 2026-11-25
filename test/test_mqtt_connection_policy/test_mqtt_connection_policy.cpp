@@ -348,44 +348,117 @@ TEST(StaleToken, FailedMintNeverReconnects) {
 
 using Policy::ClockSource;
 
-// 2026-01-01, the bridge's plausibility floor, and the 2024 placeholder
-// ESP32RTCClock::begin() stamps into libc on a power-on reset.
+// 2026-01-01, the bridge's plausibility floor, and what ESP32RTCClock::begin() stamps
+// into libc on a power-on reset (RTC_TIME_MIN, 1 March 2026): past the floor, so only
+// clockNeverSet() tells it from a clock somebody set.
 static const uint32_t kFloor = 1767225600;
-static const uint32_t kPowerOnPlaceholder = 1715770351;
-static const uint32_t kPlausibleNow = 1786000000;
+static const uint32_t kPowerOn = Policy::kPowerOnClockEpoch;
+static const uint32_t kPlausibleNow = 1795000000;
+static const uint32_t kMargin = Policy::kClockNeverSetMarginSecs;
+
+TEST(FallbackClock, ThePowerOnValueIsTheBoardsOwn) {
+  // The number in ESP32Board.h; MQTTBridge.cpp static_asserts the header against it.
+  EXPECT_EQ(1772323200u, Policy::kPowerOnClockEpoch);
+  EXPECT_GT(Policy::kPowerOnClockEpoch, kFloor);
+}
+
+TEST(ClockNeverSet, ThePlaceholderCountingUpWasNeverSet) {
+  EXPECT_TRUE(Policy::clockNeverSet(kPowerOn, kPowerOn, 0));
+  EXPECT_TRUE(Policy::clockNeverSet(kPowerOn + 40, kPowerOn, 40));
+  // A week up, nine months short of the real date.
+  EXPECT_TRUE(Policy::clockNeverSet(kPowerOn + 7 * 86400, kPowerOn, 7 * 86400));
+  // Earlier than the placeholder is no clock either.
+  EXPECT_TRUE(Policy::clockNeverSet(kPowerOn - 1, kPowerOn, 0));
+  EXPECT_TRUE(Policy::clockNeverSet(0, kPowerOn, 0));
+}
+
+TEST(ClockNeverSet, TheMarginIsExact) {
+  EXPECT_TRUE(Policy::clockNeverSet(kPowerOn + 30 + kMargin, kPowerOn, 30));
+  EXPECT_FALSE(Policy::clockNeverSet(kPowerOn + 30 + kMargin + 1, kPowerOn, 30));
+}
+
+TEST(ClockNeverSet, AClockThatWasSetIsFarPastThePlaceholder) {
+  EXPECT_FALSE(Policy::clockNeverSet(kPlausibleNow, kPowerOn, 0));
+  EXPECT_FALSE(Policy::clockNeverSet(kPlausibleNow, kPowerOn, 30 * 86400));
+  // Real time restored by a soft reset: uptime starts again, the clock does not.
+  EXPECT_FALSE(Policy::clockNeverSet(kPlausibleNow + 5, kPowerOn, 5));
+}
+
+TEST(ClockNeverSet, ASoftResetDoesNotLaunderANeverSetClock) {
+  // Ten minutes up on the placeholder, then a restart: the clock comes back at
+  // placeholder + 600 with the uptime at zero. Against the placeholder that looks set;
+  // against the reading carried over the reset it does not.
+  const uint32_t carried = kPowerOn + 600;
+  EXPECT_FALSE(Policy::clockNeverSet(carried + 20, kPowerOn, 20));
+  EXPECT_TRUE(Policy::clockNeverSet(carried + 20, carried, 20));
+  EXPECT_FALSE(Policy::clockNeverSet(kPlausibleNow, carried, 20));
+}
+
+TEST(ClockNeverSet, NoBaselineJudgesNothing) {
+  // A board that seeds no placeholder passes 0, and the floor alone decides.
+  EXPECT_FALSE(Policy::clockNeverSet(kPlausibleNow, 0, 3600));
+  // No wrap at the top of the range.
+  EXPECT_TRUE(Policy::clockNeverSet(0xFFFFFFFFu, 0xFFFFFFF0u, 0xFFFFFFFFu));
+}
 
 TEST(FallbackClock, PrefersTheSystemClockWhenItIsUsable) {
   // A clock SNTP set recently outranks an RTC that may have drifted.
   EXPECT_EQ(ClockSource::System,
-            Policy::chooseFallbackClock(false, kPlausibleNow, kPlausibleNow - 900, kFloor));
+            Policy::chooseFallbackClock(false, kPlausibleNow, kPlausibleNow - 900, kFloor,
+                                        kPowerOn, 3600));
 }
 
-TEST(FallbackClock, FallsBackToTheRtcOnAColdBoot) {
-  // The case the system-clock-only check missed: libc holds the power-on
-  // placeholder while a detected chip holds real time.
+TEST(FallbackClock, ANeverSetSystemClockIsNotAClock) {
+  // The lockout: a power cycle, no NTP server in reach, and logins minted from March.
+  EXPECT_EQ(ClockSource::None,
+            Policy::chooseFallbackClock(false, kPowerOn + 45, 0, kFloor, kPowerOn, 45));
+  // A board without a chip hands the same system clock in as its RTC.
+  EXPECT_EQ(ClockSource::None,
+            Policy::chooseFallbackClock(false, kPowerOn + 45, kPowerOn + 45, kFloor,
+                                        kPowerOn, 45));
+  EXPECT_EQ(ClockSource::None,
+            Policy::chooseFallbackClock(false, kPowerOn + 86400, kPowerOn + 86400, kFloor,
+                                        kPowerOn, 86400));
+}
+
+TEST(FallbackClock, AValidChipWinsOverANeverSetSystemClock) {
+  // A cold boot: libc holds the placeholder while a detected chip holds real time.
   EXPECT_EQ(ClockSource::Rtc,
-            Policy::chooseFallbackClock(false, kPowerOnPlaceholder, kPlausibleNow, kFloor));
+            Policy::chooseFallbackClock(false, kPowerOn + 45, kPlausibleNow, kFloor,
+                                        kPowerOn, 45));
+}
+
+TEST(FallbackClock, AClockThatSurvivedASoftResetIsKept) {
+  EXPECT_EQ(ClockSource::System,
+            Policy::chooseFallbackClock(false, kPlausibleNow, 0, kFloor, kPowerOn, 12));
+  EXPECT_EQ(ClockSource::System,
+            Policy::chooseFallbackClock(false, kPlausibleNow, kPlausibleNow, kFloor,
+                                        kPowerOn, 12));
 }
 
 TEST(FallbackClock, NothingUsableStaysUnsynced) {
   EXPECT_EQ(ClockSource::None,
-            Policy::chooseFallbackClock(false, kPowerOnPlaceholder, kPowerOnPlaceholder, kFloor));
+            Policy::chooseFallbackClock(false, kFloor - 5, kFloor - 5, kFloor, 0, 0));
   // rtc_time 0 is how a board with no clock to consult is passed in.
   EXPECT_EQ(ClockSource::None,
-            Policy::chooseFallbackClock(false, kPowerOnPlaceholder, 0, kFloor));
+            Policy::chooseFallbackClock(false, kFloor - 5, 0, kFloor, 0, 0));
 }
 
 TEST(FallbackClock, ServerValidationNeverAcceptsALocalClock) {
   // `set mqtt.ntp` asks whether that host answers. No clock can answer for it,
-  // however plausible — this is the path where a typo has to fail.
+  // however plausible: this is the path where a typo has to fail.
   EXPECT_EQ(ClockSource::None,
-            Policy::chooseFallbackClock(true, kPlausibleNow, kPlausibleNow, kFloor));
+            Policy::chooseFallbackClock(true, kPlausibleNow, kPlausibleNow, kFloor,
+                                        kPowerOn, 3600));
 }
 
 TEST(FallbackClock, TheFloorItselfIsAccepted) {
-  EXPECT_EQ(ClockSource::System, Policy::chooseFallbackClock(false, kFloor, 0, kFloor));
-  EXPECT_EQ(ClockSource::Rtc, Policy::chooseFallbackClock(false, kFloor - 1, kFloor, kFloor));
-  EXPECT_EQ(ClockSource::None, Policy::chooseFallbackClock(false, kFloor - 1, kFloor - 1, kFloor));
+  // With no placeholder to judge against, as on a board that seeds none.
+  EXPECT_EQ(ClockSource::System, Policy::chooseFallbackClock(false, kFloor, 0, kFloor, 0, 0));
+  EXPECT_EQ(ClockSource::Rtc,
+            Policy::chooseFallbackClock(false, kFloor - 1, kFloor, kFloor, 0, 0));
+  EXPECT_EQ(ClockSource::None,
+            Policy::chooseFallbackClock(false, kFloor - 1, kFloor - 1, kFloor, 0, 0));
 }
 
 int main(int argc, char** argv) {

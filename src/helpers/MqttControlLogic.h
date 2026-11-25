@@ -1292,9 +1292,12 @@ static inline bool mqttCtrlMeshCommandAllowed(const char* command, size_t len, b
   return mqttCtrlMeshAllowance(command, len) || mqttCtrlCommandAllowed(command, len, auto_reply);
 }
 
-// A node cut off from Wi-Fi may have lost NTP, and after a reboot its clock is the
-// firmware's 2024 default, against which every expiry is meaningless. Then the counter alone
-// stops a replay, as it does anyway (operator ruling 2026-11-16).
+// A node cut off from Wi-Fi may have lost NTP, and a clock still at the 2024 default of a
+// board that does not seed one (VolatileRTCClock, `clock reset`) makes every expiry
+// meaningless. Then the counter alone stops a replay, as it does anyway (operator ruling
+// 2026-11-16). An ESP32 after a power cycle starts at 1 March 2026 instead
+// (MQTTConnectionPolicy::kPowerOnClockEpoch), which is past this threshold: there the expiry
+// is judged against that clock, and `time <epoch>` below is the way out.
 static inline MqttCtrlResult mqttCtrlMeshCheckExpiry(uint32_t now, uint32_t expiry) {
   if (now < MQTTConnectionPolicy::kSyncedClockEpoch) return MQTTCTRL_OK;
   return mqttCtrlCheckExpiry(now, expiry);

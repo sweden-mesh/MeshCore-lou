@@ -20,8 +20,11 @@ static const uint32_t kMinimumValidEpoch = 1000000000UL;
 static const uint32_t kJwtReconnectSafetyMarginSecs = 60UL;
 static const uint32_t kJwtClockThreshold = 1735689600UL; // 2025-01-01 UTC
 // A wall clock at or past this instant was set from a real source (NTP or an
-// admin); anything earlier is the firmware's unset-clock default (1715770351,
-// 15 May 2024), so a delta spanning the sync is meaningless.
+// admin); anything earlier is the unset-clock default of a board without a seeded
+// clock (VolatileRTCClock and `clock reset`: 1715770351, 15 May 2024), so a delta
+// spanning the sync is meaningless. An ESP32 that lost power starts later than this,
+// at kPowerOnClockEpoch below: this threshold does not see that clock as unset,
+// clockNeverSet() does.
 static const uint32_t kSyncedClockEpoch = kJwtClockThreshold;
 
 // Unsigned subtraction is intentionally used: it is the standard millis()
@@ -283,17 +286,43 @@ enum class ClockSource : uint8_t {
   Rtc,     // libc does not, but the RTC does
 };
 
+// What ESP32RTCClock::begin() stamps into libc when a reset left no time to restore:
+// RTC_TIME_MIN in ESP32Board.h (1 Mar 2026). MQTTBridge.cpp static_asserts that the two
+// agree. A board without that seeding passes its own baseline, or 0 for none.
+static const uint32_t kPowerOnClockEpoch = 1772323200UL;
+// Slack between the baseline and a reading of the clock: the seconds before the uptime
+// counter starts, and the gap between the last reading kept across a soft reset and the
+// reset itself. A clock that was set is months past the baseline, so this costs nothing.
+static const uint32_t kClockNeverSetMarginSecs = 120UL;
+
+// A clock that reads no later than the baseline plus the time since boot is the power-on
+// placeholder counting up, not a time anybody set. `baseline` is the placeholder, or a
+// later reading of the same never-set clock that a soft reset carried over (the reset
+// restores the clock, so the placeholder alone would then look like a set clock).
+static inline bool clockNeverSet(uint32_t clock_time, uint32_t baseline, uint32_t uptime_secs) {
+  const uint64_t latest_unset = (uint64_t)baseline + uptime_secs + kClockNeverSetMarginSecs;
+  return (uint64_t)clock_time <= latest_unset;
+}
+
 // System first: a clock SNTP set recently outranks an RTC that may have drifted.
-// The RTC matters on a cold boot, where ESP32RTCClock::begin() seeds libc with a 2024
-// placeholder on power-on while a detected chip already holds real time and
-// AutoDiscoverRTCClock::begin() never copies one into the other. Never while
+// The RTC matters on a cold boot, where ESP32RTCClock::begin() seeds libc with the
+// power-on placeholder (kPowerOnClockEpoch) while a detected chip already holds real time.
+// The placeholder is past min_valid_epoch, so the floor alone would take it for a clock:
+// a reading that clockNeverSet() is no source at all, and that goes for rtc_time too,
+// which on a board without a chip is the same system clock read again. Never while
 // validating a server: that asks whether a specific host answers, and no clock can
 // answer it. Pass rtc_time 0 when the board has no clock to consult.
 static inline ClockSource chooseFallbackClock(bool validating_server, uint32_t system_time,
-                                              uint32_t rtc_time, uint32_t min_valid_epoch) {
+                                              uint32_t rtc_time, uint32_t min_valid_epoch,
+                                              uint32_t never_set_baseline, uint32_t uptime_secs) {
   if (validating_server) return ClockSource::None;
-  if (system_time >= min_valid_epoch) return ClockSource::System;
-  if (rtc_time >= min_valid_epoch) return ClockSource::Rtc;
+  if (system_time >= min_valid_epoch &&
+      !clockNeverSet(system_time, never_set_baseline, uptime_secs)) {
+    return ClockSource::System;
+  }
+  if (rtc_time >= min_valid_epoch && !clockNeverSet(rtc_time, never_set_baseline, uptime_secs)) {
+    return ClockSource::Rtc;
+  }
   return ClockSource::None;
 }
 
