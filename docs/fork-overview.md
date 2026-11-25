@@ -3,7 +3,7 @@
 **This is the standard [MeshCore Observer](https://observer.gessaman.com/) firmware, plus two
 features**, each of which an image may or may not carry: from lou-14 they are built in any
 combination ([fork.md](fork.md)), and an image's version says which (`...-lou-14-arrc-...`).
-Core MeshCore images of the fork carry auto-reply alone.
+Core MeshCore images of the fork carry auto-reply, remote control over the mesh, or both.
 
 Everything Observer does is still here and unchanged — MQTT uplink to all six broker slots,
 WiFi and timezone config, fault alerts, the web flasher config portal. If you already run an
@@ -64,20 +64,21 @@ authorises commands.
 
 ```
 set cmd.pubkey <64 hex characters>   # serial, or a remote admin's first key — the PUBLIC half of your signing key
-set cmd on
-set cmd.slot <n>                 # the MQTT slot to listen and answer on; reboot to apply
+set cmd on                       # on an Observer image this also picks the MQTT slot
 get cmd                          # state, and the highest command counter seen
 ```
 
-All three are needed, and `cmd.slot` must name a slot on a broker that allows
-subscriptions — the stats presets do not. See `docs/mqtt-control.md`. `cmd on` with no
+The key and `set cmd on` are needed. On an Observer image `set cmd on` picks the slot
+(`set cmd.slot <n>` moves it; it must be on a broker that allows subscriptions, which the
+stats presets do not); a mesh-only image has none and `get cmd` says `mesh only`. See
+`docs/mqtt-control.md`. `cmd on` with no
 command key refuses everything. **`set cmd.pubkey` cannot be done over the plane**, and a
 remote admin may only give a keyless node its first key, with a non-default admin password of
 8 characters or more; replacing a key is serial or the local console only, so a leaked admin
 password cannot repoint a node that already has an owner's key.
 
 This is not `mqtt.owner`. That one is the Observer firmware's ownership claim sent to the stats
-services, and stays yours; the command key is shared by the whole fleet you command.
+services, and stays yours; the command key is one key for all of one owner's nodes.
 
 To turn it off again: `set cmd off`.
 
@@ -92,11 +93,11 @@ In this order, and it stops at the first failure:
 3. the **counter** is strictly greater than the highest one this node has stored — a captured
    command cannot be replayed later. The counter is stored *before* the command runs
 4. the command has **not expired**, and a node with no trusted clock fails closed
-5. the **rate limit** — 20 commands an hour, of which at most 4 may transmit. This applies to
+5. the command is not on the **deny list**: identity, the plane's own settings, credentials,
+   destructive commands, position, radio, transmissions and the clock are refused before they
+   reach the CLI. The key is replaced only by `rekey`, signed by the key in use
+6. the **rate limit** — 50 commands an hour and, separately, 2 transmits. This applies to
    *validly signed* commands: even your own key cannot turn a repeater into a flood weapon
-6. the command is on a short **allowlist** — the auto-reply settings, a few read-only `get`s,
-   and the two `trigger` commands. Everything else is refused before it reaches the CLI.
-   There is no general `set`, no `erase`, and no way to change the command key
 
 Two things are deliberately out of reach of the remote path no matter what it carries:
 `set prv.key`, `erase` and `set cmd.pubkey`, which require a locally-privileged caller (or,
@@ -110,9 +111,9 @@ starts BLE DFU with `start ota`, as on stock MeshCore (operator 2026-11-17).
 ### What this does not defend against
 
 **Availability.** Anyone can flood the broker, and the node's rate limit is what bounds the
-airtime that costs you — not the broker traffic. **Confidentiality of commands.** The envelope
-is signed, not encrypted: anyone watching the broker can read what you asked a node to do.
-Nothing secret should travel this way, and nothing does.
+airtime that costs you — not the broker traffic. **Confidentiality of old-scheme commands.** From lou-20
+commands and results are sealed between the node and the holder of its command key; only the
+old v1 scheme, accepted until lou-21, is readable on the broker.
 
 Full detail, including the wire format and every refusal code, is in
 [`docs/mqtt-control.md`](mqtt-control.md).
@@ -197,8 +198,8 @@ The trigger word is `test`, case-insensitive — `test`, `Test` and `TEST` all w
 matters because phone keyboards like to capitalise the first letter. Override it at build
 time with `-D AUTOREPLY_KEYWORD='"..."'`.
 
-Remote control reaches all of these: `set autoreply` and `get autoreply` are on the allowlist
-as families, so `set autoreply.slot 7` can be published to a node instead of typed into it —
+Remote control reaches all of these: `set autoreply` and `get autoreply` are admitted by
+the deny list, so `set autoreply.slot 7` can be published to a node instead of typed into it —
 which is how an operator hands out slots across a mesh without visiting it.
 
 > **`autoreply.delay` is gone.** It multiplied a random wait, which spread the *average* while

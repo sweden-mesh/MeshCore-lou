@@ -330,7 +330,7 @@ command plane rather than on site: `region put <region>`, `region save`,
 ```
 get cmd.pubkey                 -> > <64 hex> | > (not set)
 set cmd.pubkey <CMD_PUBKEY>    -> OK
-get cmd.pubkey                 -> > <CMD_PUBKEY>
+get cmd.pubkey                 -> > <CMD_PUBKEY>, set via usb
 ```
 
 The **public** key only. `Err - use: set cmd.pubkey <64 hex characters, the PUBLIC key>`
@@ -448,7 +448,7 @@ again in 30 s. `(disc)` or `(fail)`: see the symptom table. A board with PSRAM m
 
 ```
 cmd ping                  -> OK - ping sent, read 'get cmd' for the pong
-get cmd                   -> > on, counter <n>, slot <slot> connected, /cmd subscribed, last command none yet, ping pong in <ms> ms
+get cmd                   -> > on, counter <n>, slot <slot> connected, /cmd subscribed, last command none yet, ping pong in <ms> ms, mesh auto ok 0 refused 0
 ```
 
 The four fields to check:

@@ -1,6 +1,12 @@
 # Remote control over MQTT
 
-> Feature `rc` (`WITH_MQTT_COMMAND`): in the `rc` and `arrc` Observer images ([fork.md](fork.md)).
+> Feature `rc` (`WITH_MQTT_COMMAND`): in every `rc` and `arrc` image ([fork.md](fork.md)); on a
+> board without the Observer it works over the mesh only
+> ([Mesh only](#mesh-only-boards-without-wi-fi)).
+> **From lou-20 the settings are named `cmd`** (`set cmd on`, `cmd.pubkey`, `cmd.slot`,
+> `cmd.mesh`, `cmd ping`) and relaying is `set relay`. The names of lou-18 and older
+> (`mqtt.cmd`, `mqtt.cmd.pubkey`, ...) are gone: a lou-20 node answers them as unknown. The
+> stored settings carry over.
 > In an `rc` image without auto-reply, `trigger test`, `trigger private` and the `autoreply`
 > settings are refused as `not-allowed`.
 
@@ -88,7 +94,7 @@ provisioned. Refusing and clearing are the same act (`mqttCtrlOwnerReady`, teste
 
 `cmd.pubkey` is not `mqtt.owner`. `mqtt.owner` is the Observer firmware's own setting: it
 names the person who owns the node, and travels in the login token to the stats services. The
-command key is one key for a whole fleet, held by whoever runs the control plane, so the two
+command key is one key for all of one owner's nodes, so the two
 are kept apart and an operator's ownership claim does not have to give way to it. Both
 `get cmd.pubkey` and `set cmd.pubkey` answer a caller at the serial port or the
 local console, where `get` shows the whole key and how it was set, and an empty `set` clears it.
@@ -182,7 +188,8 @@ while `mqtt.iata` is set (below).
   was set, its version, `region home` and name. It is the owner's only way to find its nodes;
   anyone else learns that the node is on the plane and nothing more. None without a command
   key. `set alive.interval <5-1440>` (minutes, default 15), `get alive.interval`; admitted
-  over the plane.
+  over the plane. A mesh-only image has no MQTT and sends no alive message: its owner adds it
+  to the tools by its public key.
 
 lou-20 speaks both schemes: mcc3 always, and the old v1/v2 on `meshcore/{IATA}/{NODE}/cmd` with
 `r2`/`r3` on `/res`, and the `0xC1` mesh road, as before, so a tool that does not know mcc3 yet
@@ -192,7 +199,7 @@ still reaches the node. Bit 0 of the alive message's flags says the old topic is
 
 ```
 meshcore/{IATA}/{NODE}/cmd     to one node
-meshcore/{IATA}/all/cmd        to every node in the region
+meshcore/{IATA}/all/cmd        to every node in the region (lou-19 and older; lou-20 does not subscribe)
 meshcore/{IATA}/{NODE}/res     the node's answer
 meshcore/{IATA}/{NODE}/ping    the node's ping; the broker answers `pong|<nonce>` on its /cmd
 ```
@@ -252,7 +259,7 @@ compare, never an Ed25519 verify; it is never executed, answered, logged or coun
 the signed command that marks a new OTA image valid; and it is taken only with the nonce of
 the one ping in flight, which it consumes, so a second or a stale pong changes nothing.
 
-`cmd ping` is admitted over the plane as a read, inside the ten-commands-an-hour budget.
+`cmd ping` is admitted over the plane as a read, inside the 50-commands-an-hour budget.
 Sent that way, its `r2` result is held until the ping settles and then carries the outcome --
 `OK - pong in 230 ms on slot 2 (mqtts, jwt)` or `Err - no pong in 10 s: ...` -- once. It puts
 nothing on the air. The broker's half (`mcbroker`) answers a ping only on the session's own
@@ -280,7 +287,7 @@ for the broker. A v2 command that ran is answered with an `r3`; a v1 command wit
 before. A v2 command the node refuses (replay, expired, rate limit, deny list) is answered with an
 `r2` whose command field is empty (lou-19): a refusal does not consume the counter, so an `r3`
 for it could repeat the nonce of an earlier or later `r3` under the same counter. The `r2` shows
-the counter and the refusal code, never the sealed command. Broadcasts stay v1. A tool sends v2 only to a node whose `ver` is ar-13 or later.
+the counter and the refusal code, never the sealed command. Broadcasts (lou-19 and older) stay v1. A tool sends v2 only to a node whose `ver` is ar-13 or later.
 
 ## The envelope
 
@@ -304,7 +311,7 @@ node keeps its own.
 ```
 feature enabled → command key set → signature valid
   → counter strictly greater than the stored one → not expired
-  → rate limit → command not on the deny list
+  → command not on the deny list → rate limit
   → store the counter → run it → publish the result
 ```
 
@@ -332,7 +339,7 @@ repeater's owner, and the list to review is now what is *refused*
 `test/test_mqtt_control`). A command must begin with an admitted verb -- `set`, `get`,
 `region`, `trigger test`, `trigger private`, `neighbor.remove`, `sensor`, `gps`, `powersaving`,
 `clock`, and exactly `ver`, `reboot`, `clkreboot`, `neighbors`, `board`, `memory`,
-`clear stats`, `ota check` -- and match nothing below. A verb the CLI grows later does not reach
+`clear stats`, `ota check`, `ota update`, `cmd ping`, `rekey <key>` -- and match nothing below. A verb the CLI grows later does not reach
 the mesh until someone adds it.
 
 | denied | why |
@@ -394,8 +401,7 @@ region remove <name> · region default <name> · region home <name> · region sa
 ```
 
 **The region map is admitted whole**, so a scope rollout across a fleet is one signed publish
-per node -- or one to `meshcore/{IATA}/all/cmd`, since changing the map costs no airtime and the
-broadcast guard applies only to triggers. The reply to a bare `region` is the map as the CLI
+per node (lou-19 and older also took one to `meshcore/{IATA}/all/cmd`). The reply to a bare `region` is the map as the CLI
 prints it, so a change can be checked from the result topic. Two things to know before sending:
 
 - `region denyf *` and `region remove` can cut a repeater out of its own area. They are admitted
@@ -427,6 +433,8 @@ working as intended, and a reader must record it as "did not answer" rather than
 setting.
 
 ### A transmit command may not be broadcast
+
+*lou-19 and older only: lou-20 has no broadcast topic at all.*
 
 `trigger test` or `trigger private` sent to `meshcore/{IATA}/all/cmd` is refused, on principle
 rather than on budget.
@@ -465,7 +473,7 @@ Integers little-endian. The node rebuilds the topic it would have received the c
 signature over both exactly as on `/cmd`. One signature is therefore valid on both roads, and the
 counter is one counter: a command that arrives both ways runs once.
 
-The checks are the plane's, with three differences:
+The checks are the plane's, with these differences:
 
 - **The repair allowance.** Over the mesh, and only there, `set wifi.ssid <name>`,
   `set wifi.pwd <password>` and `set cmd on [<host>]` are admitted, so a node can be put
@@ -500,7 +508,13 @@ The checks are the plane's, with three differences:
 road is open. `auto`, the default, opens it once the command slot has been down 15 minutes, so
 a node whose broker answers never takes commands over the air; until then a signed request is
 answered `mesh-closed` (code 19). `get cmd.mesh` says which, and `get cmd` adds
-`, mesh <mode> ok <n> refused <n>`. With `set cmd off` the road is closed too. `reboot`
+`, mesh <mode> ok <n> refused <n>`. With `set cmd off` the road is closed too.
+
+**A node answers over the mesh on an airtime budget of its own:** 5 % of 15 minutes, then 1 %
+(9 s) of the next 15, then a burst again. A request that arrives when the budget is used up
+is not answered at all, and `get cmd` counts it under `refused`. Wait a few minutes and send
+it again.
+ `reboot`
 answers nothing, over the mesh as over MQTT. A firmware without the road reads `0xC1` as a
 login whose password no one can type, and answers nothing.
 
@@ -510,7 +524,8 @@ An `rc` or `arrc` image built without the Observer bridge -- an nRF52 board, or 
 as a plain repeater -- has no Wi-Fi and no MQTT, and the mesh road is its only road. Everything
 above holds, with these differences:
 
-- **The topic is `meshcore/mesh/{own key}/cmd`.** Such an image has no `mqtt.iata`, so the
+- **For an old-scheme (`0xC1`) request the topic is `meshcore/mesh/{own key}/cmd`;** a `0xC2`
+  request signs the node's key and the road, not a topic. Such an image has no `mqtt.iata`, so the
   region in the topic it rebuilds is always the word `mesh`, and that is what a sender signs
   for a node it knows as mesh only. `get cmd` says `mesh only`.
 - **The road is always open** while `set cmd on`: there is no MQTT to wait for, so
@@ -523,7 +538,7 @@ above holds, with these differences:
 On an Observer image the mesh road already reaches the broker slots' settings (`set mqttN.*`),
 as the deny list admits them, so a broken Observer feed can be repaired over the mesh.
 
-Set it up on the console: `set cmd.pubkey <64 hex>` (serial only, as everywhere), then
+Set it up on the console: `set cmd.pubkey <64 hex>` (serial, or a remote admin's first key), then
 `set cmd on`.
 
 ## Relaying: one node's MQTT for another node's command (lou-20)
@@ -586,7 +601,7 @@ Any other flag bit is still refused.
 
 ## What is not defended
 
-- **Confidentiality, for `v1` and broadcasts.** A `v2` command and its `r3` result are sealed end
+- **Confidentiality, for `v1` and (lou-19 and older) broadcasts.** A `v2` command and its `r3` result are sealed end
   to end between the owner's key and the node (see the envelope above): the broker and other
   logins see only the topic, the counter, the expiry and the padded length. A `v1` command, its
   `r1`/`r2` result and every broadcast are readable by every login, and the plaintext listener
@@ -605,7 +620,8 @@ Any other flag bit is still refused.
   consequence; it cannot make the broker quiet.
 - **A compromised command key.** Whoever holds it can do anything not on the deny list, which
   since 2026-10-08 is most of what a repeater does — short of silencing it, moving it, re-keying
-  it or taking it off the control plane. Rotation needs serial access.
+  it or taking it off the control plane. Rotation is `rekey`, signed by the key in use; a key
+  the owner no longer holds needs serial access.
 
 ## The result
 
@@ -636,8 +652,7 @@ QoS 0 publish is a synchronous write from the calling task, and the result is pu
 loop task while the bridge's task writes packets to the same socket. On firmware up to
 `v1.17.0-observer-autoreply-2` and `8530d4bb` that interleaving makes the broker drop the node —
 **one reconnect per command** — so on those builds space commands by 30 s and retry on silence.
-At QoS 1 the MQTT task is the only writer. *Reasoned from the code and compiled; not yet seen on
-a node, because nothing is flashed during the freeze.*
+At QoS 1 the MQTT task is the only writer. *Reasoned from the code and compiled.*
 
 A line too long for the buffer is **truncated, never dropped**. The reply is last and every
 earlier field is bounded, so a clamped line still parses.
@@ -659,6 +674,7 @@ are refused; nothing readable is lost.
 | 14 | on the deny list, or not an admitted verb — a permanent no |
 | 17 | rate limited — ask again later |
 | 18 | a transmit command addressed to every node at once |
+| 19 | mesh-closed: the mesh road is not open (`cmd.mesh`) |
 
 Codes are appended to the enum and never renumbered, so a stored result keeps its meaning.
 

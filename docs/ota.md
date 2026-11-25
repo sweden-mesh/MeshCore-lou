@@ -109,7 +109,7 @@ nodes spread across the hour rather than flash in the same minute, and never bet
 takes the same path as `ota update`: bridge paused, image verified, reboot, and the old image
 back if the new one never proves itself. The schedule is `OtaAutoLogic.h`, host-tested in
 `test_ota_auto`. `set ota.auto on` is a setting and travels over the control plane, and from
-lou-19 so does `ota update`, to one node at a time: the broadcast topic refuses it.
+lou-19 so does `ota update`, to one node at a time.
 
 ## The channel
 
