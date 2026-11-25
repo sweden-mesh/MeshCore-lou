@@ -1194,6 +1194,29 @@ TEST(Mcc3Relay, AStatusHasTheNameMccontrolPrints) {
   EXPECT_STREQ("unknown", mcc3ForwardStatusName(-1));
 }
 
+// The relay's refusal lines on the serial console print these, never the number
+// (MqttRelayHooks.cpp): each status its own name, in the order of the numbers on the wire.
+TEST(Mcc3Relay, EveryStatusHasItsOwnName) {
+  static const struct { int status; const char* name; } rows[] = {
+    { MCC3_FWD_ANSWERED, "answered" },         { MCC3_FWD_NO_ANSWER, "no-answer" },
+    { MCC3_FWD_OFF, "off" },                   { MCC3_FWD_EXPIRED, "expired" },
+    { MCC3_FWD_REPLAY, "replay" },             { MCC3_FWD_BAD_BODY, "bad-body" },
+    { MCC3_FWD_BUSY, "busy" },                 { MCC3_FWD_RATE_LIMITED, "rate-limited" },
+    { MCC3_FWD_CLOCK_UNSET, "clock-unset" },   { MCC3_FWD_SEND_FAILED, "send-failed" },
+  };
+  int n = 0;
+  for (const auto& r : rows) {
+    EXPECT_EQ(n++, r.status);
+    EXPECT_STREQ(r.name, mcc3ForwardStatusName(r.status));
+  }
+  EXPECT_EQ(MCC3_FWD_SEND_FAILED + 1, n);
+  // The longest line the relay prints for a refusal fits debugLine's 120 bytes.
+  char line[120];
+  int len = snprintf(line, sizeof(line), "relay: forward %u, request %u, refused, %s", 4294967295u, 4294967295u,
+                     mcc3ForwardStatusName(MCC3_FWD_RATE_LIMITED));
+  EXPECT_LT(len, (int)sizeof(line));
+}
+
 TEST(Mcc3Relay, TheWaitEndsAfter120SecondsAcrossAMillisWrap) {
   EXPECT_FALSE(mcc3RelayWaitOver(1000, 1000));
   EXPECT_FALSE(mcc3RelayWaitOver(1000, 1000 + 119999));
