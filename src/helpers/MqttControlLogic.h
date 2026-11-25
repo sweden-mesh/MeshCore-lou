@@ -77,7 +77,7 @@ typedef SlidingBudgetOf<MQTTCTRL_CMD_MAX> MqttCtrlBudget;
 
 // Why a command was refused. Returned rather than logged so the caller decides
 // what is safe to publish back -- a rejection reason is not secret, but the
-// caller is the one that knows whether the result topic is public.
+// caller is the one that knows what the result may carry.
 enum MqttCtrlResult {
   MQTTCTRL_OK = 0,
   MQTTCTRL_ERR_EMPTY,
@@ -94,8 +94,8 @@ enum MqttCtrlResult {
   MQTTCTRL_ERR_NO_CLOCK,
   MQTTCTRL_ERR_COMMAND_CHARS,
   MQTTCTRL_ERR_NOT_ALLOWED,
-  // Appended, never renumbered: test_mqtt_control and panopticon/control.py both
-  // read these as numbers, so an inserted value would silently re-label every
+  // Appended, never renumbered: test_mqtt_control and the tools (mccontrol-spec's result
+  // table) read these as numbers, so an inserted value would silently re-label every
   // stored result.
   MQTTCTRL_ERR_NO_OWNER_KEY,
   // A signature that parsed as hex but did not verify. Distinct from
@@ -745,7 +745,7 @@ static inline bool mqttCtrlIsTransmitCommand(const char* command, size_t len) {
 
 // The whole decision except the signature itself, which needs the node's key and
 // so belongs to the firmware. Runs the order from the ADR, stopping at the first
-// refusal. The caller checks the signature between parsing and this call, then
+// refusal. The caller opens the seal and checks the signature before this call, then
 // persists the counter, then executes.
 static inline MqttCtrlResult mqttCtrlAuthorise(const MqttCtrlEnvelope* env,
                                                uint32_t last_counter, uint32_t now,

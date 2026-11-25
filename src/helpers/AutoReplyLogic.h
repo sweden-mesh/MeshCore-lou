@@ -545,8 +545,8 @@ static inline uint8_t autoReplySlotFromKey(const uint8_t* key, size_t key_len,
 //
 // The start clears the request's own flood -- each hop costs up to ~1.35 s of
 // retransmit delay plus airtime -- and clears the ~9 s in which nodes on the released
-// firmware answer, since a mesh runs mixed builds for months. The end is where CLAUDE
-// .md's "a repeater may wait 5-10 minutes" budget is spent, bounded here by what the
+// firmware answer, since a mesh runs mixed builds for months. The end is where the
+// project's "a repeater may wait 5-10 minutes" budget is spent, bounded here by what the
 // test system records: a reply arriving after the capture closes reads as never
 // delivered, which is the one failure this project must not manufacture.
 #define AUTOREPLY_WINDOW_START_DEF 10
