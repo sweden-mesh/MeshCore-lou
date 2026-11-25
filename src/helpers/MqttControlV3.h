@@ -441,7 +441,7 @@ struct Mcc3Alive {
   const char* name;
 };
 
-#define MCC3_ALIVE_OLD_SCHEME  0x01    // the IATA-keyed v1/v2 topic is taken too (lou-20)
+#define MCC3_ALIVE_OLD_SCHEME  0x01    // lou-20 alone set it (its region-keyed topic); reserved, never set
 #define MCC3_ALIVE_UPLINK      0x02    // an Observer image (Wi-Fi and MQTT)
 #define MCC3_ALIVE_AUTO_REPLY  0x04
 #define MCC3_ALIVE_CLOCK_SET   0x08

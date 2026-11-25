@@ -241,10 +241,10 @@ void Fork::markRunningImageValid(const char*) { _image_valid = true; }
 void Fork::proveImageByBridge() {
   if (_image_valid) return;
 #ifdef WITH_MQTT_COMMAND
-  // Listening means a signed command could arrive and verify: on, a slot, topics (a
-  // region) and a usable command key.
+  // Listening means a signed command could arrive and verify: on, a slot, the node's
+  // topic (it needs no region) and a usable command key.
   const bool listening = _mqtt_control.isEnabled() && _mqtt_control.slot() != 0 &&
-                         _ctrl_topic[0] != 0 && mqttCtrlOwnerReady(_mqtt_control.pubkey()) == MQTTCTRL_OK;
+                         _mcc3_topic[0] != 0 && mqttCtrlOwnerReady(_mqtt_control.pubkey()) == MQTTCTRL_OK;
 #else
   const bool listening = false;
 #endif

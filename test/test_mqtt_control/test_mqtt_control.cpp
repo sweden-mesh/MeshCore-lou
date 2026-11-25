@@ -1113,80 +1113,6 @@ TEST(OwnerReady, ExistingCodesKeepTheirNumbers) {
   EXPECT_EQ((int)MQTTCTRL_ERR_NO_OWNER_KEY, 15);
 }
 
-// ---- the published result -----------------------------------------------------
-//
-// The topic names the node; the counter names the question. Without it a `get`
-// answer is "> 0.5" -- true of whatever was asked, which is not enough to act on
-// when one requester is polling several nodes.
-
-TEST(FormatResult, CarriesCounterCodeCommandAndReply) {
-  char out[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatResult(out, sizeof(out), 42, 0, "get txdelay", "> 0.5");
-  EXPECT_EQ(std::string("r1|42|0|get txdelay|> 0.5"), std::string(out));
-  EXPECT_EQ(n, strlen(out));
-}
-
-TEST(FormatResult, ARefusalStillNamesItsRequest) {
-  // No command ran, so the reply is empty -- but the counter and the code are
-  // what make a refusal distinguishable from a node that never answered.
-  char out[MQTTCTRL_MAX_RESULT];
-  mqttCtrlFormatResult(out, sizeof(out), 9, (int)MQTTCTRL_ERR_RATE_LIMITED,
-                       "trigger test", "");
-  EXPECT_EQ(std::string("r1|9|17|trigger test|"), std::string(out));
-}
-
-TEST(FormatResult, TruncatesRatherThanDiscarding) {
-  // The existing payload builders drop a payload over budget rather than
-  // shortening it, which would mean the longest replies never arrive. Here the
-  // reply is last and every earlier field is bounded, so a clamp leaves a line
-  // that still parses.
-  std::string huge(400, 'x');
-  char out[64];
-  size_t n = mqttCtrlFormatResult(out, sizeof(out), 7, 0, "get radio", huge.c_str());
-  EXPECT_EQ(n, sizeof(out) - 1);
-  EXPECT_EQ(strlen(out), sizeof(out) - 1);
-  EXPECT_EQ(std::string("r1|7|0|get radio|"), std::string(out).substr(0, 17));
-}
-
-TEST(FormatResult, TheFieldsBeforeTheReplyCannotBeAmbiguous) {
-  // mqttCtrlCommandCharsOk refuses a command containing the separator, so only
-  // the trailing reply can hold one and a parser takes the rest of the line.
-  EXPECT_FALSE(mqttCtrlCommandCharsOk("get a|b", 7));
-
-  char out[MQTTCTRL_MAX_RESULT];
-  mqttCtrlFormatResult(out, sizeof(out), 1, 0, "get radio", "a|b|c");
-  std::string s(out);
-  EXPECT_EQ(std::string("r1|1|0|get radio|a|b|c"), s);
-
-  // Split on the first four separators; whatever follows is the reply, however
-  // many separators it happens to contain.
-  size_t pos = 0;
-  for (int i = 0; i < 4; i++) pos = s.find('|', pos) + 1;
-  EXPECT_EQ(std::string("a|b|c"), s.substr(pos));
-  EXPECT_EQ(std::string("get radio"), s.substr(7, pos - 8));
-}
-
-TEST(FormatResult, RefusesABufferItCannotUse) {
-  char out[8];
-  EXPECT_EQ(0u, mqttCtrlFormatResult(NULL, sizeof(out), 1, 0, "x", "y"));
-  EXPECT_EQ(0u, mqttCtrlFormatResult(out, 0, 1, 0, "x", "y"));
-}
-
-TEST(FormatResult, ANullCommandOrReplyIsAnEmptyField) {
-  char out[MQTTCTRL_MAX_RESULT];
-  mqttCtrlFormatResult(out, sizeof(out), 3, 0, NULL, NULL);
-  EXPECT_EQ(std::string("r1|3|0||"), std::string(out));
-}
-
-TEST(FormatResult, TheBufferFitsTheLongestPossibleLine) {
-  std::string cmd(MQTTCTRL_MAX_COMMAND, 'c');
-  std::string rep(MQTTCTRL_MAX_REPLY - 1, 'r');
-  char out[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatResult(out, sizeof(out), 4294967295u, 17,
-                                  cmd.c_str(), rep.c_str());
-  EXPECT_LT(n, sizeof(out) - 1) << "MQTTCTRL_MAX_RESULT must not clamp a legal line";
-}
-
 // ---- guard rails on the trigger -----------------------------------------------
 
 TEST(BroadcastGuard, RecognisesTheBroadcastTopic) {
@@ -2161,62 +2087,13 @@ TEST(Ping, IsAdmittedOverThePlaneExactlyAndIsNoTransmit) {
   EXPECT_FALSE(mqttCtrlIsTransmitCommand("cmd ping", 13));
 }
 
-// ---- signed results: r2 (2026-10-08, ar-11) ------------------------------------------
+// ---- a test key, for the roads that sign ----------------------------------------------
 
 static uint8_t T_PUB[32], T_PRV[64];
-static void testSigner(void* ctx, uint8_t sig[64], const uint8_t* msg, size_t len) {
-  (void)ctx;
-  ed25519_sign(sig, msg, len, T_PUB, T_PRV);
-}
 static void makeTestKey() {
   uint8_t seed[32];
   for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(0x11 + i);
   ed25519_create_keypair(T_PUB, T_PRV, seed);
-}
-
-TEST(SignedResult, TheLineIsR2WithTheNodesSignatureOverTopicAndLine) {
-  makeTestKey();
-  const char* topic = "meshcore/JKG/4AC61A7FF4800A079A7311CA606A4C7037FE6943D40E53932230142829A4F786/res";
-  char out[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatSignedResult(out, sizeof(out), topic, 42, 0, "get txdelay", "> 0.5", testSigner, NULL);
-  ASSERT_GT(n, 0u);
-  std::string s(out, n);
-  EXPECT_EQ(0u, s.find("r2|42|0|get txdelay|> 0.5|"));
-  size_t line_len = 0;
-  const char* sig_hex = mqttCtrlSignedResultSplit(out, n, &line_len);
-  ASSERT_NE(nullptr, sig_hex);
-  EXPECT_EQ(std::string("r2|42|0|get txdelay|> 0.5"), std::string(out, line_len));
-  // a verifier rebuilds "<topic>\n<line>" and checks with the node's key
-  std::string msg = std::string(topic) + "\n" + std::string(out, line_len);
-  uint8_t sig[64];
-  hexToBytes(std::string(sig_hex, 128).c_str(), sig, sizeof(sig));
-  EXPECT_EQ(1, ed25519_verify(sig, (const uint8_t*)msg.data(), msg.size(), T_PUB));
-  // ... and not with another topic, nor with a changed reply
-  std::string other = std::string("meshcore/JKG/all/cmd") + "\n" + std::string(out, line_len);
-  EXPECT_EQ(0, ed25519_verify(sig, (const uint8_t*)other.data(), other.size(), T_PUB));
-  std::string changed = std::string(topic) + "\n" + "r2|42|0|get txdelay|> 0.6";
-  EXPECT_EQ(0, ed25519_verify(sig, (const uint8_t*)changed.data(), changed.size(), T_PUB));
-}
-
-TEST(SignedResult, TheReplyShortensSoTheSignatureAlwaysFits) {
-  makeTestKey();
-  std::string huge(400, 'x');
-  char out[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatSignedResult(out, sizeof(out), "meshcore/JKG/4AC61A7F/res", 7, 0, "get radio", huge.c_str(), testSigner, NULL);
-  ASSERT_GT(n, 0u);
-  EXPECT_EQ(sizeof(out) - 1, n);                          // full, not over
-  size_t line_len = 0;
-  ASSERT_NE(nullptr, mqttCtrlSignedResultSplit(out, n, &line_len));
-  EXPECT_EQ(sizeof(out) - 1 - 129, line_len);             // the line gave way, the signature did not
-  EXPECT_EQ(std::string("r2|7|0|get radio|"), std::string(out, 17));
-}
-
-TEST(SignedResult, AnR1OrAShortLineIsNotSplitAsSigned) {
-  size_t line_len = 0;
-  EXPECT_EQ(nullptr, mqttCtrlSignedResultSplit("r1|42|0|get txdelay|> 0.5", 25, &line_len));
-  EXPECT_EQ(nullptr, mqttCtrlSignedResultSplit("r2|42|0|x|y|abc", 15, &line_len));
-  char out[MQTTCTRL_MAX_RESULT];
-  EXPECT_EQ(0u, mqttCtrlFormatSignedResult(out, 100, "meshcore/JKG/x/res", 1, 0, "ver", "v", testSigner, NULL));   // no room for a signature
 }
 
 TEST(Denylist, TheAutomaticUpdateSettingsTravelAndSoDoesTheUpdateItself) {

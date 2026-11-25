@@ -97,9 +97,8 @@ void Fork::repairMqttControlSlot() {
 // ratchet on this exact path, so the buffers are members and stay that way.
 //
 // mcc3 (lou-20) needs no region: the node's own mcc/cmd/<key>, the ping on mcc/ping/<key>,
-// alive on mcc/alive/<key> with the slot's will clearing it. The old scheme is kept beside
-// it while the node has a region, on its own per-node topic only: the broadcast topic is
-// gone (IATA-2: no broadcast of any kind).
+// alive on mcc/alive/<key> with the slot's will clearing it. It is the one topic the node
+// subscribes to: the region-keyed topic of lou-20 and older is gone (lou-21).
 void Fork::setupMqttControl(MQTTBridge* bridge) {
   if (_mqtt_control.slot() == 0) return;         // no slot to listen on
 
@@ -109,18 +108,10 @@ void Fork::setupMqttControl(MQTTBridge* bridge) {
   if (!mcc3Topic("cmd", node_hex, _mcc3_topic, sizeof(_mcc3_topic))
       || !mcc3Topic("alive", node_hex, _alive_topic, sizeof(_alive_topic))
       || !mcc3Topic("ping", node_hex, _ctrl_ping_topic, sizeof(_ctrl_ping_topic))) return;
-  size_t topics = 0;
-  _ctrl_topics[topics++] = _mcc3_topic;
-
-  const char* iata = observerIata();
-  if (iata != NULL && iata[0] != 0 && MqttControl::buildTopic(iata, node_hex, _ctrl_topic, sizeof(_ctrl_topic))) {
-    MqttControl::buildResultTopic(iata, node_hex, _ctrl_result, sizeof(_ctrl_result));
-    _ctrl_topics[topics++] = _ctrl_topic;
-  }
-  refreshMqttControlV2Key();
+  _ctrl_topics[0] = _mcc3_topic;
   refreshMcc3Keys();
   bridge->setControlWill(_alive_topic);
-  bridge->setControlSink(&_control_link, _ctrl_topics, topics, _mqtt_control.slot() - 1);
+  bridge->setControlSink(&_control_link, _ctrl_topics, 1, _mqtt_control.slot() - 1);
 }
 
 // The node's region home for its alive message, "" when none.
@@ -166,7 +157,7 @@ void Fork::loopAlive() {
   a.clock = clock_set ? clock : 0;
   a.last_counter = _mqtt_control.counter();
   a.interval = minutes * 60UL;
-  a.flags = (_ctrl_topic[0] ? MCC3_ALIVE_OLD_SCHEME : 0) | (FORK_UPLINK ? MCC3_ALIVE_UPLINK : 0)
+  a.flags = (FORK_UPLINK ? MCC3_ALIVE_UPLINK : 0)
             | (FORK_AUTO_REPLY ? MCC3_ALIVE_AUTO_REPLY : 0) | (clock_set ? MCC3_ALIVE_CLOCK_SET : 0)
             | (_mqtt_control.relayMode() == MQTTCTRL_RELAY_OWN ? MCC3_ALIVE_RELAY : 0);
   a.mesh = mcc3AliveMeshMode(_mqtt_control.meshMode());
@@ -287,7 +278,6 @@ void Fork::describeMqttControl(char* reply) {
 // stack than that task has, and executing a command runs a flash write that would
 // stall the network stack's own thread.
 void Fork::loopMqttControl() {
-  refreshMqttControlV2Key();
   refreshMcc3Keys();
   refreshRekeyKeys();
   if (_mqtt_control.rekeyJustDone()) debugLine("rekey: the new key signed a command and is the key now");
@@ -369,76 +359,24 @@ void Fork::loopMqttControl() {
   if (outcome.authentic) markRunningImageValid("a verified command");
 }
 
-// The result topic is built once in setupMqttControl and is empty when the node
-// has no region, in which case there is no control plane to answer on.
-// The v2 key (TODO 17a): X25519 of this node's identity and the command key, through
-// HKDF with this node's command topic. Derived when the key it was made from is not the
-// one now set -- at boot, and after `set cmd.pubkey` -- and never otherwise: every
-// v2 message after that costs symmetric work only.
-void Fork::refreshMqttControlV2Key() {
-  const char* owner_hex = _mqtt_control.pubkey();
-  if (_ctrl_topic[0] == 0 || strcmp(owner_hex, _mqtt_control.v2KeyFor()) == 0) return;
-  uint8_t key[MQTTV2_KEY_LEN] = {0};
-  uint8_t owner[PUB_KEY_SIZE];
-  if (mqttCtrlOwnerReady(owner_hex) == MQTTCTRL_OK
-      && mesh::Utils::fromHex(owner, PUB_KEY_SIZE, owner_hex)) {
-    uint8_t shared[PUB_KEY_SIZE];
-    _mesh.self_id.calcSharedSecret(shared, owner);
-    mqttV2DeriveKey(shared, _ctrl_topic, key);
-    memset(shared, 0, sizeof(shared));
-    _mqtt_control.setV2Key(key, owner_hex, _ctrl_topic);
-  } else {
-    _mqtt_control.setV2Key(key, "", _ctrl_topic);
-  }
-  memset(key, 0, sizeof(key));
-}
-
 void Fork::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome& outcome,
                                       const char* reply) {
   if (_mesh.bridge == NULL) return;
 
-  // mcc3: every outcome the key vouched for, sealed under a fresh nonce, on the reply topic
+  // Every outcome the key vouched for, sealed under a fresh nonce, on the reply topic
   // the command named. Code, command and reply are the owner's alone.
-  if (outcome.mcc3) {
-    const Mcc3Keys* keys = _mqtt_control.mcc3Keys();
-    char topic[MQTTCTRL_MAX_TOPIC + 1];
-    if (keys == NULL || !mcc3ResultTopic(outcome.rid, topic, sizeof(topic))) return;
-    const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
-    uint8_t nonce[MCC3_NONCE_LEN];
-    _mesh.getRNG()->random(nonce, sizeof(nonce));
-    static char sealed[MCC3_MAX_RESULT];   // loop task only; too big for its stack
-    size_t n = mcc3BuildResult(keys->cmd, nonce, outcome.counter, (int)result,
-                               now >= MQTTConnectionPolicy::kSyncedClockEpoch ? now : 0,
-                               outcome.command, reply, sealed, sizeof(sealed));
-    if (n > 0) _mesh.bridge->publishControlResult(topic, sealed, n, MQTTCTRL_RESULT_QOS);
-    return;
-  }
-  if (_ctrl_result[0] == 0) return;
-
-  // A sealed command that ran is answered sealed (r3): code, command and reply readable
-  // only by the command key's holder. Its tag stands where r2's signature does.
-  if (outcome.v2 && mqttV2SealsResult(result)) {
-    static char sealed[MQTTV2_MAX_RESULT];   // loop task only; too big for its stack
-    size_t n = mqttV2BuildResult(_mqtt_control.v2Key(), outcome.counter, (int)result,
-                                 outcome.command, reply, sealed, sizeof(sealed));
-    if (n > 0) _mesh.bridge->publishControlResult(_ctrl_result, sealed, n, MQTTCTRL_RESULT_QOS);
-    return;
-  }
-
-  // A refusal runs no command and leaves the reply empty; the code field still
-  // says why, which is what lets a requester tell "refused" from "never arrived".
-  // Signed with this node's identity key (r2, ar-11): a result is published where
-  // anyone can write, and the signature is what makes it this node's word. A refused
-  // v2 command is answered here too, without its command, which came sealed.
-  char payload[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatSignedResult(payload, sizeof(payload), _ctrl_result, outcome.counter,
-                                        (int)result, outcome.v2 ? "" : outcome.command, reply,
-                                        [](void* ctx, uint8_t sig[64], const uint8_t* msg, size_t len) {
-                                          ((mesh::LocalIdentity*)ctx)->sign(sig, msg, (int)len);
-                                        }, &_mesh.self_id);
-  if (n == 0) return;
-
-  _mesh.bridge->publishControlResult(_ctrl_result, payload, n, MQTTCTRL_RESULT_QOS);
+  if (!outcome.mcc3) return;
+  const Mcc3Keys* keys = _mqtt_control.mcc3Keys();
+  char topic[MQTTCTRL_MAX_TOPIC + 1];
+  if (keys == NULL || !mcc3ResultTopic(outcome.rid, topic, sizeof(topic))) return;
+  const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
+  uint8_t nonce[MCC3_NONCE_LEN];
+  _mesh.getRNG()->random(nonce, sizeof(nonce));
+  static char sealed[MCC3_MAX_RESULT];   // loop task only; too big for its stack
+  size_t n = mcc3BuildResult(keys->cmd, nonce, outcome.counter, (int)result,
+                             now >= MQTTConnectionPolicy::kSyncedClockEpoch ? now : 0,
+                             outcome.command, reply, sealed, sizeof(sealed));
+  if (n > 0) _mesh.bridge->publishControlResult(topic, sealed, n, MQTTCTRL_RESULT_QOS);
 }
 
 void Fork::ControlLink::onControlMessage(const char* topic, const uint8_t* payload, size_t len) {

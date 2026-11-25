@@ -45,13 +45,12 @@ struct MqttCommandRunner {
 // persisted per node, and chosen by the requester.
 struct MqttCtrlOutcome {
   bool authentic;                            // signature verified; safe to publish
-  bool v2;                                   // came sealed (v2), so is answered sealed (r3)
   bool mcc3;                                 // came on mcc/cmd, so is answered sealed on mcc/r/<rid>
   uint32_t counter;                          // the request's counter
   uint8_t rid[MCC3_RID_LEN];                 // mcc3: the reply id the command named
   char command[MQTTCTRL_MAX_COMMAND + 1];    // echoed back, NUL-terminated
 
-  MqttCtrlOutcome() : authentic(false), v2(false), mcc3(false), counter(0) { command[0] = 0; }
+  MqttCtrlOutcome() : authentic(false), mcc3(false), counter(0) { command[0] = 0; }
 };
 
 class MqttControl {
@@ -82,12 +81,6 @@ class MqttControl {
   uint8_t _node_key[PUB_KEY_SIZE];
 #ifdef WITH_MQTT_BRIDGE
   MqttCtrlQueue _queue;                        // arrivals, MQTT event task to loop task
-  // The v2 key for this node's own command topic (TODO 17a): derived once per command
-  // key, at boot and when the key changes, and kept in RAM only.
-  uint8_t _v2_key[MQTTV2_KEY_LEN];
-  bool _v2_ready;
-  char _v2_key_for[PUB_KEY_SIZE * 2 + 1];      // the command key it was derived from
-  char _v2_topic[MQTTCTRL_MAX_TOPIC + 1];      // the only topic a v2 command may arrive on
 #endif
   MqttCtrlBudget _commands;
   MqttCtrlBudget _transmits;
@@ -162,19 +155,6 @@ public:
   static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);
 
 #ifdef WITH_MQTT_BRIDGE
-  // The command key the v2 key was derived from, "" when none.
-  const char* v2KeyFor() const { return _v2_key_for; }
-  void setV2Key(const uint8_t key[MQTTV2_KEY_LEN], const char* key_for, const char* topic) {
-    memcpy(_v2_key, key, MQTTV2_KEY_LEN);
-    StrHelper::strncpy(_v2_key_for, key_for, sizeof(_v2_key_for));
-    StrHelper::strncpy(_v2_topic, topic, sizeof(_v2_topic));
-    _v2_ready = key_for[0] != 0;
-  }
-  const uint8_t* v2Key() const { return _v2_key; }
-
-  static bool buildResultTopic(const char* iata, const char* node_hex,
-                               char* out, size_t out_size);
-
   // Called on the MQTT event task. Copies and queues, nothing more: verification and
   // execution both need more stack than that task has, and executing a command
   // there would run a flash write on the network stack's own thread.

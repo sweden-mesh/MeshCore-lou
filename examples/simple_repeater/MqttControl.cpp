@@ -43,7 +43,6 @@ MqttControl::MqttControl()
   : _fs(NULL), _enabled(false), _counter(0), _slot(0), _key_via(MQTTCTRL_KEY_VIA_USB),
     _alive_minutes(0), _boot(0), _mcc3_ready(false),
 #ifdef WITH_MQTT_BRIDGE
-    _v2_ready(false),
 #endif
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW),
@@ -61,8 +60,6 @@ MqttControl::MqttControl()
   _rekey_done = false;
   memset(&_rekey_mcc3, 0, sizeof(_rekey_mcc3));
 #ifdef WITH_MQTT_BRIDGE
-  _v2_key_for[0] = 0;
-  _v2_topic[0] = 0;
   mqttCtrlQueueReset(&_queue);
 #endif
 }
@@ -140,11 +137,6 @@ bool MqttControl::buildTopic(const char* iata, const char* node_hex,
 
 #ifdef WITH_MQTT_BRIDGE
 
-bool MqttControl::buildResultTopic(const char* iata, const char* node_hex,
-                                   char* out, size_t out_size) {
-  return buildOne(iata, node_hex, "res", out, out_size);
-}
-
 void MqttControl::stage(const char* topic, const uint8_t* payload, size_t len) {
   // Runs on the client's esp-mqtt event task, which has a fraction of the stack the
   // bridge task has and none of the loop task's right to touch flash. Copy, queue,
@@ -159,14 +151,13 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
                                   MqttCtrlOutcome* out) {
   if (reply != NULL && reply_size > 0) reply[0] = 0;
   if (out != NULL) {
-    out->authentic = false; out->v2 = false; out->mcc3 = false; out->counter = 0; out->command[0] = 0;
+    out->authentic = false; out->mcc3 = false; out->counter = 0; out->command[0] = 0;
   }
   const MqttCtrlStaged* staged = mqttCtrlQueueFront(&_queue);
   if (staged == NULL) return MQTTCTRL_OK;
 
   MqttCtrlResult result = MQTTCTRL_OK;
   MqttCtrlEnvelope env;
-  char v2_text[MQTTV2_CMD_PAD_LARGE + 1];
   Mcc3Command mcc3;
 
   do {
@@ -201,35 +192,10 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
         out->mcc3 = true;
         memcpy(out->rid, mcc3.rid, MCC3_RID_LEN);
       }
-    } else if (mqttV2IsEnvelope(staged->payload, staged->payload_len)) {
-      // Sealed (v2): only on this node's own topic -- a broadcast stays v1 -- and the
-      // AEAD opened before anything else is believed. The tag proves the holder of the
-      // command key, which is what the v1 signature check proves below.
-      if (!_v2_ready) { result = MQTTCTRL_ERR_NO_OWNER_KEY; break; }
-      if (strcmp(staged->topic, _v2_topic) != 0) { result = MQTTCTRL_ERR_BAD_VERSION; break; }
-      result = mqttV2OpenCommand(_v2_key, staged->payload, staged->payload_len, &env, v2_text);
-      if (result != MQTTCTRL_OK) break;
-      if (env.command_len > MQTTCTRL_MAX_COMMAND) { result = MQTTCTRL_ERR_TOO_LONG; break; }
-      if (out != NULL) out->v2 = true;
     } else {
-      result = mqttCtrlParseEnvelope(staged->payload, staged->payload_len, &env);
-      if (result != MQTTCTRL_OK) break;
-
-      // The signature is checked before anything it protects, and over the topic as
-      // well as the body: without the topic bound in, a command signed for one node
-      // could be captured and republished on another's, and each node's own counter
-      // would never notice.
-      uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-      size_t signed_len = 0;
-      if (!mqttCtrlBuildSignedMessage(staged->topic, &env, signed_bytes,
-                                      sizeof(signed_bytes), &signed_len)) {
-        result = MQTTCTRL_ERR_TOO_LONG;
-        break;
-      }
-      if (!owner.verify(env.signature, signed_bytes, signed_len)) {
-        result = MQTTCTRL_ERR_SIG_INVALID;   // parsed as hex, did not verify
-        break;
-      }
+      // Nothing else is subscribed to; whatever a broker delivers here anyway is no command.
+      result = MQTTCTRL_ERR_BAD_VERSION;
+      break;
     }
     result = execute(env, staged->topic, false, now, runner, reply, out);
   } while (false);
