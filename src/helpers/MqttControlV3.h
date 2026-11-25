@@ -12,7 +12,7 @@
 #include <SHA256.h>
 
 #include "MqttControlLogic.h"
-#include "MqttControlV2.h"        // base64url
+#include "Base64Url.h"
 
 // mcc3 (lou-20, IATA-2): the control plane keyed by the node and sealed to its owner. The
 // contract is mccontrol-spec's docs/wire-format-mcc3.md, and its vectors are the host suite's
