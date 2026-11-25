@@ -30,15 +30,9 @@
 // (that tree is outside this repo, alongside it) -- cheap before
 // expensive, and the signature before anything it protects.
 
-// The envelope is deliberately not JSON. Signing a JSON document needs
-// canonicalisation, and every canonicalisation bug is a signature-bypass bug.
-// Here the signed region is a literal byte range of the payload as received.
-#define MQTTCTRL_VERSION_TAG    "v1"
+// The field separator of the text envelope lou-20 and older took (v1). The envelope is
+// gone; a command may still not contain one (mqttCtrlCommandCharsOk).
 #define MQTTCTRL_FIELD_SEP      '|'
-
-// Ed25519 signature, hex-encoded the way JWTHelper already emits one.
-#define MQTTCTRL_SIG_HEX_LEN    128
-#define MQTTCTRL_SIG_BYTES      64
 
 // Bounds every buffer here. The broker's own ceiling is 896 bytes
 // (MQTTBridge.cpp:4248-4251); staying well inside it keeps the staging buffer
@@ -48,9 +42,6 @@
 #define MQTTCTRL_MAX_TOPIC      160
 #define MQTTCTRL_MAX_COMMAND    160
 #define MQTTCTRL_MAX_REPLY      160
-// r1|counter|code|command|reply, plus the separators and a terminator.
-#define MQTTCTRL_MAX_RESULT     (2 + 12 + 6 + MQTTCTRL_MAX_COMMAND + MQTTCTRL_MAX_REPLY + 8 + 129)   // + "|" and a 128-hex signature (r2)
-#define MQTTCTRL_MAX_SIGNED     (MQTTCTRL_MAX_TOPIC + 1 + MQTTCTRL_MAX_PAYLOAD)
 
 // A command may not claim to be valid indefinitely: a signer cannot mint one that
 // outlives its usefulness and waits to be replayed at a worse moment.
@@ -118,7 +109,8 @@ enum MqttCtrlResult {
   // node refusing the command outright.
   MQTTCTRL_ERR_RATE_LIMITED,
   // A transmit command addressed to every node in the region at once. Refused on
-  // principle rather than on budget -- see mqttCtrlTransmitTopicResult.
+  // principle rather than on budget. No road has such an address since lou-21, so
+  // nothing returns it; the number stays taken.
   MQTTCTRL_ERR_BROADCAST_TRANSMIT,
   // A command over the mesh while the mesh road is closed: `cmd.mesh auto` and the
   // broker reachable, or not yet down long enough. Send it over MQTT instead.
@@ -177,9 +169,6 @@ struct MqttCtrlEnvelope {
   uint32_t expiry;
   const char* command;
   size_t command_len;
-  const char* signed_part;    // the bytes the signature covers, after the topic
-  size_t signed_len;
-  uint8_t signature[MQTTCTRL_SIG_BYTES];
 };
 
 // One hex pair to a byte, or -1. Rejects anything that is not strictly two hex
@@ -197,16 +186,6 @@ static inline int mqttCtrlHexByte(char hi, char lo) {
     out = (out << 4) | v;
   }
   return out;
-}
-
-// Decode the 128 hex characters of a signature. Length is checked by the caller.
-static inline bool mqttCtrlDecodeSignature(const char* hex, uint8_t* out) {
-  for (int i = 0; i < MQTTCTRL_SIG_BYTES; i++) {
-    int b = mqttCtrlHexByte(hex[i * 2], hex[i * 2 + 1]);
-    if (b < 0) return false;
-    out[i] = (uint8_t)b;
-  }
-  return true;
 }
 
 // Parse an unsigned decimal that occupies the whole span. Rejects empty spans,
@@ -275,78 +254,6 @@ static inline bool mqttCtrlCommandCharsOk(const char* cmd, size_t len) {
     i += n;
   }
   return true;
-}
-
-// Split "<signed-part>|<sig-hex>" and decode the signature, without yet trusting
-// any of it. Splits at the LAST separator so a command cannot manufacture a
-// second split point, and the signed span is a literal byte range of what
-// arrived -- we verify exactly the bytes we received.
-//
-// Nothing here is authenticated. Everything this fills in stays untrusted until
-// mqttCtrlBuildSignedMessage feeds it to Identity::verify.
-static inline MqttCtrlResult mqttCtrlParseEnvelope(const char* payload, size_t len,
-                                                   MqttCtrlEnvelope* out) {
-  if (payload == NULL || out == NULL || len == 0) return MQTTCTRL_ERR_EMPTY;
-  if (len > MQTTCTRL_MAX_PAYLOAD) return MQTTCTRL_ERR_TOO_LONG;
-
-  size_t split = len;
-  for (size_t i = len; i > 0; i--) {
-    if (payload[i - 1] == MQTTCTRL_FIELD_SEP) { split = i - 1; break; }
-  }
-  if (split == len) return MQTTCTRL_ERR_NO_SIGNATURE;
-
-  size_t sig_len = len - split - 1;
-  if (sig_len != MQTTCTRL_SIG_HEX_LEN) return MQTTCTRL_ERR_BAD_SIG_LEN;
-  if (!mqttCtrlDecodeSignature(payload + split + 1, out->signature)) {
-    return MQTTCTRL_ERR_BAD_SIG_HEX;
-  }
-
-  out->signed_part = payload;
-  out->signed_len = split;
-
-  // "v1|<counter>|<expiry>|<command>" -- three separators inside the signed part.
-  size_t tag_len = strlen(MQTTCTRL_VERSION_TAG);
-  if (split < tag_len + 1) return MQTTCTRL_ERR_BAD_VERSION;
-  if (memcmp(payload, MQTTCTRL_VERSION_TAG, tag_len) != 0) return MQTTCTRL_ERR_BAD_VERSION;
-  if (payload[tag_len] != MQTTCTRL_FIELD_SEP) return MQTTCTRL_ERR_BAD_VERSION;
-
-  size_t p = tag_len + 1;
-  size_t c_end = p;
-  while (c_end < split && payload[c_end] != MQTTCTRL_FIELD_SEP) c_end++;
-  if (c_end >= split) return MQTTCTRL_ERR_BAD_FIELDS;
-  if (!mqttCtrlParseU32(payload + p, c_end - p, &out->counter)) return MQTTCTRL_ERR_BAD_COUNTER;
-
-  size_t e_start = c_end + 1;
-  size_t e_end = e_start;
-  while (e_end < split && payload[e_end] != MQTTCTRL_FIELD_SEP) e_end++;
-  if (e_end >= split) return MQTTCTRL_ERR_BAD_FIELDS;
-  if (!mqttCtrlParseU32(payload + e_start, e_end - e_start, &out->expiry)) {
-    return MQTTCTRL_ERR_BAD_FIELDS;
-  }
-
-  out->command = payload + e_end + 1;
-  out->command_len = split - (e_end + 1);
-  if (!mqttCtrlCommandCharsOk(out->command, out->command_len)) {
-    return MQTTCTRL_ERR_COMMAND_CHARS;
-  }
-  return MQTTCTRL_OK;
-}
-
-// The topics this node listens and answers on: meshcore/{IATA}/{leaf}/{suffix}.
-//
-// The leaf is the node's FULL public key, 64 upper-case hex characters, as the
-// observer's own status and packet topics name it (`setDeviceID`). Until
-// 2026-10-08 it was the first four bytes; the whole key is what a broker needs so
-// that one ACL pattern -- the login username `v1_<key>` must appear in the topic --
-// keeps each node to its own `cmd` and `res`. The 8-hex id stays what people see.
-// The longest form, `meshcore/XXXX/<64 hex>/cmd`, is 82 characters, inside
-// MQTTCTRL_MAX_TOPIC. The broadcast leaf is the word `all`.
-static inline bool mqttCtrlBuildTopic(const char* iata, const char* leaf, const char* suffix,
-                                      char* out, size_t out_size) {
-  if (iata == NULL || iata[0] == 0 || leaf == NULL || leaf[0] == 0 || suffix == NULL ||
-      out == NULL || out_size == 0) return false;
-  int n = snprintf(out, out_size, "meshcore/%s/%s/%s", iata, leaf, suffix);
-  return n > 0 && (size_t)n < out_size && (size_t)n <= MQTTCTRL_MAX_TOPIC;
 }
 
 // Which MQTT slot `set cmd on` takes when none is configured (2026-10-08):
@@ -624,29 +531,6 @@ static inline void mqttCtrlPingAnswer(MqttCtrlPingStep step, int slot, uint32_t 
   }
 }
 
-// Assemble the exact bytes the signature covers: the topic, a newline, then the
-// signed part of the payload.
-//
-// The topic is inside the signature so one signature is valid for exactly one
-// destination. Without it, a command signed for one node could be captured and
-// republished on another node's topic, or a per-node command replayed as a
-// broadcast -- the two cases the counter alone cannot see, because each node
-// keeps its own counter.
-static inline bool mqttCtrlBuildSignedMessage(const char* topic, const MqttCtrlEnvelope* env,
-                                              uint8_t* out, size_t out_size, size_t* out_len) {
-  if (topic == NULL || env == NULL || out == NULL || out_len == NULL) return false;
-  size_t topic_len = strlen(topic);
-  if (topic_len == 0 || topic_len > MQTTCTRL_MAX_TOPIC) return false;
-  size_t total = topic_len + 1 + env->signed_len;
-  if (total > out_size) return false;
-
-  memcpy(out, topic, topic_len);
-  out[topic_len] = '\n';
-  memcpy(out + topic_len + 1, env->signed_part, env->signed_len);
-  *out_len = total;
-  return true;
-}
-
 // The replay window. Strictly greater, never equal: unlike the LoRa admin path
 // there is no delivery uncertainty here to forgive, so an equal counter is a
 // replay rather than a retry.
@@ -874,139 +758,6 @@ static inline MqttCtrlResult mqttCtrlAuthorise(const MqttCtrlEnvelope* env,
 
   if (!mqttCtrlCommandAllowed(env->command, env->command_len, auto_reply)) return MQTTCTRL_ERR_NOT_ALLOWED;
   return MQTTCTRL_OK;
-}
-
-// The published result: `r1|<counter>|<code>|<command>|<reply>`.
-//
-// A `get` reply on its own is "> 0.5" -- true of whatever was asked, which with
-// one requester polling several nodes is not enough to act on. The topic names
-// the node, so what is missing is the question. The counter answers it: it is
-// already persisted per node, already strictly increasing, and already what the
-// requester chose, which makes it the natural correlation id -- the same role the
-// 8-hex id plays on the auto-reply path.
-//
-// Flat rather than JSON, and clamped rather than discarded. The existing payload
-// builders have a hard 768-byte budget and *drop* a payload that exceeds it
-// (MQTTPayloadBuilder.cpp:9-21); inheriting that would mean the longest replies --
-// the interesting ones -- silently never arrive. Truncation here yields a shorter
-// line that still parses, because the reply is last and every earlier field is
-// bounded.
-//
-// Splitting on the separator is unambiguous: mqttCtrlCommandCharsOk refuses a
-// command containing one, so only the trailing reply can, and a parser takes the
-// remainder of the line as the reply rather than splitting it further.
-//
-// Returns the number of bytes written, never more than out_size - 1.
-static inline size_t mqttCtrlFormatResult(char* out, size_t out_size, uint32_t counter,
-                                          int code, const char* command, const char* reply) {
-  if (out == NULL || out_size == 0) return 0;
-  out[0] = 0;
-  int n = snprintf(out, out_size, "r1%c%u%c%d%c%s%c%s",
-                   MQTTCTRL_FIELD_SEP, (unsigned)counter,
-                   MQTTCTRL_FIELD_SEP, code,
-                   MQTTCTRL_FIELD_SEP, command != NULL ? command : "",
-                   MQTTCTRL_FIELD_SEP, reply != NULL ? reply : "");
-  if (n < 0) { out[0] = 0; return 0; }
-  return ((size_t)n >= out_size) ? out_size - 1 : (size_t)n;
-}
-
-// The signed result (2026-10-08, ships with ar-11): `r2|counter|code|command|reply|<sig>`,
-// the signature 128 hex of Ed25519 by the node's own identity key over
-// "<result topic>\n" + "r2|counter|code|command|reply" -- the same shape as a
-// command's signature, so one verifier serves both. A result line is published
-// where anyone can read and anyone can write, so an unsigned `r1` lets a stranger
-// publish "ok" in a node's name; `r2` lets a tool check the node said it, with the
-// key the node's topic already names. Tools accept both for the mixed field; an
-// `r1` is shown as "unverified result".
-//
-// The signer is a callback so this stays host-testable: the firmware passes the
-// identity's sign; a test passes its own key. The reply is last and shortens
-// first: the line is cut so the separator and the whole signature always fit.
-typedef void (*MqttCtrlSigner)(void* ctx, uint8_t sig[64], const uint8_t* msg, size_t msg_len);
-
-static inline size_t mqttCtrlFormatSignedResult(char* out, size_t out_size, const char* topic,
-                                                uint32_t counter, int code, const char* command,
-                                                const char* reply, MqttCtrlSigner sign, void* ctx) {
-  if (out == NULL || out_size == 0 || topic == NULL || sign == NULL) return 0;
-  out[0] = 0;
-  const size_t tail = 1 + 2 * 64;                       // "|" + 128 hex
-  if (out_size <= tail + 1) return 0;
-  size_t budget = out_size - 1 - tail;                   // what the unsigned line may take
-  int n = snprintf(out, budget + 1, "r2%c%u%c%d%c%s%c%s",
-                   MQTTCTRL_FIELD_SEP, (unsigned)counter,
-                   MQTTCTRL_FIELD_SEP, code,
-                   MQTTCTRL_FIELD_SEP, command != NULL ? command : "",
-                   MQTTCTRL_FIELD_SEP, reply != NULL ? reply : "");
-  if (n < 0) { out[0] = 0; return 0; }
-  size_t line_len = ((size_t)n > budget) ? budget : (size_t)n;
-
-  // the bytes under the signature: topic, newline, the (possibly cut) line
-  size_t topic_len = strlen(topic);
-  if (topic_len == 0 || topic_len > MQTTCTRL_MAX_TOPIC) { out[0] = 0; return 0; }
-  uint8_t msg[MQTTCTRL_MAX_TOPIC + 1 + MQTTCTRL_MAX_RESULT];
-  if (topic_len + 1 + line_len > sizeof(msg)) { out[0] = 0; return 0; }
-  memcpy(msg, topic, topic_len);
-  msg[topic_len] = '\n';
-  memcpy(msg + topic_len + 1, out, line_len);
-
-  uint8_t sig[64];
-  sign(ctx, sig, msg, topic_len + 1 + line_len);
-  static const char hex_digits[] = "0123456789ABCDEF";   // not HEX: Arduino's Print.h defines it
-  char* p = out + line_len;
-  *p++ = MQTTCTRL_FIELD_SEP;
-  for (int i = 0; i < 64; i++) { *p++ = hex_digits[sig[i] >> 4]; *p++ = hex_digits[sig[i] & 0x0F]; }
-  *p = 0;
-  return line_len + tail;
-}
-
-// The bytes a verifier of `r2` checks: "<topic>\n" + everything before the last
-// separator. Returns the signature's hex start, or NULL when the line is not an r2.
-static inline const char* mqttCtrlSignedResultSplit(const char* line, size_t len, size_t* line_len) {
-  if (line == NULL || len < 2 + 1 + 128 || strncmp(line, "r2", 2) != 0) return NULL;
-  if (line[len - 129] != MQTTCTRL_FIELD_SEP) return NULL;
-  *line_len = len - 129;
-  return line + len - 128;
-}
-
-// Is this the broadcast topic, meshcore/{IATA}/all/cmd, rather than one node's?
-// The per-node leaf is the node's key in hex (8 or 64 characters), which can never
-// spell "all", so matching the tail is unambiguous.
-static inline bool mqttCtrlTopicIsBroadcast(const char* topic) {
-  if (topic == NULL) return false;
-  static const char SUFFIX[] = "/all/cmd";
-  size_t tlen = strlen(topic);
-  size_t slen = sizeof(SUFFIX) - 1;
-  return tlen >= slen && strcmp(topic + tlen - slen, SUFFIX) == 0;
-}
-
-// A transmit command may be addressed to one node, never to all of them.
-//
-// The rate limits are per node: four triggers an hour each. That bounds what any
-// single node does and says nothing about what happens when one publish reaches
-// every node in a region at once -- each of them then transmits, inside the same
-// few seconds, every one of them within budget. The workspace rule is explicit
-// that "any design that scales transmissions with the number of nodes is wrong",
-// and a broadcast trigger is exactly that shape: the more of the mesh adopts this
-// firmware, the worse the storm it enables.
-//
-// So this is refused on principle, not on budget, and the refusal is stateless --
-// it runs before the limiters, which spend when asked.
-//
-// Reversible if a real use appears: broadcasting a *parameter* change is fine and
-// stays allowed, because setting a value costs no airtime. Only transmitting does.
-static inline MqttCtrlResult mqttCtrlTransmitTopicResult(bool is_transmit, const char* topic) {
-  if (is_transmit && mqttCtrlTopicIsBroadcast(topic)) return MQTTCTRL_ERR_BROADCAST_TRANSMIT;
-  return MQTTCTRL_OK;
-}
-
-// What the broadcast topic refuses: a transmit, and `ota update` and `reboot`, which
-// restart every node they reach. One publish would take a whole region off the air at
-// once, and for `ota update` put the same image on all of it before any one node had
-// shown that image works. Answered with the transmit's code, since the reason is the
-// same: one publish, every node.
-static inline bool mqttCtrlBroadcastRefused(const char* command, size_t len) {
-  return mqttCtrlIsTransmitCommand(command, len) || mqttCtrlExactCommand(command, len, "ota update") ||
-         mqttCtrlExactCommand(command, len, "reboot");
 }
 
 // The sender_timestamp an MQTT command executes with. **Never 0.**

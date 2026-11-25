@@ -96,7 +96,7 @@ class MqttControl {
   void load();
   void save();
   void toStored(MqttCtrlStoredConfig* c) const;
-  MqttCtrlResult execute(const MqttCtrlEnvelope& env, const char* topic, bool mesh, uint32_t now,
+  MqttCtrlResult execute(const MqttCtrlEnvelope& env, bool mesh, uint32_t now,
                          MqttCommandRunner* runner, char* reply, MqttCtrlOutcome* out);
 
 public:

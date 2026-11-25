@@ -187,7 +187,7 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
       result = MQTTCTRL_ERR_BAD_VERSION;
       break;
     }
-    result = execute(env, staged->topic, false, now, runner, reply, out);
+    result = execute(env, false, now, runner, reply, out);
   } while (false);
 
   mqttCtrlQueuePop(&_queue);
@@ -203,7 +203,7 @@ MqttCtrlResult MqttControl::takeForward(Mcc3Forward* out) {
 #endif
 
 // Everything after the key has vouched for a command, on either road.
-MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, const char* topic, bool mesh,
+MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, bool mesh,
                                     uint32_t now, MqttCommandRunner* runner, char* reply,
                                     MqttCtrlOutcome* out) {
   // Past this line the sender held the command key, so the outcome is safe to
@@ -225,10 +225,6 @@ MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, const char* top
   // every stateless check: otherwise anyone could drain the budget with garbage
   // that was going to be refused anyway.
   bool transmit = mqttCtrlIsTransmitCommand(env.command, env.command_len);
-
-  // Stateless, so it runs before the limiters spend anything.
-  result = mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(env.command, env.command_len), topic);
-  if (result != MQTTCTRL_OK) return result;
 
   // One limiter is asked, never both: a limiter spends when asked, and the two
   // budgets are disjoint. A transmit costs a transmit; a parameter change costs a
@@ -300,7 +296,7 @@ MqttCtrlResult MqttControl::meshCommand(const Mcc3Command& cmd, uint32_t now, bo
   env.expiry = cmd.expiry;
   env.command = cmd.command;
   env.command_len = cmd.command_len;
-  return execute(env, "", true, now, runner, reply, NULL);
+  return execute(env, true, now, runner, reply, NULL);
 }
 
 bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
