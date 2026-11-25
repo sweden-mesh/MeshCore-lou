@@ -3084,3 +3084,126 @@ TEST(MeshOnly, CounterExpiryAndDenyListAreUnchanged) {
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&h.env, 4, 1795000000 - MQTTCTRL_MAX_FUTURE_SECS - 1,
                                                        true, false));
 }
+
+// ---- The arrivals queue ----
+
+static bool push(MqttCtrlQueue* q, const std::string& topic, const std::string& payload) {
+  return mqttCtrlQueuePush(q, topic.c_str(), (const uint8_t*)payload.data(), payload.size());
+}
+
+TEST(ArrivalsQueue, TwoBackToBackAreBothTakenInOrder) {
+  static MqttCtrlQueue q;
+  mqttCtrlQueueReset(&q);
+  EXPECT_EQ(nullptr, mqttCtrlQueueFront(&q));
+  EXPECT_TRUE(push(&q, "mcc/cmd/a", "first"));
+  EXPECT_TRUE(push(&q, "mcc/cmd/b", "second!"));
+
+  const MqttCtrlStaged* s = mqttCtrlQueueFront(&q);
+  ASSERT_NE(nullptr, s);
+  EXPECT_STREQ("mcc/cmd/a", s->topic);
+  EXPECT_STREQ("first", s->payload);
+  EXPECT_EQ(5u, s->payload_len);
+  EXPECT_EQ(s, mqttCtrlQueueFront(&q));       // it stays the oldest until it is popped
+  mqttCtrlQueuePop(&q);
+
+  s = mqttCtrlQueueFront(&q);
+  ASSERT_NE(nullptr, s);
+  EXPECT_STREQ("mcc/cmd/b", s->topic);
+  EXPECT_STREQ("second!", s->payload);
+  EXPECT_EQ(7u, s->payload_len);
+  mqttCtrlQueuePop(&q);
+  EXPECT_EQ(nullptr, mqttCtrlQueueFront(&q));
+  mqttCtrlQueuePop(&q);                       // an empty queue stays empty
+  EXPECT_EQ(nullptr, mqttCtrlQueueFront(&q));
+  EXPECT_TRUE(push(&q, "t", "third"));
+  ASSERT_NE(nullptr, mqttCtrlQueueFront(&q));
+  EXPECT_STREQ("third", mqttCtrlQueueFront(&q)->payload);
+  EXPECT_EQ(0u, mqttCtrlQueueDropped(&q));
+}
+
+TEST(ArrivalsQueue, AFullQueueDropsTheNewestAndCountsIt) {
+  static MqttCtrlQueue q;
+  mqttCtrlQueueReset(&q);
+  for (int i = 0; i < MQTTCTRL_QUEUE_LEN; i++) EXPECT_TRUE(push(&q, "t", std::string(1, (char)('a' + i)))) << i;
+  EXPECT_EQ(0u, mqttCtrlQueueDropped(&q));
+  EXPECT_FALSE(push(&q, "t", "late"));
+  EXPECT_FALSE(push(&q, "t", "later"));
+  EXPECT_EQ(2u, mqttCtrlQueueDropped(&q));
+
+  // What waited is untouched, and one taken out makes room for exactly one.
+  for (int i = 0; i < MQTTCTRL_QUEUE_LEN; i++) {
+    const MqttCtrlStaged* s = mqttCtrlQueueFront(&q);
+    ASSERT_NE(nullptr, s) << i;
+    EXPECT_EQ(std::string(1, (char)('a' + i)), s->payload) << i;
+    mqttCtrlQueuePop(&q);
+    if (i == 0) {
+      EXPECT_TRUE(push(&q, "t", "room"));
+      EXPECT_FALSE(push(&q, "t", "none"));
+    }
+  }
+  ASSERT_NE(nullptr, mqttCtrlQueueFront(&q));
+  EXPECT_STREQ("room", mqttCtrlQueueFront(&q)->payload);
+  mqttCtrlQueuePop(&q);
+  EXPECT_EQ(nullptr, mqttCtrlQueueFront(&q));
+  EXPECT_EQ(3u, mqttCtrlQueueDropped(&q));
+  mqttCtrlQueueReset(&q);
+  EXPECT_EQ(0u, mqttCtrlQueueDropped(&q));
+}
+
+TEST(ArrivalsQueue, TheCountsWrap) {
+  static MqttCtrlQueue q;
+  mqttCtrlQueueReset(&q);
+  // Around the slots several times...
+  for (int i = 0; i < 3 * MQTTCTRL_QUEUE_LEN + 1; i++) {
+    const std::string a = "a" + std::to_string(i), b = "b" + std::to_string(i);
+    EXPECT_TRUE(push(&q, "t", a)) << i;
+    EXPECT_TRUE(push(&q, "t", b)) << i;
+    ASSERT_NE(nullptr, mqttCtrlQueueFront(&q)) << i;
+    EXPECT_EQ(a, mqttCtrlQueueFront(&q)->payload) << i;
+    mqttCtrlQueuePop(&q);
+    ASSERT_NE(nullptr, mqttCtrlQueueFront(&q)) << i;
+    EXPECT_EQ(b, mqttCtrlQueueFront(&q)->payload) << i;
+    mqttCtrlQueuePop(&q);
+    EXPECT_EQ(nullptr, mqttCtrlQueueFront(&q)) << i;
+  }
+  // ... and across 2^32 messages, full on the far side of the wrap.
+  q.head = q.tail = 0xFFFFFFFEu;
+  for (int i = 0; i < MQTTCTRL_QUEUE_LEN; i++) EXPECT_TRUE(push(&q, "t", std::string(1, (char)('a' + i)))) << i;
+  EXPECT_EQ(2u, q.head);
+  EXPECT_FALSE(push(&q, "t", "late"));
+  EXPECT_EQ(1u, mqttCtrlQueueDropped(&q));
+  for (int i = 0; i < MQTTCTRL_QUEUE_LEN; i++) {
+    ASSERT_NE(nullptr, mqttCtrlQueueFront(&q)) << i;
+    EXPECT_EQ(std::string(1, (char)('a' + i)), mqttCtrlQueueFront(&q)->payload) << i;
+    mqttCtrlQueuePop(&q);
+  }
+  EXPECT_EQ(nullptr, mqttCtrlQueueFront(&q));
+}
+
+TEST(ArrivalsQueue, WhatCannotFitTakesNoSlot) {
+  static MqttCtrlQueue q;
+  mqttCtrlQueueReset(&q);
+  const std::string topic(MQTTCTRL_MAX_TOPIC, 't'), payload(MQTTCTRL_MAX_PAYLOAD, 'p');
+  EXPECT_FALSE(push(&q, topic + "t", "x"));
+  EXPECT_FALSE(push(&q, "t", payload + "p"));
+  EXPECT_FALSE(push(&q, "t", ""));
+  EXPECT_FALSE(mqttCtrlQueuePush(&q, NULL, (const uint8_t*)"x", 1));
+  EXPECT_FALSE(mqttCtrlQueuePush(&q, "t", NULL, 1));
+  EXPECT_FALSE(mqttCtrlQueuePush(NULL, "t", (const uint8_t*)"x", 1));
+  EXPECT_EQ(nullptr, mqttCtrlQueueFront(&q));
+  EXPECT_EQ(nullptr, mqttCtrlQueueFront(NULL));
+  mqttCtrlQueuePop(NULL);
+  EXPECT_EQ(0u, mqttCtrlQueueDropped(NULL));
+  EXPECT_EQ(0u, mqttCtrlQueueDropped(&q));    // refused for its size, not for want of room
+
+  // The longest that fits is kept whole, and the queue still holds its full number after.
+  EXPECT_TRUE(push(&q, topic, payload));
+  const MqttCtrlStaged* s = mqttCtrlQueueFront(&q);
+  ASSERT_NE(nullptr, s);
+  EXPECT_EQ(topic, s->topic);
+  EXPECT_EQ(payload, std::string(s->payload, s->payload_len));
+  EXPECT_EQ(0, s->payload[MQTTCTRL_MAX_PAYLOAD]);
+  for (int i = 1; i < MQTTCTRL_QUEUE_LEN; i++) EXPECT_TRUE(push(&q, "t", "x")) << i;
+  EXPECT_FALSE(push(&q, topic + "t", "x"));
+  EXPECT_EQ(0u, mqttCtrlQueueDropped(&q));    // too long is never counted as a full queue
+}

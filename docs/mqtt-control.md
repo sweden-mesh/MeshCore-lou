@@ -609,8 +609,13 @@ counter are not involved. This is the plane's second sanctioned transmit, beside
   not be sent spends nothing. The budgets are kept in RAM: a restart opens a burst.
 - **One at a time.** From the moment a request is sent until the target's answer, or 120 s,
   the relay holds that one forward. A forward that arrives meanwhile is answered `busy` and is
-  not sent. The node also holds one arriving message at a time: one that arrives before the
-  node has taken up the one before it is dropped, unanswered. Send one and wait for its result.
+  not sent. Up to lou-20 the node also holds one arriving message at a time: one that arrives
+  before the node has taken up the one before it is dropped, unanswered. From lou-21 it holds
+  four and takes them up in the order they came, one a pass of its main loop, so a stranger's
+  message on the node's topic no longer pushes the owner's out. A fifth that arrives while four
+  wait is dropped, unanswered, and counted: `set cmd.debug on` prints
+  `mcc: mqtt: 1 arrival(s) dropped, the queue was full (1 since boot)`. Send one and wait for
+  its result.
 - **The way back.** When a flooded answer reaches the relay, it sends the target the path that
   answer took, direct along the path the answer taught (MeshCore's reciprocal path; counted in
   the airtime budget). The target then answers direct commands along it instead of flooding.

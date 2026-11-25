@@ -1858,3 +1858,76 @@ static inline void mqttCtrlAliveSent(MqttCtrlAliveClock* c, uint32_t now_ms, uin
   const uint32_t ms = interval_s * 1000UL;
   c->due_ms = now_ms + ms / 2 + rnd % (ms + 1);
 }
+
+// ---- The arrivals queue (lou-21) ----
+//
+// What arrives on the node's command topic waits here for the loop task, which takes one a
+// pass. The topic is open to anyone, so the owner's command must survive a stranger's message
+// that came just before it: four hold what one slow loop pass (a flash write, a signature
+// check) lets pile up. A steady flood faster than the loop fills any number, which is why a
+// drop is counted. An entry is 680 bytes and static (the DRAM note above), so the queue is
+// 2.7 KiB, 2 KiB more than a single slot, on boards where every TLS session wants 32 KiB of
+// DRAM in one piece (docs/mbedtls-tls-footprint.md); eight would be the price of nothing more.
+//
+// One task puts in (the MQTT client's) and one takes out (the loop), with no lock: the
+// first must never wait for the second. 'head' and 'dropped' are written by push alone,
+// 'tail' by pop alone, and neither count ever goes back, so each side only ever sees the
+// other a step behind: push may call a queue full that has just been emptied, front may
+// miss a message until the next pass. An entry is written before 'head' is released and
+// read before 'tail' is, and the acquire/release pair keeps that order on two cores.
+#define MQTTCTRL_QUEUE_LEN  4          // a power of two: the counts wrap at 2^32
+
+struct MqttCtrlStaged {
+  char topic[MQTTCTRL_MAX_TOPIC + 1];
+  char payload[MQTTCTRL_MAX_PAYLOAD + 1];
+  size_t payload_len;
+};
+
+struct MqttCtrlQueue {
+  MqttCtrlStaged slot[MQTTCTRL_QUEUE_LEN];
+  uint32_t head;       // messages put in
+  uint32_t tail;       // messages taken out
+  uint32_t dropped;    // arrivals that found it full
+};
+
+static inline void mqttCtrlQueueReset(MqttCtrlQueue* q) {
+  if (q == NULL) return;
+  q->head = q->tail = q->dropped = 0;
+}
+
+// False when the message is not kept: one that could never fit takes no slot and is not
+// counted, one that finds the queue full is counted.
+static inline bool mqttCtrlQueuePush(MqttCtrlQueue* q, const char* topic, const uint8_t* payload, size_t len) {
+  if (q == NULL || topic == NULL || payload == NULL) return false;
+  if (len == 0 || len > MQTTCTRL_MAX_PAYLOAD) return false;
+  const size_t topic_len = strlen(topic);
+  if (topic_len > MQTTCTRL_MAX_TOPIC) return false;
+
+  const uint32_t head = q->head;
+  if (head - __atomic_load_n(&q->tail, __ATOMIC_ACQUIRE) >= MQTTCTRL_QUEUE_LEN) {
+    __atomic_store_n(&q->dropped, q->dropped + 1, __ATOMIC_RELAXED);
+    return false;
+  }
+  MqttCtrlStaged* s = &q->slot[head % MQTTCTRL_QUEUE_LEN];
+  memcpy(s->topic, topic, topic_len + 1);
+  memcpy(s->payload, payload, len);
+  s->payload[len] = 0;
+  s->payload_len = len;
+  __atomic_store_n(&q->head, head + 1, __ATOMIC_RELEASE);
+  return true;
+}
+
+// The oldest message, or NULL. It stays the oldest until mqttCtrlQueuePop.
+static inline const MqttCtrlStaged* mqttCtrlQueueFront(const MqttCtrlQueue* q) {
+  if (q == NULL || __atomic_load_n(&q->head, __ATOMIC_ACQUIRE) == q->tail) return NULL;
+  return &q->slot[q->tail % MQTTCTRL_QUEUE_LEN];
+}
+
+static inline void mqttCtrlQueuePop(MqttCtrlQueue* q) {
+  if (mqttCtrlQueueFront(q) == NULL) return;
+  __atomic_store_n(&q->tail, q->tail + 1, __ATOMIC_RELEASE);
+}
+
+static inline uint32_t mqttCtrlQueueDropped(const MqttCtrlQueue* q) {
+  return q == NULL ? 0 : __atomic_load_n(&q->dropped, __ATOMIC_RELAXED);
+}

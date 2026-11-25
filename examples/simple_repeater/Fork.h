@@ -134,6 +134,7 @@ class Fork {
   unsigned long _ctrl_last_verified_ms = 0;   // millis() of the last command the key vouched for
   uint32_t _ctrl_unverified = 0;               // commands refused before the key vouched for them
   uint8_t _ctrl_last_unverified = 0;           // ... and the last one's MqttCtrlResult
+  uint32_t _ctrl_dropped_seen = 0;             // arrivals the full queue dropped, as last put on a debug line
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
   // The relay (MqttRelayHooks.cpp): one forward at a time waits for its target's answer,
   // and the target is a peer of this node only while it does.
