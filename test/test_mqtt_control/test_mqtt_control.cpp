@@ -49,6 +49,21 @@ struct Held {
   }
 };
 
+// A command as the checks after the envelope see it: counter, expiry and text, whatever
+// road and seal brought it. The text is held here because the envelope points into it.
+struct Cmd {
+  std::string text;
+  MqttCtrlEnvelope env;
+  Cmd(uint32_t counter, uint32_t expiry, const std::string& command) : text(command) {
+    memset(&env, 0, sizeof(env));
+    env.counter = counter;
+    env.expiry = expiry;
+    env.command = text.data();
+    env.command_len = text.size();
+  }
+  Cmd(const Cmd&) = delete;   // a copy's envelope would point into the original
+};
+
 // ---- the happy path, so the hostile cases mean something --------------------
 
 TEST(ParseEnvelope, AcceptsAWellFormedCommand) {
@@ -526,7 +541,7 @@ TEST(Allowlist, RejectsEmptyOverlongAndNonPrintable) {
 // ---- the whole decision, in order ------------------------------------------
 
 TEST(Authorise, AcceptsAFreshAllowedCommand) {
-  Held h("v1|9|1788200060|trigger test");
+  Cmd h(9, 1788200060, "trigger test");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&h.env, 8, 1788200000, true));
 }
 
@@ -534,18 +549,18 @@ TEST(Authorise, StopsAtTheFirstRefusalInOrder) {
   // Replay is checked before expiry, and expiry before the allowlist: a replayed
   // command reports replay even when it is also expired and also forbidden, so a
   // caller publishing the reason cannot be used to probe the later checks.
-  Held replayed("v1|5|1|erase");
+  Cmd replayed(5, 1, "erase");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthorise(&replayed.env, 5, 1788200000, true));
 
-  Held expired("v1|9|1|erase");
+  Cmd expired(9, 1, "erase");
   EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthorise(&expired.env, 8, 1788200000, true));
 
-  Held forbidden("v1|9|1788200060|erase");
+  Cmd forbidden(9, 1788200060, "erase");
   EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&forbidden.env, 8, 1788200000, true));
 }
 
 TEST(Authorise, RefusesEverythingWithoutAClock) {
-  Held h("v1|9|1788200060|trigger test");
+  Cmd h(9, 1788200060, "trigger test");
   EXPECT_EQ(MQTTCTRL_ERR_NO_CLOCK, mqttCtrlAuthorise(&h.env, 8, 0, true));
 }
 
@@ -710,9 +725,8 @@ TEST(ErrorCodes, ExhaustedBudgetIsNotTheSameAsUnauthorised) {
   EXPECT_NE(MQTTCTRL_ERR_RATE_LIMITED, MQTTCTRL_ERR_NOT_ALLOWED);
   EXPECT_EQ(mqttCtrlRateResult(true, false, false), MQTTCTRL_ERR_RATE_LIMITED);
 
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|7|1788200000|set prv.key deadbeef"), &env));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 6, 1788199000, true));
+  Cmd key(7, 1788200000, "set prv.key deadbeef");
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&key.env, 6, 1788199000, true));
 }
 
 TEST(ErrorCodes, AForgedSignatureIsNotTheSameAsAMalformedOne) {
@@ -1610,12 +1624,11 @@ TEST(PrivateKey, ASignedRequestForItIsRefusedAtAuthorisation) {
   // End of the chain: even a perfectly signed, fresh, unexpired envelope asking
   // for the key is refused -- and refused as NOT_ALLOWED, which is permanent,
   // rather than as anything a requester should retry.
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|9|1788200000|get prv.key"), &env));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 8, 1788199000, true));
+  Cmd get(9, 1788200000, "get prv.key");
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&get.env, 8, 1788199000, true));
 
-  ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|9|1788200000|set prv.key deadbeef"), &env));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 8, 1788199000, true));
+  Cmd set(9, 1788200000, "set prv.key deadbeef");
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&set.env, 8, 1788199000, true));
 }
 
 // ---- exact entries admit the command they name, and nothing else --------------
@@ -2410,7 +2423,7 @@ TEST(MeshRoad, TheCounterIsSharedAcrossTheRoads) {
   // A command run over MQTT is a replay over the mesh, and the other way round.
   makeTestKey();
   const uint32_t now = 1795000000 - 60;
-  Held mqtt("v1|7|1795000000|get name");
+  Cmd mqtt(7, 1795000000, "get name");
   uint32_t last = 0;
   ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&mqtt.env, last, now, true));
   last = mqtt.env.counter;
@@ -2423,7 +2436,7 @@ TEST(MeshRoad, TheCounterIsSharedAcrossTheRoads) {
   ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
   ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&req.env, last, now, true));
   last = req.env.counter;
-  Held again("v1|8|1795000000|get name");
+  Cmd again(8, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthorise(&again.env, last, now, true));
 }
 
@@ -2466,7 +2479,7 @@ TEST(MeshRoad, AnUpdateTravelsAsOnTheBrokerAndTheNodeChecksItsOwnLink) {
 
 TEST(MeshRoad, ARepairArrivingOverMqttIsRefused) {
   const uint32_t now = 1795000000 - 60;
-  Held h("v1|9|1795000000|set wifi.pwd hunter2");
+  Cmd h(9, 1795000000, "set wifi.pwd hunter2");
   EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&h.env, 0, now, true));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 0, now, true));
 }
@@ -2477,27 +2490,27 @@ TEST(MeshRoad, ARepairArrivingOverMqttIsRefused) {
 TEST(MeshRoad, AClockStepMendsANodeThatIsWeeksBehind) {
   const uint32_t owner_now = 1795000000;
   const uint32_t behind = owner_now - 21u * 86400u;   // set once, then weeks behind
-  Held other("v1|9|1795000150|get name");
+  Cmd other(9, 1795000150, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&other.env, 0, behind, true));
-  Held step("v1|9|1795000150|time 1795000000");
+  Cmd step(9, 1795000150, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&step.env, 0, behind, true));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&step.env, 0, behind, true, false)) << "a mesh-only image too";
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&step.env, 0, owner_now, true)) << "and on a node whose clock is right";
 }
 
 TEST(MeshRoad, AClockStepIsStillACommandWithACounter) {
-  Held step("v1|9|1795000150|time 1795000000");
+  Cmd step(9, 1795000150, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&step.env, 9, 1700000000, true));
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&step.env, 10, 1700000000, true));
 }
 
 // The time must agree with the command's own signed expiry: at or before it, by an hour at most.
 TEST(MeshRoad, AClockStepMustAgreeWithItsOwnExpiry) {
-  Held late("v1|9|1795000150|time 1795000151");
+  Cmd late(9, 1795000150, "time 1795000151");
   EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthoriseMesh(&late.env, 0, 1700000000, true));
-  Held edge("v1|9|1795003600|time 1795000000");
+  Cmd edge(9, 1795003600, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&edge.env, 0, 1700000000, true));
-  Held far("v1|9|1795003601|time 1795000000");
+  Cmd far(9, 1795003601, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&far.env, 0, 1700000000, true));
 }
 
@@ -2510,15 +2523,15 @@ TEST(MeshRoad, OnlyAWholeClockStepIsOne) {
     EXPECT_FALSE(mqttCtrlMeshClockStep(c, strlen(c), &e)) << c;
   }
   const uint32_t now = 1795000000 - 60;
-  for (const char* body : { "v1|9|1795000000|time", "v1|9|1795000000|time 12", "v1|9|1795000000|time 1795000000 x" }) {
-    Held h(body);
+  for (const char* body : { "time", "time 12", "time 1795000000 x" }) {
+    Cmd h(9, 1795000000, body);
     EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthoriseMesh(&h.env, 0, now, true)) << body;
   }
 }
 
 // Over MQTT the clock stays out of reach: an Observer node has NTP, and a broker could hold a command.
 TEST(MeshRoad, AClockStepOverMqttIsRefused) {
-  Held step("v1|9|1795000150|time 1795000000");
+  Cmd step(9, 1795000150, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&step.env, 0, 1795000000, true));
 }
 
@@ -2576,7 +2589,7 @@ TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlMeshCheckExpiry(1795000000, 1795000000 + MQTTCTRL_MAX_FUTURE_SECS + 1));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(1795000000, 1795000000 + MQTTCTRL_MAX_FUTURE_SECS));
   // ... and the replay still stops an unset clock.
-  Held h("v1|5|1795000000|get name");
+  Cmd h(5, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, unset, true));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, unset, true));
 }
@@ -3171,11 +3184,11 @@ TEST(MeshOnly, TheRoadListensWhileThePlaneIsOnAndIsAlwaysOpen) {
 
 TEST(MeshOnly, ACommandIsAcceptedWithNoUplink) {
   const uint32_t now = 1795000000 - 60;
-  Held h("v1|9|1795000000|get name");
+  Cmd h(9, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 0, now, true, false));
-  Held r("v1|9|1795000000|reboot");
+  Cmd r(9, 1795000000, "reboot");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&r.env, 0, now, false, false));
-  Held t("v1|9|1795000000|trigger test");
+  Cmd t(9, 1795000000, "trigger test");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&t.env, 0, now, true, false));
   EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthoriseMesh(&t.env, 0, now, false, false));
 }
@@ -3189,8 +3202,7 @@ TEST(MeshOnly, TheUplinksRepairsAndItsUpdateAreRefused) {
   const uint32_t now = 1795000000 - 60;
   for (const char* c : refused) {
     EXPECT_FALSE(mqttCtrlMeshCommandAllowed(c, strlen(c), true, false)) << c;
-    std::string text = std::string("v1|9|1795000000|") + c;
-    Held h(text.c_str());
+    Cmd h(9, 1795000000, c);
     EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthoriseMesh(&h.env, 0, now, true, false)) << c;
   }
   // With an uplink the same commands travel as before.
@@ -3211,7 +3223,7 @@ TEST(MeshOnly, CounterExpiryAndDenyListAreUnchanged) {
               mqttCtrlMeshCommandAllowed(c, n, false, false)) << c;
   }
   const uint32_t unset = 1715770351 + 3600;
-  Held h("v1|5|1795000000|get name");
+  Cmd h(5, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, unset, true, false));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, unset, true, false));
   EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthoriseMesh(&h.env, 4, 1795000001, true, false));
