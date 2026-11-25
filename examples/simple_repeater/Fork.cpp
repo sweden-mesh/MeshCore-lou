@@ -10,6 +10,9 @@ void Fork::begin(FILESYSTEM* fs) {
 #endif
 #ifdef WITH_MQTT_COMMAND
   _mqtt_control.begin(fs);
+#ifdef WITH_MQTT_BRIDGE
+  repairMqttControlSlot();
+#endif
 #endif
 }
 

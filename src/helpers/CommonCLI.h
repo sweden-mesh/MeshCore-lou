@@ -478,5 +478,7 @@ public:
   // fields directly (they no longer live in NodePrefs).
   MQTTPrefs* getObserverPrefs() const { return const_cast<MQTTPrefs*>(&_mqtt_prefs); }
   bool saveObserverPrefs(FILESYSTEM* fs) { return saveMQTTPrefs(fs); }
+  // The settings file could not be read and the node runs on defaults: nothing is saved.
+  bool observerPrefsHeld() const { return _mqtt_prefs_hold; }
 #endif
 };

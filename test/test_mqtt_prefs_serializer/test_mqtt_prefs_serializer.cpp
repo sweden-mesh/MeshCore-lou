@@ -6,6 +6,7 @@
 #define PROGMEM
 #include "helpers/MQTTPrefsSerializer.h"
 #include "helpers/MqttControlLogic.h"
+#include "helpers/MqttControlSlotRepair.h"
 
 class InputStream : public Stream {
 public:
@@ -178,6 +179,131 @@ TEST(MQTTPrefsSerializer, TheCommandSlotSurvivesTheReboot) {
   EXPECT_STREQ("mccontrol", loaded.mqtt_slot_preset[2]);
   EXPECT_STREQ("", loaded.mqtt_slot_host[2]);
   EXPECT_STREQ("", loaded.mqtt_slot_audience[2]);
+}
+
+static MQTTPrefs roundTrip(MQTTPrefs source) {
+  OutputStream output;
+  MQTTPrefsSerializer writer(&source);
+  EXPECT_TRUE(writer.saveSerial(output));
+  MQTTPrefs loaded = defaults();
+  InputStream input(output.text());
+  MQTTPrefsSerializer reader(&loaded);
+  EXPECT_TRUE(reader.loadSerial(input)) << output.text();
+  bool repaired = true;
+  EXPECT_TRUE(reader.apply(&repaired));
+  return loaded;
+}
+
+// The command slot of a node set up before the `mccontrol` preset, as /mqtt.json gives it
+// back at start.
+static MQTTPrefs oldCommandSlot(const char* host, int idx) {
+  MQTTPrefs prefs = defaults();
+  strcpy(prefs.mqtt_slot_preset[idx], "custom");
+  strcpy(prefs.mqtt_slot_host[idx], host);
+  prefs.mqtt_slot_port[idx] = 1883;
+  strcpy(prefs.mqtt_slot_username[idx], "mcoar");
+  strcpy(prefs.mqtt_slot_password[idx], "not-a-real-password");
+  prefs.mqtt_slot_packet_filter[idx] = 0x0011;
+  return roundTrip(prefs);
+}
+
+static std::string planeFile(bool enabled, uint8_t slot) {
+  MqttCtrlStoredConfig c;
+  mqttCtrlConfigDefaults(&c);
+  c.enabled = enabled;
+  c.slot = slot;
+  c.counter = 41;
+  uint8_t buf[MQTTCTRL_CONFIG_LEN];
+  const size_t len = mqttCtrlConfigEncode(&c, buf, sizeof(buf));
+  return std::string((const char *) buf, len);
+}
+
+TEST(CommandSlotRepair, AnOldPasswordSlotStartsOnThePresetWithThePlaneAsItWas) {
+  for (const char* host : { "mqtt.louie.se", "mqtt://mqtt.louie.se:1883" }) {
+    for (bool enabled : { true, false }) {
+      // the plane's file is read for the slot and for nothing else
+      const std::string file = planeFile(enabled, 3);
+      MqttCtrlStoredConfig plane;
+      mqttCtrlConfigDefaults(&plane);
+      ASSERT_TRUE(mqttCtrlConfigDecode((const uint8_t *) file.data(), file.size(), 6, &plane));
+
+      MQTTPrefs prefs = oldCommandSlot(host, 2);
+      ASSERT_STREQ("custom", prefs.mqtt_slot_preset[2]);
+      ASSERT_STREQ("mcoar", prefs.mqtt_slot_username[2]);
+      MqttCtrlSlotLogin was;
+      ASSERT_TRUE(mqttCtrlRepairPlaneSlot(&prefs, plane.slot, false, &was)) << host;
+
+      MQTTPrefs loaded = roundTrip(prefs);
+      EXPECT_STREQ("mccontrol", loaded.mqtt_slot_preset[2]);
+      EXPECT_STREQ("", loaded.mqtt_slot_host[2]);
+      EXPECT_STREQ("", loaded.mqtt_slot_audience[2]);
+      EXPECT_STREQ("", loaded.mqtt_slot_username[2]);
+      EXPECT_STREQ("", loaded.mqtt_slot_password[2]);
+      EXPECT_EQ(0, loaded.mqtt_slot_port[2]);
+      EXPECT_EQ(MQTTPacketFilter::kAllPacketTypes, loaded.mqtt_slot_packet_filter[2]);
+      EXPECT_STREQ(host, was.host);
+      EXPECT_STREQ("mcoar", was.username);
+
+      uint8_t after[MQTTCTRL_CONFIG_LEN];
+      ASSERT_EQ(file.size(), mqttCtrlConfigEncode(&plane, after, sizeof(after)));
+      EXPECT_EQ(file, std::string((const char *) after, sizeof(after)));
+      EXPECT_EQ(enabled, plane.enabled);
+      EXPECT_EQ(3, plane.slot);
+
+      // the next start finds nothing to do and changes nothing
+      const MQTTPrefs before = loaded;
+      EXPECT_FALSE(mqttCtrlRepairPlaneSlot(&loaded, plane.slot, false, &was));
+      EXPECT_EQ(0, memcmp(&before, &loaded, sizeof(loaded)));
+    }
+  }
+}
+
+TEST(CommandSlotRepair, OnlyThePlanesOwnSlotIsTouched) {
+  MQTTPrefs prefs = oldCommandSlot("mqtt.louie.se", 2);
+  strcpy(prefs.mqtt_slot_preset[3], "custom");
+  strcpy(prefs.mqtt_slot_host[3], "mqtt.louie.se");
+  strcpy(prefs.mqtt_slot_username[3], "mcoar");
+  const MQTTPrefs before = prefs;
+  MqttCtrlSlotLogin was;
+  EXPECT_FALSE(mqttCtrlRepairPlaneSlot(&prefs, 0, false, &was));      // no slot, no plane to mend
+  EXPECT_FALSE(mqttCtrlRepairPlaneSlot(&prefs, 2, false, &was));      // the plane is elsewhere
+  EXPECT_FALSE(mqttCtrlRepairPlaneSlot(&prefs, 7, false, &was));
+  EXPECT_FALSE(mqttCtrlRepairPlaneSlot(&prefs, -1, false, &was));
+  EXPECT_FALSE(mqttCtrlRepairPlaneSlot(nullptr, 3, false, &was));
+  EXPECT_FALSE(mqttCtrlRepairPlaneSlot(&prefs, 3, false, nullptr));
+  EXPECT_EQ(0, memcmp(&before, &prefs, sizeof(prefs)));
+  ASSERT_TRUE(mqttCtrlRepairPlaneSlot(&prefs, 3, false, &was));
+  EXPECT_STREQ("mccontrol", prefs.mqtt_slot_preset[2]);
+  EXPECT_STREQ("custom", prefs.mqtt_slot_preset[3]);
+  EXPECT_STREQ("mcoar", prefs.mqtt_slot_username[3]);
+}
+
+TEST(CommandSlotRepair, ASlotSetCmdOnWithAHostWroteIsUntouched) {
+  MQTTPrefs source = defaults();
+  strcpy(source.mqtt_slot_username[2], "mcoar");             // left in storage by the old slot
+  strcpy(source.mqtt_slot_password[2], "not-a-real-password");
+  MQTTPrefs prefs = roundTripCommandSlot("set cmd on mqtt.louie.se", source, 2);
+  const MQTTPrefs before = prefs;
+  MqttCtrlSlotLogin was;
+  EXPECT_FALSE(mqttCtrlRepairPlaneSlot(&prefs, 3, false, &was));
+  EXPECT_EQ(0, memcmp(&before, &prefs, sizeof(prefs)));
+}
+
+TEST(CommandSlotRepair, HeldSettingsAreNotRepaired) {
+  MQTTPrefs prefs = oldCommandSlot("mqtt.louie.se", 2);
+  const MQTTPrefs before = prefs;
+  MqttCtrlSlotLogin was;
+  EXPECT_FALSE(mqttCtrlRepairPlaneSlot(&prefs, 3, true, &was));
+  EXPECT_EQ(0, memcmp(&before, &prefs, sizeof(prefs)));
+}
+
+TEST(CommandSlotRepair, AFailedSaveLeavesTheSlotAsItWas) {
+  MQTTPrefs prefs = oldCommandSlot("mqtt://mqtt.louie.se:1883", 2);
+  const MQTTPrefs before = prefs;
+  MqttCtrlSlotLogin was;
+  ASSERT_TRUE(mqttCtrlRepairPlaneSlot(&prefs, 3, false, &was));
+  mqttCtrlSlotLoginWrite(&prefs, 2, &was);
+  EXPECT_EQ(0, memcmp(&before, &prefs, sizeof(prefs)));
 }
 
 TEST(MQTTPrefsSerializer, NetworkOnboardingSupportsWifiAndEthernetOnlyInstalls) {

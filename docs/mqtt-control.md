@@ -159,6 +159,18 @@ opening TLS and presenting a token where a password login was meant, while `get 
 and `get mqttN.server` read exactly as intended. `get mqtt.stats` ends each slot with the mode it
 is really in — `s2=11/0 pw` or `s2=0/4 jwt` — and `set mqttN.audience` with no value clears it.
 
+**A command slot from before the `mccontrol` preset is mended at start (lou-21).** A node set
+up before lou-17 has the plane on a custom slot that signs in with a username and password on
+`mqtt.louie.se`. The broker lets that login in and refuses it the `mcc/` topics, so the slot
+reads connected and no command arrives. At every start the node looks at the plane's slot, and
+one that is a custom slot with a username, no audience and one of the plane's broker names
+(`mqtt.louie.se`, `mqtt-meshcore.louie.se`, `mqtt.meshcore-jkp.se`) is rewritten as a bare
+`set cmd on` would: the `mccontrol` preset, every packet type, and the old username, password
+and port cleared. The serial console says `CMD: slot N was on the old login; moved to the
+mccontrol preset`, once, and the slot connects on the preset in the same start. A plane that was
+`off` stays off with its slot mended. A slot `set cmd on <host>` wrote (it has an audience), a
+custom slot on any other broker, and settings that could not be read at start are left alone.
+
 **Each slot connects with its own client id**, the node's 8-hex id, the slot number and a tag
 derived from the node's private key (`A0586238-3-9F04C21B`), so one node may keep an Observer
 slot and the command slot on the same broker. The tag keeps the id private: a broker closes

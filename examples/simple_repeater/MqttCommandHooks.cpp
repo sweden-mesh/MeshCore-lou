@@ -12,6 +12,8 @@
 
 #ifdef WITH_MQTT_BRIDGE
 
+#include <helpers/MqttControlSlotRepair.h>
+
 // `set cmd on` with no slot configured, the one line a fresh node needs
 // (operator decision 2026-10-08): take a free slot (mqttCtrlPickSlot says which:
 // slot 2 first on a board that runs two at once, else 3 up), give it what
@@ -70,6 +72,23 @@ void Fork::autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply) {
   _mqtt_control.setSlotAndEnable((uint8_t)(idx + 1));
   sprintf(reply, "OK - slot %d%s, %s (%s), packets on; reboot to apply", idx + 1,
           was_analyzer ? " (was analyzer-eu, now off)" : "", plan.preset, server);
+}
+
+// At start, before the bridge reads the slots: a command slot still on the password login
+// of before the `mccontrol` preset is put on the preset, as a bare `set cmd on` would
+// (mqttCtrlRepairPlaneSlot). The plane itself is left as it is, on or off. A save that
+// fails leaves the slot as it was, to be tried again at the next start.
+void Fork::repairMqttControlSlot() {
+  if (findMQTTPreset(MQTTCTRL_PLANE_PRESET) == NULL) return;
+  MQTTPrefs* obs = _mesh._cli.getObserverPrefs();
+  const int slot = _mqtt_control.slot();
+  MqttCtrlSlotLogin was;
+  if (!mqttCtrlRepairPlaneSlot(obs, slot, _mesh._cli.observerPrefsHeld(), &was)) return;
+  if (!_mesh._cli.saveObserverPrefs(_mesh._fs)) {
+    mqttCtrlSlotLoginWrite(obs, slot - 1, &was);
+    return;
+  }
+  Serial.printf("CMD: slot %d was on the old login; moved to the mccontrol preset\n", slot);
 }
 
 // Build this node's control topics once and hand the bridge a list it can

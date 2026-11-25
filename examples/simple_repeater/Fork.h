@@ -159,6 +159,7 @@ class Fork {
   void loopRelay();
   void describeRelay(char* reply);
 
+  void repairMqttControlSlot();
   void setupMqttControl(MQTTBridge* bridge);
   void autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply);
   void pingMqttControl(char* reply);
