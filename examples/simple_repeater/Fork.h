@@ -114,7 +114,7 @@ class Fork {
                          const uint8_t* data, size_t len);
   void answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                          uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply,
-                         bool sealed, bool zero_hop);
+                         bool zero_hop);
 #endif
 #if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
   // Owned here so the bridge's subscription list outlives every reconnect: mcc/cmd/<key>.

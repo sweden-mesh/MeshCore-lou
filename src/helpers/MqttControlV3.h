@@ -332,6 +332,19 @@ static inline bool mcc3MeshIsRequest(const uint8_t* data, size_t len) {
   return data != NULL && len > 4 && data[4] == MCC3_MESH_SUBTYPE;
 }
 
+// Whose an anonymous request is, asked before upstream may read it as a login.
+enum Mcc3MeshClaim : uint8_t {
+  MCC3_CLAIM_NONE = 0,      // not the plane's: a login, or one of upstream's typed requests
+  MCC3_CLAIM_REQUEST,       // 0xC2: opened and run
+  MCC3_CLAIM_OLD,           // 0xC1, lou-20 and older: taken and dropped, with no answer
+};
+
+static inline Mcc3MeshClaim mcc3MeshClaim(const uint8_t* data, size_t len) {
+  if (mcc3MeshIsRequest(data, len)) return MCC3_CLAIM_REQUEST;
+  if (mqttCtrlMeshIsOldRequest(data, len)) return MCC3_CLAIM_OLD;
+  return MCC3_CLAIM_NONE;
+}
+
 // The node's side, in the spec's order, every refusal silent: 136 bytes of sub-type 0xC2
 // (bad-fields), no flag but the zero-hop one (bad-version), a command key (`keys` NULL:
 // no-owner-key), a counter above the last accepted (replay, before anything is decrypted),
@@ -496,7 +509,7 @@ static inline size_t mcc3BuildAlive(const uint8_t key[MCC3_KEY_LEN], const uint8
 #define MCC3_FWD_HEAD          (2 + MCC3_NONCE_LEN)
 #define MCC3_FWD_PATH          57
 #define MCC3_FWD_BODY          (MCC3_MESH_REQUEST - 4)
-#define MCC3_FWD_MIN_BODY      (MQTTCTRL_MESH_HEAD - 4 + 1)    // a 0xC1 request of a one-byte command
+#define MCC3_FWD_MIN_BODY      MCC3_FWD_BODY    // a whole 0xC2 request, the one body carried
 #define MCC3_FWD_PLAIN         (4 + 4 + MCC3_RID_LEN + 32 + 1 + 1 + MCC3_FWD_PATH + 1 + MCC3_FWD_BODY)
 #define MCC3_FWD_SIZE          (MCC3_FWD_HEAD + MCC3_FWD_PLAIN + MCC3_TAG_LEN)
 #define MCC3_FWD_B64           MQTTV2_B64_LEN(MCC3_FWD_SIZE)
@@ -569,8 +582,8 @@ struct Mcc3ForwardResult {
 };
 
 // The counter of the request a forward carries, which the relay cannot read but can see: a
-// 0xC2 request has it in the clear (it is the nonce). 0 for the old 0xC1 request, which has
-// none in the clear. It is what joins the relay's log lines to the sender's and the target's.
+// 0xC2 request has it in the clear (it is the nonce). 0 for a body that is no such
+// request. It is what joins the relay's log lines to the sender's and the target's.
 static inline uint32_t mcc3ForwardRequestCounter(const Mcc3Forward* f) {
   if (f == NULL || f->body_len < 6 || f->body[0] != MCC3_MESH_SUBTYPE) return 0;
   return mqttCtrlMeshU32(&f->body[2]);
@@ -589,15 +602,11 @@ static inline int mcc3PathBytes(uint8_t path_len) {
   return size == 4 ? -1 : size * (path_len & 63);
 }
 
-// What a relay sends on: a whole 0xC2 request or a 0xC1 one with a command in it, by a
+// What a relay sends on: a whole 0xC2 request and nothing else (lou-20 also carried the
+// 0xC1 request of older targets), by a
 // route it knows, along a path that fits its field, to a node other than itself.
 static inline bool mcc3ForwardBodyOk(const Mcc3Forward* f, const uint8_t node_key[32]) {
-  if (f->body[0] == MCC3_MESH_SUBTYPE) {
-    if (f->body_len != MCC3_FWD_BODY) return false;
-  } else if (f->body[0] != MQTTCTRL_MESH_SUBTYPE || f->body_len < MCC3_FWD_MIN_BODY
-             || f->body_len > MCC3_FWD_BODY) {
-    return false;
-  }
+  if (f->body[0] != MCC3_MESH_SUBTYPE || f->body_len != MCC3_FWD_BODY) return false;
   if (f->route > MCC3_ROUTE_FLOOD_DEFAULT) return false;
   const int path_bytes = mcc3PathBytes(f->path_len);
   if (path_bytes < 0 || path_bytes > MCC3_FWD_PATH) return false;

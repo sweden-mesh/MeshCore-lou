@@ -151,9 +151,6 @@ public:
   // True once after a takeover, for the caller's log line.
   bool rekeyJustDone() { const bool d = _rekey_done; _rekey_done = false; return d; }
 
-  // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
-  static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);
-
 #ifdef WITH_MQTT_BRIDGE
   // Called on the MQTT event task. Copies and queues, nothing more: verification and
   // execution both need more stack than that task has, and executing a command
@@ -196,15 +193,11 @@ public:
                        MqttCtrlOutcome* out = NULL);
 #endif
 
-  // The same, for a command that came over the mesh (mqttCtrlMeshParse) addressed to
-  // 'topic', this node's own command topic. 'open' is mqttCtrlMeshRoadOpen now. 'answer' says
-  // whether the outcome may go back over the air: only once the key has vouched for the
-  // command, its counter is new and the mesh budget allowed it, so that nobody who heard a
-  // request can make the node transmit by sending it again.
-  MqttCtrlResult meshCommand(const mesh::Identity& owner, const char* topic,
-                             const MqttCtrlMeshRequest& req, uint32_t now, bool open,
-                             MqttCommandRunner* runner, char* reply, bool* answer);
-  // The same for an mcc3 request (0xC2), which mcc3MeshOpen has already opened and verified.
+  // The same, for a command that came over the mesh (0xC2), which mcc3MeshOpen has already
+  // opened and verified. 'open' is mqttCtrlMeshRoadOpen now. 'answer' says whether the
+  // outcome may go back over the air: only once the key has vouched for the command, its
+  // counter is new and the mesh budget allowed it, so that nobody who heard a request can
+  // make the node transmit by sending it again.
   MqttCtrlResult meshCommand(const Mcc3Command& cmd, uint32_t now, bool open,
                              MqttCommandRunner* runner, char* reply, bool* answer);
 

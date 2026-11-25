@@ -125,16 +125,6 @@ void MqttControl::save() {
   }
 }
 
-static bool buildOne(const char* iata, const char* leaf, const char* suffix,
-                     char* out, size_t out_size) {
-  return mqttCtrlBuildTopic(iata, leaf, suffix, out, out_size);
-}
-
-bool MqttControl::buildTopic(const char* iata, const char* node_hex,
-                             char* out, size_t out_size) {
-  return buildOne(iata, node_hex, "cmd", out, out_size);
-}
-
 #ifdef WITH_MQTT_BRIDGE
 
 void MqttControl::stage(const char* topic, const uint8_t* payload, size_t len) {
@@ -292,27 +282,6 @@ void MqttControl::rekeyTakeOver() {
   memset(&_rekey_mcc3, 0, sizeof(_rekey_mcc3));
   _rekey_done = true;
   save();
-}
-
-MqttCtrlResult MqttControl::meshCommand(const mesh::Identity& owner, const char* topic,
-                                        const MqttCtrlMeshRequest& req, uint32_t now, bool open,
-                                        MqttCommandRunner* runner, char* reply, bool* answer) {
-  reply[0] = 0;
-  *answer = false;
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  if (!mqttCtrlBuildSignedMessage(topic, &req.env, signed_bytes, sizeof(signed_bytes), &signed_len)) {
-    return MQTTCTRL_ERR_TOO_LONG;
-  }
-  if (!owner.verify(req.env.signature, signed_bytes, signed_len)) return MQTTCTRL_ERR_SIG_INVALID;
-  if (!mqttCtrlCounterAccepted(_counter, req.env.counter)) return MQTTCTRL_ERR_REPLAY;
-  if (_mesh_answered_any && !mqttCtrlCounterAccepted(_mesh_answered, req.env.counter)) return MQTTCTRL_ERR_REPLAY;
-  if (!_mesh_answers.allows(now)) return MQTTCTRL_ERR_RATE_LIMITED;
-  *answer = true;
-  _mesh_answered = req.env.counter;
-  _mesh_answered_any = true;
-  if (!open) return MQTTCTRL_ERR_MESH_CLOSED;
-  return execute(req.env, topic, true, now, runner, reply, NULL);
 }
 
 MqttCtrlResult MqttControl::meshCommand(const Mcc3Command& cmd, uint32_t now, bool open,

@@ -1209,36 +1209,17 @@ static inline void mqttCtrlFormatNodeStats(char* buf, size_t bufsize,
 
 // ---- the mesh road (operator 2026-11-16) ----------------------------------------------
 //
-// When the node's Wi-Fi or its broker fails, the node is still on the mesh. The same signed
-// command then comes as an anonymous request to this node alone, which a companion sends to
-// any key, contact or not: encrypted to this node, so only it reads the command. The node
-// rebuilds the topic it would have received it on, meshcore/{IATA}/{own key}/cmd, and the
-// text `v1|<counter>|<expiry>|<command>` the signature covers, so one signature is valid on
-// both roads, and the one persisted counter makes a command that arrives both ways run once.
+// When the node's Wi-Fi or its broker fails, the node is still on the mesh. A signed command
+// then comes as an anonymous request to this node alone, which a companion sends to any key,
+// contact or not. The request is mcc3's (sub-type 0xC2, MqttControlV3.h), and the one
+// persisted counter makes a command that arrives both ways run once.
 //
-//   request   tag (4) | 0xC1 | counter (4) | expiry (4) | signature (64) | command (1..59)
-//   response  tag (4) | node clock (4) | counter (4) | code (1) | reply
-//
-// Integers little-endian. The tag is the companion's own (BaseChatMesh::sendAnonReq), echoed
-// so it can match the response. The command ends at the first NUL or at the end, since the
-// cipher pads with zeros; 59 bytes, because Mesh::createAnonDatagram takes at most 136 bytes.
-//
-// 0xC1: upstream's typed requests are 0x01-0x03 and read any first byte from ' ' up as a
-// login password. 0xC1 begins no UTF-8 sequence (it could only start an overlong form), so it
-// is never the first byte of a password, and a build without this road reads the request as
-// a login that fails and answers nothing.
-#define MQTTCTRL_MESH_SUBTYPE       0xC1
-#define MQTTCTRL_MESH_HEAD          (4 + 1 + 4 + 4 + MQTTCTRL_SIG_BYTES)
-#define MQTTCTRL_MESH_MAX_PLAIN     136
-#define MQTTCTRL_MESH_MAX_COMMAND   (MQTTCTRL_MESH_MAX_PLAIN - MQTTCTRL_MESH_HEAD)
+// Up to lou-20 the request was sub-type 0xC1, signed and in the clear. None is run any more,
+// but each is still taken off upstream's hands: upstream reads any first byte from ' ' up as
+// a login password, the login fails, and five failures shut the sender's key out of admin
+// logins for ten minutes.
+#define MQTTCTRL_MESH_OLD_SUBTYPE   0xC1
 #define MQTTCTRL_MESH_RESP_HEAD     13
-
-// The envelope points into 'text', so a request is filled in place and never copied.
-struct MqttCtrlMeshRequest {
-  uint32_t tag;
-  MqttCtrlEnvelope env;
-  char text[26 + MQTTCTRL_MESH_MAX_COMMAND + 1];    // "v1|<10>|<10>|" and the command
-};
 
 static inline uint32_t mqttCtrlMeshU32(const uint8_t* p) {
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -1248,38 +1229,9 @@ static inline void mqttCtrlMeshPutU32(uint8_t* p, uint32_t v) {
   p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
 }
 
-// Is this anonymous request the mesh road's? Then it is never a login, whatever follows.
-static inline bool mqttCtrlMeshIsRequest(const uint8_t* data, size_t len) {
-  return data != NULL && len > 4 && data[4] == MQTTCTRL_MESH_SUBTYPE;
-}
-
-// Nothing here is authenticated: the signature is checked over what this builds.
-static inline MqttCtrlResult mqttCtrlMeshParse(const uint8_t* data, size_t len,
-                                               MqttCtrlMeshRequest* out) {
-  if (data == NULL || out == NULL || len <= MQTTCTRL_MESH_HEAD) return MQTTCTRL_ERR_EMPTY;
-  if (data[4] != MQTTCTRL_MESH_SUBTYPE) return MQTTCTRL_ERR_BAD_VERSION;
-  size_t n = 0;
-  while (MQTTCTRL_MESH_HEAD + n < len && data[MQTTCTRL_MESH_HEAD + n] != 0) n++;
-  if (n == 0) return MQTTCTRL_ERR_EMPTY;
-  if (n > MQTTCTRL_MESH_MAX_COMMAND) return MQTTCTRL_ERR_TOO_LONG;
-  const char* command = (const char *)&data[MQTTCTRL_MESH_HEAD];
-  if (!mqttCtrlCommandCharsOk(command, n)) return MQTTCTRL_ERR_COMMAND_CHARS;
-
-  MqttCtrlEnvelope* env = &out->env;
-  out->tag = mqttCtrlMeshU32(data);
-  env->counter = mqttCtrlMeshU32(&data[5]);
-  env->expiry = mqttCtrlMeshU32(&data[9]);
-  memcpy(env->signature, &data[13], MQTTCTRL_SIG_BYTES);
-  int head = snprintf(out->text, sizeof(out->text), MQTTCTRL_VERSION_TAG "%c%lu%c%lu%c",
-                      MQTTCTRL_FIELD_SEP, (unsigned long)env->counter,
-                      MQTTCTRL_FIELD_SEP, (unsigned long)env->expiry, MQTTCTRL_FIELD_SEP);
-  memcpy(&out->text[head], command, n);
-  out->text[head + n] = 0;
-  env->signed_part = out->text;
-  env->signed_len = head + n;
-  env->command = &out->text[head];
-  env->command_len = n;
-  return MQTTCTRL_OK;
+// An anonymous request of the old scheme: claimed and dropped, never a login.
+static inline bool mqttCtrlMeshIsOldRequest(const uint8_t* data, size_t len) {
+  return data != NULL && len > 4 && data[4] == MQTTCTRL_MESH_OLD_SUBTYPE;
 }
 
 // What the mesh road may run beside everything the deny list admits (operator ruling
@@ -1426,15 +1378,6 @@ static inline bool mqttCtrlMeshListening(bool enabled, bool uplink, uint8_t mode
 
 static inline bool mqttCtrlMeshRoadOpen(bool uplink, uint8_t mode, uint32_t down_since, uint32_t now_ms) {
   return !uplink || mqttCtrlMeshOpen(mode, down_since, now_ms);
-}
-
-// The region an image without an uplink names its command topic by. It has no `mqtt.iata`,
-// since no broker files it under one, so the topic it rebuilds and the one a sender signs for
-// it is always meshcore/mesh/{its key}/cmd.
-#define MQTTCTRL_MESH_ONLY_REGION  "mesh"
-
-static inline const char* mqttCtrlMeshRegion(bool uplink, const char* iata) {
-  return uplink ? iata : MQTTCTRL_MESH_ONLY_REGION;
 }
 
 // `get cmd.mesh`: the mode and whether the road is open now, and why not. 'refused' is a
@@ -1645,21 +1588,6 @@ struct MqttCtrlRequesters {
 static inline size_t mqttCtrlMeshResponseRoom(bool path_return, size_t path_bytes) {
   if (!path_return) return 167;
   return path_bytes < 161 ? 161 - path_bytes : 0;
-}
-
-// The reply is last and is cut to the room; the head always fits or nothing is written.
-static inline size_t mqttCtrlMeshFormatResponse(uint8_t* out, size_t room, uint32_t tag,
-                                                uint32_t clock, uint32_t counter, int code,
-                                                const char* reply) {
-  if (out == NULL || room < MQTTCTRL_MESH_RESP_HEAD) return 0;
-  mqttCtrlMeshPutU32(out, tag);
-  mqttCtrlMeshPutU32(&out[4], clock);
-  mqttCtrlMeshPutU32(&out[8], counter);
-  out[12] = (uint8_t)code;
-  size_t n = reply != NULL ? strlen(reply) : 0;
-  if (n > room - MQTTCTRL_MESH_RESP_HEAD) n = room - MQTTCTRL_MESH_RESP_HEAD;
-  if (n > 0) memcpy(&out[MQTTCTRL_MESH_RESP_HEAD], reply, n);
-  return MQTTCTRL_MESH_RESP_HEAD + n;
 }
 
 // ---- the relay (lou-20) ---------------------------------------------------------------

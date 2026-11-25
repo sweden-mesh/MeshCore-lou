@@ -2087,15 +2087,6 @@ TEST(Ping, IsAdmittedOverThePlaneExactlyAndIsNoTransmit) {
   EXPECT_FALSE(mqttCtrlIsTransmitCommand("cmd ping", 13));
 }
 
-// ---- a test key, for the roads that sign ----------------------------------------------
-
-static uint8_t T_PUB[32], T_PRV[64];
-static void makeTestKey() {
-  uint8_t seed[32];
-  for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(0x11 + i);
-  ed25519_create_keypair(T_PUB, T_PRV, seed);
-}
-
 TEST(Denylist, TheAutomaticUpdateSettingsTravelAndSoDoesTheUpdateItself) {
   EXPECT_TRUE(allowed("set ota.auto on"));
   EXPECT_TRUE(allowed("set ota.check.hours 12"));
@@ -2162,135 +2153,24 @@ TEST(CrossCheck, EveryKnownCommandsVerdictIsWritten) {
 
 // ---- the mesh road (operator 2026-11-16) ---------------------------------------------
 //
-// One signed command, carried as an anonymous request instead of on /cmd. The vector is
-// planning/firmware/otm-wire-format-20261117.md's, made with test seeds only: the command
-// key from seed 0x11.., the node from seed 0xA0...
+// One signed command, carried as an anonymous request instead of on /cmd. The request itself
+// is mcc3's (test_mqtt_v3); what is here is what the road decides after it has been opened.
 
-static const char* MESH_TOPIC =
-    "meshcore/TST/4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4/cmd";
-static const char* MESH_SIG =
-    "186E3F7F0129BED3A92EB737FEF09CB59DF0B03A0DCEDAFFAFD4FA3D6415F54C"
-    "7B27A660E4CAA2C91E936B37B27082EC0B75697CA13ADBD4F961508C6D2C770F";
-static const char* MESH_REQUEST =
-    "00F15365C107000000C086FD6A"
-    "186E3F7F0129BED3A92EB737FEF09CB59DF0B03A0DCEDAFFAFD4FA3D6415F54C"
-    "7B27A660E4CAA2C91E936B37B27082EC0B75697CA13ADBD4F961508C6D2C770F"
-    "73657420776966692E7373696420486F6D654E6574";
-
-static std::vector<uint8_t> meshVector() {
-  std::vector<uint8_t> v(strlen(MESH_REQUEST) / 2);
-  hexToBytes(MESH_REQUEST, v.data(), v.size());
-  return v;
-}
-
-// A request as a companion sends it: the head, the command, zero padding to a block.
-static std::vector<uint8_t> meshRequest(uint32_t counter, uint32_t expiry, const std::string& cmd,
-                                        const char* topic = MESH_TOPIC, bool sign = true) {
-  makeTestKey();
-  std::vector<uint8_t> v(MQTTCTRL_MESH_HEAD + cmd.size());
-  mqttCtrlMeshPutU32(&v[0], 0x6553F100);
-  v[4] = MQTTCTRL_MESH_SUBTYPE;
-  mqttCtrlMeshPutU32(&v[5], counter);
-  mqttCtrlMeshPutU32(&v[9], expiry);
-  std::string msg = std::string(topic) + "\nv1|" + std::to_string(counter) + "|" +
-                    std::to_string(expiry) + "|" + cmd;
-  if (sign) ed25519_sign(&v[13], (const uint8_t*)msg.data(), msg.size(), T_PUB, T_PRV);
-  memcpy(&v[MQTTCTRL_MESH_HEAD], cmd.data(), cmd.size());
-  v.resize((v.size() + 15) / 16 * 16, 0);
-  return v;
-}
-
-static bool meshVerifies(const MqttCtrlMeshRequest& req, const char* topic = MESH_TOPIC) {
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  if (!mqttCtrlBuildSignedMessage(topic, &req.env, signed_bytes, sizeof(signed_bytes), &signed_len)) return false;
-  return ed25519_verify(req.env.signature, signed_bytes, signed_len, T_PUB) == 1;
-}
-
-TEST(MeshRoad, TheWorkedVectorParsesAndVerifies) {
-  makeTestKey();
-  std::vector<uint8_t> v = meshVector();
-  ASSERT_EQ(98u, v.size());
-  MqttCtrlMeshRequest req;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_EQ(0x6553F100u, req.tag);
-  EXPECT_EQ(7u, req.env.counter);
-  EXPECT_EQ(1795000000u, req.env.expiry);
-  EXPECT_EQ(std::string("set wifi.ssid HomeNet"), std::string(req.env.command, req.env.command_len));
-  EXPECT_EQ(std::string("v1|7|1795000000|set wifi.ssid HomeNet"),
-            std::string(req.env.signed_part, req.env.signed_len));
-  EXPECT_TRUE(meshVerifies(req));
-  EXPECT_FALSE(meshVerifies(req, "meshcore/TST/all/cmd"));
-}
-
-TEST(MeshRoad, OneEnvelopeIsValidOnBothRoads) {
-  // The MQTT payload with the same counter, expiry, command and signature verifies against
-  // the same topic: a signer signs once and either road carries it.
-  makeTestKey();
-  std::string payload = std::string("v1|7|1795000000|set wifi.ssid HomeNet|") + MESH_SIG;
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlParseEnvelope(payload.data(), payload.size(), &env));
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage(MESH_TOPIC, &env, signed_bytes, sizeof(signed_bytes), &signed_len));
-  EXPECT_EQ(1, ed25519_verify(env.signature, signed_bytes, signed_len, T_PUB));
-}
-
-TEST(MeshRoad, PaddingEndsTheCommandAndATamperedByteFailsTheSignature) {
-  std::vector<uint8_t> v = meshRequest(9, 1795000000, "reboot");
-  EXPECT_EQ(0u, v.size() % 16);
-  MqttCtrlMeshRequest req;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_EQ(std::string("reboot"), std::string(req.env.command, req.env.command_len));
-  EXPECT_TRUE(meshVerifies(req));
-  v[MQTTCTRL_MESH_HEAD] = 'R';
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_FALSE(meshVerifies(req));
-  v = meshRequest(9, 1795000000, "reboot");
-  v[5] = 10;                                      // the counter is under the signature too
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_FALSE(meshVerifies(req));
-}
-
-TEST(MeshRoad, TheCommandBudgetIs59BytesAndALongerOneIsRefused) {
-  EXPECT_EQ(59, MQTTCTRL_MESH_MAX_COMMAND);
-  // What a companion can send at all: Mesh::createAnonDatagram's bound on the plaintext.
-  EXPECT_EQ(MQTTCTRL_MESH_MAX_PLAIN, MAX_PACKET_PAYLOAD - 1 - PUB_KEY_SIZE - (CIPHER_BLOCK_SIZE - 1));
-  std::string at(59, 'x');
-  at.replace(0, 4, "get ");
-  MqttCtrlMeshRequest req;
-  std::vector<uint8_t> v = meshRequest(1, 1795000000, at);
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  v = meshRequest(1, 1795000000, at + "x");
-  EXPECT_EQ(MQTTCTRL_ERR_TOO_LONG, mqttCtrlMeshParse(v.data(), v.size(), &req));
-}
-
-TEST(MeshRoad, MalformedRequestsAreRefusedBeforeAnySignature) {
-  MqttCtrlMeshRequest req;
-  std::vector<uint8_t> v = meshRequest(1, 1795000000, "ver");
-  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlMeshParse(v.data(), MQTTCTRL_MESH_HEAD, &req));
-  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlMeshParse(NULL, v.size(), &req));
-  std::vector<uint8_t> empty = v;
-  empty[MQTTCTRL_MESH_HEAD] = 0;
-  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlMeshParse(empty.data(), empty.size(), &req));
-  std::vector<uint8_t> sep = meshRequest(1, 1795000000, "get a|b");
-  EXPECT_EQ(MQTTCTRL_ERR_COMMAND_CHARS, mqttCtrlMeshParse(sep.data(), sep.size(), &req));
-  std::vector<uint8_t> other = v;
-  other[4] = 0x03;
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_VERSION, mqttCtrlMeshParse(other.data(), other.size(), &req));
-}
-
-TEST(MeshRoad, OnlyItsOwnSubtypeIsTakenAndOldBuildsReadItAsAFailedLogin) {
-  std::vector<uint8_t> v = meshRequest(1, 1795000000, "ver");
-  EXPECT_TRUE(mqttCtrlMeshIsRequest(v.data(), v.size()));
-  for (uint8_t t : { 0x00, 0x01, 0x02, 0x03, 0xF0, 0x20, 0xC2 }) {
+TEST(MeshRoad, TheOldSubtypeIsStillKnownSoItIsNeverReadAsALogin) {
+  uint8_t v[20] = {0};
+  v[4] = 0xC1;
+  EXPECT_TRUE(mqttCtrlMeshIsOldRequest(v, sizeof(v)));
+  EXPECT_TRUE(mqttCtrlMeshIsOldRequest(v, 5));
+  EXPECT_FALSE(mqttCtrlMeshIsOldRequest(v, 4));
+  EXPECT_FALSE(mqttCtrlMeshIsOldRequest(NULL, sizeof(v)));
+  for (uint8_t t : { (uint8_t)0x00, (uint8_t)0x01, (uint8_t)0x02, (uint8_t)0x03, (uint8_t)' ', (uint8_t)'p',
+                     (uint8_t)0xC0, (uint8_t)0xC2 }) {
     v[4] = t;
-    EXPECT_FALSE(mqttCtrlMeshIsRequest(v.data(), v.size())) << (int)t;
+    EXPECT_FALSE(mqttCtrlMeshIsOldRequest(v, sizeof(v))) << (int)t;
   }
-  EXPECT_FALSE(mqttCtrlMeshIsRequest(v.data(), 4));
-  // Upstream reads a first byte from ' ' up as a password. 0xC1 starts no UTF-8 sequence,
-  // so no password typed anywhere begins with it, and the login fails without an answer.
-  EXPECT_GE(MQTTCTRL_MESH_SUBTYPE, ' ');
+  // Upstream reads a first byte from ' ' up as a password, so an old request nobody claims
+  // is a failed login. 0xC1 starts no UTF-8 sequence, so no real password begins with it.
+  EXPECT_GE(MQTTCTRL_MESH_OLD_SUBTYPE, ' ');
   const unsigned char c1[] = { 0xC1, 0x81 };
   EXPECT_EQ(0u, mqttCtrlUtf8SeqLen(c1, sizeof(c1)));
   EXPECT_FALSE(mqttCtrlCommandCharsOk((const char *)c1, sizeof(c1)));
@@ -2298,21 +2178,17 @@ TEST(MeshRoad, OnlyItsOwnSubtypeIsTakenAndOldBuildsReadItAsAFailedLogin) {
 
 TEST(MeshRoad, TheCounterIsSharedAcrossTheRoads) {
   // A command run over MQTT is a replay over the mesh, and the other way round.
-  makeTestKey();
   const uint32_t now = 1795000000 - 60;
   Cmd mqtt(7, 1795000000, "get name");
   uint32_t last = 0;
   ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&mqtt.env, last, now, true));
   last = mqtt.env.counter;
-  std::vector<uint8_t> v = meshRequest(7, 1795000000, "get name");
-  MqttCtrlMeshRequest req;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&req.env, last, now, true));
+  Cmd same(7, 1795000000, "get name");
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&same.env, last, now, true));
 
-  v = meshRequest(8, 1795000000, "get name");
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&req.env, last, now, true));
-  last = req.env.counter;
+  Cmd next(8, 1795000000, "get name");
+  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&next.env, last, now, true));
+  last = next.env.counter;
   Cmd again(8, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthorise(&again.env, last, now, true));
 }
@@ -2918,38 +2794,20 @@ TEST(MeshRoad, AFloodedRequestIsAnsweredOnceItsCopiesHaveDiedDown) {
   EXPECT_LT(MQTTCTRL_MESH_FLOOD_ANSWER_MIN_MS + MQTTCTRL_MESH_FLOOD_ANSWER_SPAN_MS + 2 * 30000UL, 120000UL);
 }
 
-TEST(MeshRoad, TheResponseCarriesTagClockCounterCodeAndAClampedReply) {
-  uint8_t out[200];
-  size_t n = mqttCtrlMeshFormatResponse(out, sizeof(out), 0x6553F100, 1715770351, 7,
-                                        MQTTCTRL_OK, "OK");
-  ASSERT_EQ(15u, n);
-  const uint8_t head[] = { 0x00, 0xF1, 0x53, 0x65, 0xEF, 0x93, 0x44, 0x66, 0x07, 0, 0, 0, 0, 'O', 'K' };
-  EXPECT_EQ(0, memcmp(head, out, sizeof(head)));
-  std::string long_reply(200, 'r');
-  EXPECT_EQ(167u, mqttCtrlMeshFormatResponse(out, mqttCtrlMeshResponseRoom(false, 0), 1, 2, 3, 4,
-                                             long_reply.c_str()));
+TEST(MeshRoad, TheResponseRoomIsTheDatagramsAndThePathReturns) {
   // Mesh::createDatagram and Mesh::createPathReturn's own bounds.
+  EXPECT_EQ(167u, mqttCtrlMeshResponseRoom(false, 0));
   EXPECT_EQ((size_t)(MAX_PACKET_PAYLOAD - CIPHER_MAC_SIZE - (CIPHER_BLOCK_SIZE - 1)),
             mqttCtrlMeshResponseRoom(false, 0));
   EXPECT_EQ((size_t)(MAX_PACKET_PAYLOAD - 2 - CIPHER_BLOCK_SIZE - 5 - 30), mqttCtrlMeshResponseRoom(true, 30));
   EXPECT_EQ(0u, mqttCtrlMeshResponseRoom(true, 200));
-  EXPECT_EQ(0u, mqttCtrlMeshFormatResponse(out, MQTTCTRL_MESH_RESP_HEAD - 1, 1, 2, 3, 4, "x"));
-  EXPECT_EQ((size_t)MQTTCTRL_MESH_RESP_HEAD,
-            mqttCtrlMeshFormatResponse(out, sizeof(out), 1, 2, 3, MQTTCTRL_ERR_MESH_CLOSED, NULL));
-  EXPECT_EQ(MQTTCTRL_ERR_MESH_CLOSED, out[12]);
 }
 
 // ---- mesh only (operator 2026-11-16, plan phase 5) -----------------------------------
 //
 // An image without Wi-Fi and MQTT (an nRF52 board, a non-Observer ESP32 build) has the mesh
-// road as the plane's only road: the same parse, signature, counter, expiry and deny list,
-// always open, the uplink's repairs refused, and its topic named by the word `mesh`.
-
-static const char* MESH_ONLY_SIG =
-    "D093D5E2427719074748634E73F8760E42F0D12772D74C9044D399B03202BF7B"
-    "1E375B1EE4A8BE81B190603638C3DB9DC9B4D54E5749492AF07ED609BCF23E09";
-static const char* MESH_ONLY_TOPIC =
-    "meshcore/mesh/4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4/cmd";
+// road as the plane's only road: the same counter, expiry and deny list, always open, the
+// uplink's repairs refused.
 
 // ---- alive (mcc3, lou-20) -------------------------------------------------------------
 
@@ -3022,28 +2880,6 @@ TEST(Alive, AChangeBringsTheNextOneCloserButNeverPutsItOff) {
   MqttCtrlAliveClock down = {};
   mqttCtrlAliveNudge(&down, 0, 0);                              // down: the reconnect sends one
   EXPECT_FALSE(mqttCtrlAliveDue(&down, 100000));
-}
-
-TEST(MeshOnly, TheTopicIsNamedMeshWhateverIataThereIs) {
-  EXPECT_STREQ("mesh", mqttCtrlMeshRegion(false, NULL));
-  EXPECT_STREQ("mesh", mqttCtrlMeshRegion(false, "TST"));
-  EXPECT_STREQ("TST", mqttCtrlMeshRegion(true, "TST"));
-  EXPECT_EQ(NULL, mqttCtrlMeshRegion(true, NULL));          // an Observer with no region stays silent
-  char topic[MQTTCTRL_MAX_TOPIC + 1];
-  ASSERT_TRUE(mqttCtrlBuildTopic(mqttCtrlMeshRegion(false, NULL),
-                                 "4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4",
-                                 "cmd", topic, sizeof(topic)));
-  EXPECT_STREQ(MESH_ONLY_TOPIC, topic);
-  // Signed for that topic, a request verifies there and nowhere else.
-  std::vector<uint8_t> v = meshRequest(7, 1795000000, "get name", MESH_ONLY_TOPIC);
-  MqttCtrlMeshRequest req;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_TRUE(meshVerifies(req, MESH_ONLY_TOPIC));
-  EXPECT_FALSE(meshVerifies(req, MESH_TOPIC));
-  // The vector in planning/firmware/otm-wire-format-20261117.md, "Mesh only".
-  char sig[MQTTCTRL_SIG_HEX_LEN + 1];
-  for (int i = 0; i < MQTTCTRL_SIG_BYTES; i++) sprintf(&sig[i * 2], "%02X", req.env.signature[i]);
-  EXPECT_STREQ(MESH_ONLY_SIG, sig);
 }
 
 TEST(MeshOnly, TheRoadListensWhileThePlaneIsOnAndIsAlwaysOpen) {

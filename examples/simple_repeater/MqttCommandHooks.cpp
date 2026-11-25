@@ -592,49 +592,22 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
 }
 
 // The mesh road (operator 2026-11-16): a signed command in an anonymous request to this node,
-// for when Wi-Fi or the broker is down, and the only road on an image without them. Verified
-// as a command on /cmd is, against the topic this node would have received it on, and
-// answered with a response to whoever asked. Anything that is not answered stays silent,
-// as a build without the road is.
+// for when Wi-Fi or the broker is down, and the only road on an image without them. A request
+// of the old scheme (0xC1, lou-20 and older) is taken as well and dropped without an answer:
+// left to upstream it is a login that fails, and five of those shut the sender's key out of
+// admin logins for ten minutes.
 bool Fork::onMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                          const uint8_t* data, size_t len) {
-  if (mcc3MeshIsRequest(data, len)) {
-    onMcc3MeshCommand(packet, secret, sender, data, len);
-    return true;
+  switch (mcc3MeshClaim(data, len)) {
+    case MCC3_CLAIM_REQUEST:
+      onMcc3MeshCommand(packet, secret, sender, data, len);
+      return true;
+    case MCC3_CLAIM_OLD:
+      debugLine("mesh: a request heard, old scheme, dropped");
+      return true;
+    default:
+      return false;
   }
-  if (!mqttCtrlMeshIsRequest(data, len)) return false;
-  if (!mqttCtrlMeshListening(_mqtt_control.isEnabled(), FORK_UPLINK, _mqtt_control.meshMode())) {
-    debugLine("mesh: a request (old scheme) heard, not listening: cmd %s, mesh %s",
-              _mqtt_control.isEnabled() ? "on" : "off", mqttCtrlMeshModeName(_mqtt_control.meshMode()));
-    return true;
-  }
-
-  MqttCtrlMeshRequest req;
-  char node_hex[PUB_KEY_SIZE * 2 + 1];
-  char topic[MQTTCTRL_MAX_TOPIC + 1];
-  mesh::Identity owner;
-  mesh::Utils::toHex(node_hex, _mesh.self_id.pub_key, PUB_KEY_SIZE);
-  if (mqttCtrlMeshParse(data, len, &req) != MQTTCTRL_OK
-      || !MqttControl::buildTopic(mqttCtrlMeshRegion(FORK_UPLINK, observerIata()), node_hex, topic, sizeof(topic))
-      || mqttCtrlOwnerReady(_mqtt_control.pubkey()) != MQTTCTRL_OK
-      || !mesh::Utils::fromHex(owner.pub_key, PUB_KEY_SIZE, _mqtt_control.pubkey())) {
-    _mesh_refused++;
-    debugLine("mesh: a request (old scheme) refused before the signature: unreadable, or no command key");
-    return true;
-  }
-
-  char reply[MQTTCTRL_MAX_REPLY];
-  bool answer = false;
-  const bool open = mqttCtrlMeshRoadOpen(FORK_UPLINK, _mqtt_control.meshMode(), _mesh_down_since, millis());
-  const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
-  MqttCtrlResult result = _mqtt_control.meshCommand(owner, topic, req, now, open, &_control_link,
-                                                    reply, &answer);
-  if (result == MQTTCTRL_OK) _mesh_ok++;
-  else _mesh_refused++;
-  MESH_DEBUG_PRINTLN("MqttControl: mesh result %d, reply '%s'", (uint32_t)result, reply);
-  debugLine("mesh: a request (old scheme), %s, %s", mqttCtrlResultName(result), answer ? "answered" : "no answer");
-  if (answer) answerMeshCommand(packet, secret, sender, req.tag, req.env.counter, result, reply, false, false);
-  return true;
 }
 
 // The mcc3 mesh road (0xC2, lou-20): the same road, the request encrypted to this node and
@@ -692,7 +665,7 @@ void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   debugLine("mesh: a request, counter %u, %s, %s", (unsigned)cmd.counter, mqttCtrlResultName(result),
             answer ? "answered" : "no answer");
   if (answer) {
-    answerMeshCommand(packet, secret, sender, cmd.tag, cmd.counter, result, reply, true,
+    answerMeshCommand(packet, secret, sender, cmd.tag, cmd.counter, result, reply,
                       (cmd.flags & MCC3_MESH_FLAG_ZERO_HOP) != 0);
   }
 }
@@ -744,7 +717,7 @@ void Fork::refreshRekeyKeys() {
 // transmission with no path, however the request came.
 void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                              uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply,
-                             bool sealed, bool zero_hop) {
+                             bool zero_hop) {
   uint32_t random;
   _mesh.getRNG()->random((uint8_t *)&random, sizeof(random));
   const uint32_t delay_millis = mqttCtrlMeshAnswerDelay(packet->isRouteFlood(), random);
@@ -768,15 +741,10 @@ void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   uint8_t data[MQTTCTRL_MESH_RESP_HEAD + MQTTCTRL_MAX_REPLY];
   size_t room = min(mqttCtrlMeshResponseRoom(path_return, packet->getPathByteLen()), sizeof(data));
   const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
-  size_t n;
-  if (sealed) {
-    uint8_t nonce[MCC3_NONCE_LEN];
-    _mesh.getRNG()->random(nonce, sizeof(nonce));
-    n = mcc3MeshBuildResponse(_mqtt_control.mcc3Keys()->cmd, nonce, tag, counter, (int)result,
-                              now >= MQTTConnectionPolicy::kSyncedClockEpoch ? now : 0, reply, room, data);
-  } else {
-    n = mqttCtrlMeshFormatResponse(data, room, tag, now, counter, (int)result, reply);
-  }
+  uint8_t nonce[MCC3_NONCE_LEN];
+  _mesh.getRNG()->random(nonce, sizeof(nonce));
+  size_t n = mcc3MeshBuildResponse(_mqtt_control.mcc3Keys()->cmd, nonce, tag, counter, (int)result,
+                                   now >= MQTTConnectionPolicy::kSyncedClockEpoch ? now : 0, reply, room, data);
   if (n == 0) return;
 
   mesh::Packet* out = path_return
