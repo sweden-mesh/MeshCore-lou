@@ -267,10 +267,11 @@ observer tooling watches. That separation was never needed: the tooling matches 
 `get cmd` answers on one line (from ar-12):
 
 ```
-> on, counter 41, slot 2 connected, /cmd subscribed, last command 312 s ago, ping pong in 230 ms
+> on, counter 41, slot 2 connected, jwt, /cmd subscribed, last command 312 s ago, ping pong in 230 ms
 ```
 
-whether the slot is connected, what the broker said about the subscriptions since it
+whether the slot is connected, how it signs in (from lou-21: `jwt`, as the `mccontrol` preset
+and a slot `set cmd on <host>` wrote do, or `password`), what the broker said about the subscriptions since it
 connected (`subscribed`, `not subscribed` while no answer has come, and from lou-21 `refused`
 when it refused one of the plane's topics, which a later topic it grants does not undo), how
 long ago the command key last vouched for a command, and how the last ping
@@ -280,6 +281,12 @@ a broken envelope -- adds `, unverified <n> (last <reason>)`, the reason as mcco
 (`sig-invalid`, `no-owner-key`, ...). Such a refusal is never answered, since anyone on the
 broker can send one, so this is where it shows: `sig-invalid` means the node holds another
 command key than the sender's (`get cmd.pubkey`).
+
+A slot that signs in with a password on one of the plane's own brokers reads
+`password (run set cmd on)`: the command server takes that login and refuses it the `mcc/`
+topics, so `/cmd refused` follows it. `set cmd on` and a reboot put the slot on the preset. A
+node updated from before lou-17 gets this done for it at start ("Which broker"); the hint is
+for a slot the start could not mend, or one made by hand since.
 
 When the slot is not connected, look at `get mqtt.status` first: from lou-21 a slot whose login
 the broker refused (CONNACK 4 or 5) while no NTP server has confirmed the node's clock shows as

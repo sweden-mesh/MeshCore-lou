@@ -926,6 +926,10 @@ public:
   }
   uint8_t controlSubState() const { return _control_sub; }
   void controlSlotLink(char* out, size_t out_size) const;
+  // The broker the control slot is running against and the way it signs in there, as
+  // the slot was started: NULL and false without a control slot.
+  const char* controlSlotUrl() const;
+  bool controlSlotUsesJwt() const;
 
 #ifdef WITH_MQTT_COMMAND
   // The private part of every slot's client id (mqttSlotClientId); call before begin().

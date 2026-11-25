@@ -484,14 +484,15 @@ again in 30 s. `(disc)` or `(fail)`: see the symptom table. A board with PSRAM m
 
 ```
 cmd ping                  -> OK - ping sent, read 'get cmd' for the pong
-get cmd                   -> > on, counter <n>, slot <slot> connected, /cmd subscribed, last command none yet, ping pong in <ms> ms, mesh auto ok 0 refused 0
+get cmd                   -> > on, counter <n>, slot <slot> connected, jwt, /cmd subscribed, last command none yet, ping pong in <ms> ms, mesh auto ok 0 refused 0
 ```
 
-The four fields to check:
+The fields to check:
 
 | field | good | otherwise |
 |---|---|---|
 | `slot <slot> ...` | `connected` | `not connected`: WiFi, clock, the slot (symptom table) |
+| the login (lou-21) | `jwt` | `password (run set cmd on)`: the slot signs in to the command server with a password and is refused the plane's topics: `set cmd on`, `reboot`; plain `password`: a custom slot on another broker, right if that broker is meant to carry the plane |
 | `/cmd ...` | `subscribed` | `not subscribed`: the broker has not answered the subscription yet; `refused` (lou-21): it refused one of the plane's topics, so the slot's login is not one the command server serves (`set cmd on`) |
 | `last command ...` | `none yet` until a signed command arrives | |
 | `unverified <n> (last ...)` | absent | lou-18: commands arrived but were refused unanswered; `sig-invalid`: `get cmd.pubkey` is not the sender's key; `no-owner-key`: set it |

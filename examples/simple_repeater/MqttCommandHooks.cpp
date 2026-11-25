@@ -233,7 +233,7 @@ void Fork::loopMqttPing() {
 #endif
 
 // `get cmd` on one line: on/off and the counter as before, then the slot's
-// connection, whether the broker granted or refused the /cmd subscription, how long ago
+// connection and login, whether the broker granted or refused the /cmd subscription, how long ago
 // the key last vouched for a command, and how many arrived that it did not.
 void Fork::describeMqttControl(char* reply) {
 #ifndef WITH_MQTT_BRIDGE
@@ -269,10 +269,10 @@ void Fork::describeMqttControl(char* reply) {
   } else {
     strcpy(ping, "-");
   }
-  sprintf(reply, "> %s, counter %u, slot %d %s, /cmd %s, last command %s, ping %s",
-          _mqtt_control.isEnabled() ? "on" : "off", (unsigned)_mqtt_control.counter(), slot,
-          _mesh.bridge->controlSlotConnected() ? "connected" : "not connected",
-          mqttSubStateName(_mesh.bridge->controlSubState()), age, ping);
+  mqttCtrlDescribeSlot(_mqtt_control.isEnabled(), _mqtt_control.counter(), slot,
+                       _mesh.bridge->controlSlotConnected(), _mesh.bridge->controlSlotUsesJwt(),
+                       _mesh.bridge->controlSlotUrl(), _mesh.bridge->controlSubState(), age, ping,
+                       reply, MQTTCTRL_MAX_REPLY);
   size_t used = strlen(reply);
   mqttCtrlMeshNote(_mqtt_control.meshMode(), _mesh_ok, _mesh_refused, &reply[used],
                    MQTTCTRL_MAX_REPLY - used);

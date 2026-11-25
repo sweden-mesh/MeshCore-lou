@@ -1455,6 +1455,22 @@ static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint3
   }
 }
 
+// `get cmd` up to the ping, for a plane that has a slot. After the connection comes how the
+// slot signs in, since a password login on one of the plane's own brokers connects and is
+// then refused the plane's topics (mqttCtrlSlotNeedsRepair): there the line names the cure.
+// 'age' and 'ping' are the caller's words for the last command and the last ping.
+static inline void mqttCtrlDescribeSlot(bool enabled, uint32_t counter, int slot, bool connected,
+                                        bool jwt, const char* url, uint8_t sub_state,
+                                        const char* age, const char* ping, char* out,
+                                        size_t out_size) {
+  if (out == NULL || out_size == 0) return;
+  snprintf(out, out_size, "> %s, counter %lu, slot %d %s, %s, /cmd %s, last command %s, ping %s",
+           enabled ? "on" : "off", (unsigned long)counter, slot,
+           connected ? "connected" : "not connected",
+           jwt ? "jwt" : mqttCtrlPlaneHost(url) ? "password (run set cmd on)" : "password",
+           mqttSubStateName(sub_state), age != NULL ? age : "-", ping != NULL ? ping : "-");
+}
+
 // What `get cmd` adds about the mesh road.
 static inline void mqttCtrlMeshNote(uint8_t mode, uint32_t ok, uint32_t refused, char* out,
                                     size_t out_size) {

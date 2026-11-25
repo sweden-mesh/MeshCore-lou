@@ -1810,7 +1810,7 @@ TEST(Unverified, TheNoteNamesTheCountAndTheLastReason) {
   // fits beside a day-old `get cmd` line in the 160-byte reply; the caller passes what
   // is left of it, so a longer one is cut, never overrun
   mqttCtrlRefusalNote(65535, MQTTCTRL_ERR_BROADCAST_TRANSMIT, out, sizeof(out));
-  EXPECT_LE(strlen(out) + strlen("> on, counter 1794734056, slot 3 connected, /cmd subscribed, "
+  EXPECT_LE(strlen(out) + strlen("> on, counter 1794734056, slot 3 connected, jwt, /cmd subscribed, "
                                  "last command 86400 s ago, ping pong in 1234 ms"),
             (size_t)MQTTCTRL_MAX_REPLY - 1);
   char tiny[12];
@@ -2604,6 +2604,62 @@ TEST(MeshRoad, AutoOpensFifteenMinutesAfterTheSlotWentDown) {
   // The refusal has its own name, appended.
   EXPECT_STREQ("mesh-closed", mqttCtrlResultName(MQTTCTRL_ERR_MESH_CLOSED));
   EXPECT_EQ(19, (int)MQTTCTRL_ERR_MESH_CLOSED);
+}
+
+TEST(GetCmd, TheLineNamesTheLogin) {
+  char out[MQTTCTRL_MAX_REPLY];
+  mqttCtrlDescribeSlot(true, 41, 2, true, true, "mqtts://mqtt-meshcore.louie.se:8883",
+                       MQTT_SUB_GRANTED, "312 s ago", "pong in 230 ms", out, sizeof(out));
+  EXPECT_STREQ("> on, counter 41, slot 2 connected, jwt, /cmd subscribed, last command 312 s ago, "
+               "ping pong in 230 ms", out);
+  // a password login somewhere else is somebody's own broker, and theirs to judge
+  mqttCtrlDescribeSlot(false, 7, 3, false, false, "mqtt://mqtt.example.org:1883",
+                       MQTT_SUB_PENDING, "none yet", "-", out, sizeof(out));
+  EXPECT_STREQ("> off, counter 7, slot 3 not connected, password, /cmd not subscribed, "
+               "last command none yet, ping -", out);
+  mqttCtrlDescribeSlot(true, 7, 3, true, false, nullptr, MQTT_SUB_GRANTED, nullptr, nullptr,
+                       out, sizeof(out));
+  EXPECT_STREQ("> on, counter 7, slot 3 connected, password, /cmd subscribed, last command -, ping -",
+               out);
+}
+
+TEST(GetCmd, APasswordLoginOnThePlanesOwnBrokerNamesTheCure) {
+  char out[MQTTCTRL_MAX_REPLY];
+  for (const char* url : { "mqtt://mqtt.louie.se:1883", "mqtts://mqtt.louie.se:8883",
+                           "mqtt://mqtt-meshcore.louie.se:1883", "mqtt.meshcore-jkp.se" }) {
+    mqttCtrlDescribeSlot(true, 41, 3, true, false, url, MQTT_SUB_REFUSED, "none yet",
+                         "no pong in 10 s", out, sizeof(out));
+    EXPECT_STREQ("> on, counter 41, slot 3 connected, password (run set cmd on), /cmd refused, "
+                 "last command none yet, ping no pong in 10 s", out) << url;
+  }
+  // a token login there is the plane as it should be
+  mqttCtrlDescribeSlot(true, 41, 3, true, true, "mqtts://mqtt.louie.se:8883", MQTT_SUB_GRANTED,
+                       "none yet", "-", out, sizeof(out));
+  EXPECT_EQ(nullptr, strstr(out, "set cmd on"));
+  mqttCtrlDescribeSlot(true, 41, 3, true, false, "mqtt://mqtt.louie.se.example.org:1883",
+                       MQTT_SUB_GRANTED, "none yet", "-", out, sizeof(out));
+  EXPECT_EQ(nullptr, strstr(out, "set cmd on"));
+}
+
+TEST(GetCmd, TheLineStaysInsideTheReply) {
+  // a day-old line on a ten-digit counter leaves room for the mesh note, with either login
+  char out[MQTTCTRL_MAX_REPLY], note[40];
+  mqttCtrlMeshNote(MQTTCTRL_MESH_AUTO, 0, 0, note, sizeof(note));
+  mqttCtrlDescribeSlot(true, 1794734056UL, 3, true, true, "mqtts://mqtt-meshcore.louie.se:8883",
+                       MQTT_SUB_GRANTED, "86400 s ago", "pong in 1234 ms", out, sizeof(out));
+  EXPECT_LE(strlen(out) + strlen(note), (size_t)MQTTCTRL_MAX_REPLY - 1);
+  mqttCtrlDescribeSlot(true, 1794734056UL, 3, true, false, "mqtt://mqtt.louie.se:1883",
+                       MQTT_SUB_REFUSED, "none yet", "no pong in 10 s", out, sizeof(out));
+  EXPECT_LE(strlen(out) + strlen(note), (size_t)MQTTCTRL_MAX_REPLY - 1);
+  // and whatever it is given, it is cut and never overrun
+  char tiny[24];
+  memset(tiny, 'x', sizeof(tiny));
+  mqttCtrlDescribeSlot(false, 4294967295UL, 6, false, false, "mqtt.louie.se", MQTT_SUB_PENDING,
+                       "4294967 s ago", "no pong in 10 s", tiny, sizeof(tiny) - 4);
+  EXPECT_STREQ("> off, counter 4294", tiny);
+  EXPECT_EQ('x', tiny[20]);
+  mqttCtrlDescribeSlot(true, 1, 1, true, true, "", MQTT_SUB_GRANTED, "", "", nullptr, 10);
+  mqttCtrlDescribeSlot(true, 1, 1, true, true, "", MQTT_SUB_GRANTED, "", "", tiny, 0);
 }
 
 TEST(MeshRoad, ASlotTheServerRefusesIsDown) {

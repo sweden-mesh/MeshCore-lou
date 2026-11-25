@@ -5512,16 +5512,26 @@ void MQTTBridge::setStatsSources(mesh::Dispatcher* dispatcher, mesh::Radio* radi
   _ms = ms;
 }
 
+const char* MQTTBridge::controlSlotUrl() const {
+  if (_control_slot < 0) return NULL;
+  const MQTTSlot& slot = _slots[_control_slot];
+  return slot.preset ? slot.preset->server_url : slot.broker_uri;
+}
+
+bool MQTTBridge::controlSlotUsesJwt() const {
+  if (_control_slot < 0) return false;
+  const MQTTSlot& slot = _slots[_control_slot];
+  return mqttSlotUsesJwt(slot.preset != nullptr,
+                         slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT,
+                         slot.audience[0] != '\0');
+}
+
 void MQTTBridge::controlSlotLink(char* out, size_t out_size) const {
   if (_control_slot < 0) { snprintf(out, out_size, "-"); return; }
-  const MQTTSlot& slot = _slots[_control_slot];
-  const char* url = slot.preset ? slot.preset->server_url : slot.broker_uri;
+  const char* url = controlSlotUrl();
   const char* end = url ? strstr(url, "://") : NULL;
-  bool jwt = mqttSlotUsesJwt(slot.preset != nullptr,
-                             slot.preset && slot.preset->auth_type == MQTT_AUTH_JWT,
-                             slot.audience[0] != '\0');
   snprintf(out, out_size, "%.*s, %s", end ? (int)(end - url) : 1, end ? url : "?",
-           mqttSlotAuthLabel(jwt));
+           mqttSlotAuthLabel(controlSlotUsesJwt()));
 }
 
 #endif
