@@ -7,10 +7,7 @@
 
 #define MQTTCTRL_CONFIG_FILE  "/mqttcontrol"
 
-// The broker permits meshcore/ and silently discards everything else -- a publish
-// elsewhere is accepted, acked and dropped, with no error visible to the sender.
-// Measured against mqtt.meshat.se on 2026-09-01: meshcore/JKG/<node>/cmd arrives,
-// meshhealth/v1/JKG/<node>/cmd does not. This is the topic CLAUDE.md specified.
+// The plane's topics are all under mcc/ and keyed by the node (docs/mqtt-control.md, "Topics").
 
 // Same shape as AutoReply's: the filesystem call differs per platform, and each
 // feature keeps its own copy rather than adding a shared header upstream edits.
@@ -42,8 +39,6 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 MqttControl::MqttControl()
   : _fs(NULL), _enabled(false), _counter(0), _slot(0), _key_via(MQTTCTRL_KEY_VIA_USB),
     _alive_minutes(0), _boot(0), _mcc3_ready(false),
-#ifdef WITH_MQTT_BRIDGE
-#endif
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW),
     _mesh_mode(MQTTCTRL_MESH_AUTO), _relay_mode(MQTTCTRL_RELAY_OWN)

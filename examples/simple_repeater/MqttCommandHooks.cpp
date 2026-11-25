@@ -209,7 +209,7 @@ void Fork::pingMqttControl(char* reply) {
 }
 
 // Settles a ping in flight. A ping that came over the plane has its result held back
-// until now, and is published as the one r2 that answers it.
+// until now, and is published as the one sealed result that answers it.
 void Fork::loopMqttPing() {
   if (!mqttCtrlPingPoll(&_ping, millis())) return;
   if (!_ping_remote) return;

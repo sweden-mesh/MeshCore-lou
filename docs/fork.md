@@ -1,7 +1,8 @@
 # The fork's features and how they combine
 
 This fork adds three features to the Observer repeater. Each is chosen when an image is
-built, and any combination of them builds from the same tree:
+built, and any combination of them builds from the same tree. From lou-21 an Observer board
+is released as one image, the full one (`arrc`); boards without Wi-Fi keep three:
 
 | code | switch | feature | docs |
 |---|---|---|---|
@@ -11,11 +12,15 @@ built, and any combination of them builds from the same tree:
 
 | base | `ar` | `rc` | `arrc` | with `as` (reserved) |
 |---|---|---|---|---|
-| Observer (`fork/observer`), 33 repeater boards | built | built | built | `as`, `asar`, `asrc`, `asarrc`: not yet |
+| Observer (`fork/observer`), 33 repeater boards | up to lou-20 | up to lou-20 | built | `as`, `asar`, `asrc`, `asarrc`: not yet |
 | core MeshCore (`fork/core`), 93 boards (`scripts/boards-core.txt`) | built | built, mesh only | built, mesh only | `as`, `asar`: not yet |
 
 The Wio-E5 mini has no `arrc` image: it does not fit the board's flash (`ar` and `rc` do), so
 `fork/core` builds 92 `arrc` images.
+
+An Observer node on `ar` or `rc` reaches the `arrc` image by its ordinary update, through an
+alias manifest, and the feature it lacked starts switched off ([ota.md](ota.md), owner's
+ruling 2026-11-25). In the full image each feature is off until a setting switches it on.
 
 Every Observer image also carries signed pull OTA; a core image has none. Room-server and
 companion images are not built (TODO 22a rulings 14, 23).
@@ -40,9 +45,9 @@ that has none of its features.
 
 The switches are passed by the build script, never written into a variant's
 `platformio.ini`, so every board builds every combination unchanged.
-`scripts/build-matrix.sh` builds every combination for every board of the base it runs on
-(`ar rc arrc` × the 33 Observer boards on `fork/observer` and × `scripts/boards-core.txt` on
-`fork/core`), or the ones named with `-c` and `-b`:
+`scripts/build-matrix.sh` builds what the base it runs on releases (`arrc` for the 33
+Observer boards on `fork/observer`, `ar rc arrc` × `scripts/boards-core.txt` on `fork/core`),
+or the combinations and boards named with `-c` and `-b`:
 
 ```sh
 scripts/build-matrix.sh -c arrc -b Heltec_v3_repeater_observer_mqtt    # one image
@@ -50,16 +55,19 @@ scripts/build-matrix.sh -n                                             # the pla
 ```
 
 Each image is `<env>-<mcu>-v1.18.0-lou-<nn>-<features>-<hash>.bin` and asks its channel for the
-manifest `<env>-<features>.json` (`OTA_VARIANT`), so it can only be offered its own combination.
+manifest `<env>-<features>.json` (`OTA_VARIANT`). The manifest must name the node's own variant
+and features. An Observer `arrc` image also gets two alias manifests, `<env>-ar.json` and
+`<env>-rc.json`, which offer it to the board's nodes on `ar` and `rc` ([ota.md](ota.md)).
 `scripts/check-build-matrix.sh` compares the plan with `test/data/build-matrix-<base>.txt`.
 The whole matrix runs in GitHub Actions, `.github/workflows/fork-matrix.yml`, started by hand
 with the two refs and the revision: the host suites per combination, then one job per Observer
-image and one per core board building its three combinations in turn (192 jobs, 378 images at
-lou-19; GitHub allows 256 jobs in a matrix, `scripts/ci-plan.sh`), then one artifact,
-`candidate-<revision>`, with every image, every Observer image's unsigned manifest and
-`SHA256SUMS`. It signs nothing and publishes nothing; the
+image and one per core board building its combinations in turn (126 jobs, 311 images at
+lou-21: 33 Observer and 278 core; GitHub allows 256 jobs in a matrix, `scripts/ci-plan.sh`),
+then one artifact, `candidate-<revision>`, with every image, every Observer image's unsigned
+manifest and its two aliases, and `SHA256SUMS`. It signs nothing and publishes nothing; the
 release step on the release host does both. Every pull request and push to either branch runs
-`.github/workflows/fork-pr.yml`: each combination of the base on one ESP32 and one nRF52 board
+`.github/workflows/fork-pr.yml`: on `fork/observer` Heltec v3 as `arrc` and the RAK 4631 plain
+repeater as `ar` and as `arrc`, on `fork/core` one ESP32 and one nRF52 board
 (`scripts/ci-pr-plan.sh`), and on `fork/observer` the XIAO S3 WIO image built as a release
 builds it, checked free of debug lines by `scripts/check-quiet-image.sh`.
 Without any switch the image is the Observer repeater plus the fork's OTA channel.
@@ -70,7 +78,7 @@ Without any switch the image is the Observer repeater plus the fork's OTA channe
 `native_rc` and `native_arrc` run the features' suites and `test_fork_seams` with that
 combination's switches on, so the
 seams -- the feature token, which commands the plane admits -- are checked in the shape each
-image has. `native_v2` and `native_kiss_modem` are as before. The glue in
+image has. `native_v2` runs `test_mqtt_v3` alone; `native_kiss_modem` is as before. The glue in
 `examples/simple_repeater/` is not host-tested; a target compile of each combination is its
 gate.
 
@@ -86,7 +94,10 @@ reads nor writes it:
 | `/ota` | pull OTA, in every Observer image; read from `/mqttcontrol` until it is first written |
 
 A node flashed from one combination to another therefore keeps every setting of a feature
-it loses, and finds them again when it gets the feature back.
+it loses, and finds them again when it gets the feature back. There is one exception: an
+Observer node that takes the full image over the air from `ar` or `rc` finds the feature it
+lacked switched off at the first start, once. Only "on" is changed; the rest of the file
+stays, the command key included ([ota.md](ota.md), `src/helpers/ForkArrival.h`).
 
 ## Where the features attach
 
