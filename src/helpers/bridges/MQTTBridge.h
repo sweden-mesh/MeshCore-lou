@@ -318,6 +318,10 @@ private:
   volatile bool _ntp_force_done;
   volatile bool _ntp_force_result;
 
+  // The clock was set by hand on the loop task (noteManualClockSet()); the bridge task
+  // consumes it. Kept across a bridge restart: the clock stays set.
+  volatile bool _manual_clock_set;
+
   // CLI-requested NTP connectivity diagnostic, marshalled onto the MQTT task (Core 0)
   // with the same handshake as the forced sync. Probe-only: it queries each server and
   // records the reported time but never sets the system clock or the RTC, so the
@@ -823,11 +827,17 @@ public:
    *  Performs blocking NTP I/O and must only be called from the MQTT task (Core 0).
    *  Other tasks (e.g. the CLI on Core 1) must use requestForcedNtpSync() instead. */
   bool syncTimeWithNTP(bool force = false, bool primary_only = false, int attempts_per_server = 2);
+  void refreshTokensAfterClockChange();
   /** Request a forced NTP sync from another task (e.g. CLI on Core 1). Marshals the
    *  work onto the MQTT task so all NTP I/O stays on Core 0, then blocks up to
    *  timeout_ms for the result. Returns true if the sync succeeded, false on failure,
    *  timeout, or if the bridge is not running. */
   bool requestForcedNtpSync(uint32_t timeout_ms = 30000);
+
+  /** The clock was just set by hand (CLI `time <epoch>` or `clock sync`). Any task may
+   *  call this; the bridge task then lets the JWT slots run on that clock and re-issues
+   *  tokens minted before the step. */
+  void noteManualClockSet() { _manual_clock_set = true; }
   /** Probe every configured NTP server (custom primary + built-in fallbacks) for
    *  connectivity and report each server's reported time WITHOUT touching the system
    *  clock. Marshals the probe onto the MQTT task (Core 0), then formats on the caller's

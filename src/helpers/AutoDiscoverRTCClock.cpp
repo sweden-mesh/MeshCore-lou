@@ -83,6 +83,15 @@ uint32_t AutoDiscoverRTCClock::getCurrentTime() {
 }
 
 void AutoDiscoverRTCClock::setCurrentTime(uint32_t time) { 
+#if defined(ESP_PLATFORM)
+  // With a chip present only the chip was written, and the system clock kept its old
+  // time. MQTT login tokens are stamped from the system clock (time(nullptr)), so a
+  // `time <epoch>` on such a board mended the mesh clock and left the logins expired.
+  // The fallback is the ESP32's system clock: set it in every case.
+  if (ds3231_success || rv3028_success || rtc_8563_success || rtc_8130_success) {
+    _fallback->setCurrentTime(time);
+  }
+#endif
   if (ds3231_success) {
     rtc_3231.adjust(DateTime(time));
   } else if (rv3028_success) {

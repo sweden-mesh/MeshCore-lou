@@ -354,6 +354,11 @@ public:
     return false;
   };
 
+  // `time <epoch>` or `clock sync` has just set the clock. WITH_MQTT_BRIDGE builds
+  // override: tokens minted from the old time are made again at once.
+  virtual void clockSetByHand() {
+  };
+
   // Browser-based config portal (ESP32 WITH_MQTT_BRIDGE builds override).
   // force_ap=true requests the SoftAP setup portal even when WiFi is configured.
   // Returns true if handled (reply filled either way when true).

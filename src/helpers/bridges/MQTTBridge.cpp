@@ -49,6 +49,30 @@ static void applyEffectiveOrigin(const NodePrefs* np, const MQTTPrefs* obs, char
   StrHelper::stripSurroundingQuotes(dest, dest_size);
 }
 
+// A never-set clock, remembered across a soft reset. ESP32RTCClock::begin() restores the
+// clock after one, so a node that ran ten minutes on the power-on placeholder comes back
+// ten minutes past it with its uptime at zero, and the placeholder alone would call that
+// a set clock. A power cycle scrambles these, and the magic then fails.
+static RTC_NOINIT_ATTR uint32_t s_never_set_clock_time;
+static RTC_NOINIT_ATTR uint32_t s_never_set_clock_magic;
+static const uint32_t kNeverSetClockMagic = 0x4E53434BUL;
+
+static_assert(MQTTConnectionPolicy::kPowerOnClockEpoch == RTC_TIME_MIN,
+              "kPowerOnClockEpoch must be what ESP32RTCClock::begin() seeds the clock with");
+
+static uint32_t neverSetClockBaseline() {
+  if (s_never_set_clock_magic == kNeverSetClockMagic &&
+      s_never_set_clock_time > MQTTConnectionPolicy::kPowerOnClockEpoch) {
+    return s_never_set_clock_time;
+  }
+  return MQTTConnectionPolicy::kPowerOnClockEpoch;
+}
+
+static void rememberNeverSetClock(uint32_t system_time) {
+  s_never_set_clock_time = system_time;
+  s_never_set_clock_magic = kNeverSetClockMagic;
+}
+
 static const char* const kNtpBuiltinFallbacks[] = {
   "pool.ntp.org",
   "time.google.com",
@@ -724,6 +748,7 @@ MQTTBridge::MQTTBridge(NodePrefs *prefs, MQTTPrefs *obs, mesh::PacketManager *mg
       _last_ntp_sync(0), _ntp_synced(false),
       _clock_trust(MQTTConnectionPolicy::ClockTrust::NeverSet), _ntp_sync_pending(false), _slots_setup_done(false), _max_active_slots(RUNTIME_MQTT_SLOTS),
       _ntp_force_requested(false), _ntp_force_done(false), _ntp_force_result(false),
+      _manual_clock_set(false),
       _ntp_diag_requested(false), _ntp_diag_done(false), _ntp_diag_count(0),
       // Default to UTC; setRules() will be called from syncTimeWithNTP when a
       // non-UTC timezone string is configured. Timezone has no default ctor,
@@ -1537,6 +1562,18 @@ void MQTTBridge::mqttTaskLoop() {
       // Every server, once each, as the hourly refresh does. A corrected clock mends the
       // tokens in syncTimeWithNTP(); the refusal already made the slot mint a new one.
       syncTimeWithNTP(/*force=*/true, /*primary_only=*/false, /*attempts_per_server=*/1);
+    }
+
+    // The clock was set by hand (`time <epoch>`, `clock sync`), on the loop task. That is
+    // a clock somebody set, so the JWT slots need not wait for a server any longer, and
+    // tokens minted before the step are made again now. No server has confirmed it, so
+    // the NTP retry goes on.
+    if (_manual_clock_set) {
+      _manual_clock_set = false;
+      s_never_set_clock_magic = 0;
+      _clock_trust = MQTTConnectionPolicy::clockTrustAfterManualSet(_clock_trust);
+      MQTT_DEBUG_PRINTLN("Clock set by hand: %lu", (unsigned long)time(nullptr));
+      if (_slots_setup_done) refreshTokensAfterClockChange();
     }
 
     // Process a CLI-requested forced NTP sync (queued from Core 1). Running it here
@@ -4668,30 +4705,6 @@ void MQTTBridge::refreshNTP() {
   syncTimeWithNTP(/*force=*/true, /*primary_only=*/false, /*attempts_per_server=*/1);
 }
 
-// A never-set clock, remembered across a soft reset. ESP32RTCClock::begin() restores the
-// clock after one, so a node that ran ten minutes on the power-on placeholder comes back
-// ten minutes past it with its uptime at zero, and the placeholder alone would call that
-// a set clock. A power cycle scrambles these, and the magic then fails.
-static RTC_NOINIT_ATTR uint32_t s_never_set_clock_time;
-static RTC_NOINIT_ATTR uint32_t s_never_set_clock_magic;
-static const uint32_t kNeverSetClockMagic = 0x4E53434BUL;
-
-static_assert(MQTTConnectionPolicy::kPowerOnClockEpoch == RTC_TIME_MIN,
-              "kPowerOnClockEpoch must be what ESP32RTCClock::begin() seeds the clock with");
-
-static uint32_t neverSetClockBaseline() {
-  if (s_never_set_clock_magic == kNeverSetClockMagic &&
-      s_never_set_clock_time > MQTTConnectionPolicy::kPowerOnClockEpoch) {
-    return s_never_set_clock_time;
-  }
-  return MQTTConnectionPolicy::kPowerOnClockEpoch;
-}
-
-static void rememberNeverSetClock(uint32_t system_time) {
-  s_never_set_clock_time = system_time;
-  s_never_set_clock_magic = kNeverSetClockMagic;
-}
-
 // One validated NTP exchange with one named server, on a fresh ephemeral socket.
 //
 // Replaces NTPClient, which accepted any datagram that arrived on its fixed
@@ -4954,58 +4967,7 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
     // initially returned stale RTC time, then a later sync corrected it), re-issue
     // credentials for every JWT slot the correction left holding an expired token.
     if (_slots_setup_done && had_clock) {
-      unsigned long current_time = (unsigned long)time(nullptr);
-      // Every slot, not _max_active_slots: that is a count of positions, never an
-      // index bound. Which indices hold those positions is not contiguous — a slot can
-      // fail isSlotReady() or its setup and be passed over, leaving a higher index
-      // activated — so bounding by the cap silently skipped an activated slot and left
-      // it holding a JWT issued against the pre-correction clock. The guard below
-      // already excludes disabled, non-JWT, and clientless slots.
-      for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) {
-        bool slot_jwt = (_slots[i].preset && _slots[i].preset->auth_type == MQTT_AUTH_JWT) ||
-                        (!_slots[i].preset && _slots[i].audience[0] != '\0');
-        if (_slots[i].enabled && slot_jwt && _slots[i].client) {
-          // Token created before NTP corrected the clock — refresh credentials
-          // in place and reconnect the persistent client. No teardown needed.
-          if (_slots[i].token_expires_at > 0 && current_time > _slots[i].token_expires_at) {
-            MQTT_DEBUG_PRINTLN("MQTT%d token stale after time correction, re-creating", i + 1);
-            const MQTTConnectionPolicy::StaleTokenAction action =
-                MQTTConnectionPolicy::classifyStaleToken(
-                    createSlotAuthToken(i), _slots[i].client->connected(),
-                    mqttPresetEnforcesTokenExp(_slots[i].preset));
-            if (action == MQTTConnectionPolicy::StaleTokenAction::Defer) {
-              MQTT_DEBUG_PRINTLN("MQTT%d token refresh failed after time correction, "
-                  "deferring to the reconnect ladder", i + 1);
-              continue;
-            }
-            // Staged only; the config is applied by connect()/reconnect() below.
-            _slots[i].client->setCredentials(_jwt_username, _slots[i].auth_token);
-            if (action == MQTTConnectionPolicy::StaleTokenAction::Reconnect) {
-              // Reuse the transport — the fault is stale credentials, not the transport —
-              // but via the helper, so a stopped client is started rather than no-opped.
-              reconnectSlotClient(i);
-            } else if (action == MQTTConnectionPolicy::StaleTokenAction::Bounce) {
-              MQTT_DEBUG_PRINTLN("MQTT%d bouncing for the corrected-clock token", i + 1);
-              const esp_err_t soft = _slots[i].client->softDisconnect();
-              if (soft != ESP_OK) {
-                MQTT_DEBUG_PRINTLN("MQTT%d soft disconnect did not complete (%s)", i + 1,
-                                   esp_err_to_name(soft));
-              }
-              // Via the helper, so the re-created token is recorded as applied.
-              const esp_err_t rc = reconnectSlotClient(i);
-              if (rc != ESP_OK) {
-                MQTT_DEBUG_PRINTLN("MQTT%d corrected-clock reconnect failed (%s)", i + 1,
-                                   esp_err_to_name(rc));
-              }
-            } else {
-              MQTT_DEBUG_PRINTLN("MQTT%d token re-created, no bounce (broker does not enforce exp)",
-                  i + 1);
-              // As in the renewal path: this broker ignores exp, so the renewal is settled.
-              _slots[i].applied_token_expires_at = _slots[i].token_expires_at;
-            }
-          }
-        }
-      }
+      refreshTokensAfterClockChange();
     }
 
     // Set timezone from string (with DST support) — only if changed.
@@ -5037,6 +4999,64 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
   }
   sync_in_progress = false;
   return false;
+}
+
+// The clock moved (a sync corrected it, or it was set by hand): every JWT slot left
+// holding a token that the new time makes expired gets a new one and signs in again now,
+// not at the reconnect ladder's next turn, which may be five minutes off. Bridge task only.
+void MQTTBridge::refreshTokensAfterClockChange() {
+  unsigned long current_time = (unsigned long)time(nullptr);
+  // Every slot, not _max_active_slots: that is a count of positions, never an
+  // index bound. Which indices hold those positions is not contiguous — a slot can
+  // fail isSlotReady() or its setup and be passed over, leaving a higher index
+  // activated — so bounding by the cap silently skipped an activated slot and left
+  // it holding a JWT issued against the pre-correction clock. The guard below
+  // already excludes disabled, non-JWT, and clientless slots.
+  for (int i = 0; i < RUNTIME_MQTT_SLOTS; i++) {
+    bool slot_jwt = (_slots[i].preset && _slots[i].preset->auth_type == MQTT_AUTH_JWT) ||
+                    (!_slots[i].preset && _slots[i].audience[0] != '\0');
+    if (_slots[i].enabled && slot_jwt && _slots[i].client) {
+      // Token created before NTP corrected the clock — refresh credentials
+      // in place and reconnect the persistent client. No teardown needed.
+      if (_slots[i].token_expires_at > 0 && current_time > _slots[i].token_expires_at) {
+        MQTT_DEBUG_PRINTLN("MQTT%d token stale after time correction, re-creating", i + 1);
+        const MQTTConnectionPolicy::StaleTokenAction action =
+            MQTTConnectionPolicy::classifyStaleToken(
+                createSlotAuthToken(i), _slots[i].client->connected(),
+                mqttPresetEnforcesTokenExp(_slots[i].preset));
+        if (action == MQTTConnectionPolicy::StaleTokenAction::Defer) {
+          MQTT_DEBUG_PRINTLN("MQTT%d token refresh failed after time correction, "
+              "deferring to the reconnect ladder", i + 1);
+          continue;
+        }
+        // Staged only; the config is applied by connect()/reconnect() below.
+        _slots[i].client->setCredentials(_jwt_username, _slots[i].auth_token);
+        if (action == MQTTConnectionPolicy::StaleTokenAction::Reconnect) {
+          // Reuse the transport — the fault is stale credentials, not the transport —
+          // but via the helper, so a stopped client is started rather than no-opped.
+          reconnectSlotClient(i);
+        } else if (action == MQTTConnectionPolicy::StaleTokenAction::Bounce) {
+          MQTT_DEBUG_PRINTLN("MQTT%d bouncing for the corrected-clock token", i + 1);
+          const esp_err_t soft = _slots[i].client->softDisconnect();
+          if (soft != ESP_OK) {
+            MQTT_DEBUG_PRINTLN("MQTT%d soft disconnect did not complete (%s)", i + 1,
+                               esp_err_to_name(soft));
+          }
+          // Via the helper, so the re-created token is recorded as applied.
+          const esp_err_t rc = reconnectSlotClient(i);
+          if (rc != ESP_OK) {
+            MQTT_DEBUG_PRINTLN("MQTT%d corrected-clock reconnect failed (%s)", i + 1,
+                               esp_err_to_name(rc));
+          }
+        } else {
+          MQTT_DEBUG_PRINTLN("MQTT%d token re-created, no bounce (broker does not enforce exp)",
+              i + 1);
+          // As in the renewal path: this broker ignores exp, so the renewal is settled.
+          _slots[i].applied_token_expires_at = _slots[i].token_expires_at;
+        }
+      }
+    }
+  }
 }
 
 bool MQTTBridge::requestForcedNtpSync(uint32_t timeout_ms) {

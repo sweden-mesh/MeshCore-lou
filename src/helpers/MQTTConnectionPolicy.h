@@ -239,6 +239,13 @@ static inline ClockTrust clockTrustAfterSync(ClockTrust before, bool server_answ
   return fallback_usable ? ClockTrust::Unverified : before;
 }
 
+// A clock set by hand (`time <epoch>`, `clock sync`) is a clock somebody set: good enough
+// for a login, confirmed by no server. A verified clock stays verified, and the hourly
+// refresh corrects a wrong hand.
+static inline ClockTrust clockTrustAfterManualSet(ClockTrust before) {
+  return before == ClockTrust::NeverSet ? ClockTrust::Unverified : before;
+}
+
 // The time sync keeps asking on its short schedule until a server has answered.
 static inline bool clockVerified(ClockTrust trust) { return trust == ClockTrust::Verified; }
 

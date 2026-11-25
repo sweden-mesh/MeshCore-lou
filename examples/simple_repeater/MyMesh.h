@@ -516,6 +516,10 @@ public:
     return bridge->requestForcedNtpSync(0);
   }
 
+  void clockSetByHand() override {
+    if (bridge) bridge->noteManualClockSet();
+  }
+
   bool runMqttNtpDiag(char* reply, size_t reply_size, bool verbose) override {
     if (!bridge || !bridge->isRunning()) return false;
     return bridge->ntpDiag(reply, reply_size, verbose);

@@ -245,6 +245,16 @@ TEST(ClockTrust, NoServerAndNoClockChangesNothing) {
             Policy::clockTrustAfterSync(ClockTrust::Unverified, false, false));
 }
 
+TEST(ClockTrust, AClockSetByHandLetsTheJwtSlotsRun) {
+  const ClockTrust after = Policy::clockTrustAfterManualSet(ClockTrust::NeverSet);
+  EXPECT_EQ(ClockTrust::Unverified, after);
+  EXPECT_TRUE(Policy::jwtClockAvailable(after));
+  // No server has confirmed it: the NTP retry goes on.
+  EXPECT_FALSE(Policy::clockVerified(after));
+  EXPECT_EQ(ClockTrust::Unverified, Policy::clockTrustAfterManualSet(ClockTrust::Unverified));
+  EXPECT_EQ(ClockTrust::Verified, Policy::clockTrustAfterManualSet(ClockTrust::Verified));
+}
+
 TEST(ClockTrust, OneAnswerVerifiesForGood) {
   // The hourly refresh reaching no server does not start the 30 s asking again.
   EXPECT_EQ(ClockTrust::Verified,
