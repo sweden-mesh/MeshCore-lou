@@ -270,8 +270,10 @@ observer tooling watches. That separation was never needed: the tooling matches 
 > on, counter 41, slot 2 connected, /cmd subscribed, last command 312 s ago, ping pong in 230 ms
 ```
 
-whether the slot is connected, whether the broker acknowledged the subscription since it
-connected, how long ago the command key last vouched for a command, and how the last ping
+whether the slot is connected, what the broker said about the subscriptions since it
+connected (`subscribed`, `not subscribed` while no answer has come, and from lou-21 `refused`
+when it refused one of the plane's topics, which a later topic it grants does not undo), how
+long ago the command key last vouched for a command, and how the last ping
 ended: `pong in N ms`, `no pong in 10 s`, `publish refused`, `waiting` or `-` (no ping since boot).
 From lou-18 a command refused before the key vouched for it -- no command key, the wrong one,
 a broken envelope -- adds `, unverified <n> (last <reason>)`, the reason as mccontrol names it

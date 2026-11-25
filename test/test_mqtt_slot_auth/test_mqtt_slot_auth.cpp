@@ -94,6 +94,51 @@ TEST(Suback, GrantedOnlyWhenNoCodeRefuses) {
   EXPECT_TRUE(mqttSubackGranted(nullptr, 0));
 }
 
+// ---- a refusal is not undone by a later grant (lou-21) --------------------------
+
+TEST(Suback, NothingHeardYetIsNotSubscribed) {
+  EXPECT_STREQ("not subscribed", mqttSubStateName(MQTT_SUB_PENDING));
+  EXPECT_EQ(0, (int)MQTT_SUB_PENDING);                  // what a bridge starts with
+}
+
+TEST(Suback, EveryTopicGrantedIsSubscribed) {
+  uint8_t state = MQTT_SUB_PENDING;
+  state = mqttSubAfterSuback(state, true);
+  EXPECT_EQ(MQTT_SUB_GRANTED, state);
+  state = mqttSubAfterSuback(state, true);
+  EXPECT_EQ(MQTT_SUB_GRANTED, state);
+  EXPECT_STREQ("subscribed", mqttSubStateName(state));
+}
+
+TEST(Suback, ARefusalStaysWhateverIsGrantedAfterIt) {
+  // mcc/cmd/<key> refused to a password login, then the old per-node topic granted
+  const uint8_t refused[] = { 0x80 }, granted[] = { 0x01 };
+  uint8_t state = MQTT_SUB_PENDING;
+  state = mqttSubAfterSuback(state, mqttSubackGranted(refused, 1));
+  EXPECT_EQ(MQTT_SUB_REFUSED, state);
+  state = mqttSubAfterSuback(state, mqttSubackGranted(granted, 1));
+  EXPECT_EQ(MQTT_SUB_REFUSED, state);
+  EXPECT_STREQ("refused", mqttSubStateName(state));
+  // and the other way round
+  state = mqttSubAfterSuback(MQTT_SUB_GRANTED, false);
+  EXPECT_EQ(MQTT_SUB_REFUSED, state);
+}
+
+TEST(Suback, AConnectStartsOver) {
+  uint8_t state = mqttSubAfterSuback(MQTT_SUB_PENDING, false);
+  ASSERT_EQ(MQTT_SUB_REFUSED, state);
+  state = MQTT_SUB_PENDING;                             // the bridge's reset, connect and disconnect
+  EXPECT_STREQ("not subscribed", mqttSubStateName(state));
+  EXPECT_EQ(MQTT_SUB_GRANTED, mqttSubAfterSuback(state, true));
+}
+
+TEST(Suback, TheWordsFitWhereNotSubscribedDid) {
+  for (uint8_t s = MQTT_SUB_PENDING; s <= MQTT_SUB_REFUSED; s++) {
+    EXPECT_LE(strlen(mqttSubStateName(s)), strlen("not subscribed"));
+  }
+  EXPECT_STREQ("not subscribed", mqttSubStateName(9));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -492,7 +492,7 @@ The four fields to check:
 | field | good | otherwise |
 |---|---|---|
 | `slot <slot> ...` | `connected` | `not connected`: WiFi, clock, the slot (symptom table) |
-| `/cmd ...` | `subscribed` | `not subscribed`: the broker refused or has not acknowledged the subscription |
+| `/cmd ...` | `subscribed` | `not subscribed`: the broker has not answered the subscription yet; `refused` (lou-21): it refused one of the plane's topics, so the slot's login is not one the command server serves (`set cmd on`) |
 | `last command ...` | `none yet` until a signed command arrives | |
 | `unverified <n> (last ...)` | absent | lou-18: commands arrived but were refused unanswered; `sig-invalid`: `get cmd.pubkey` is not the sender's key; `no-owner-key`: set it |
 | `ping ...` | `pong in <ms> ms` | `waiting`: read again in a few seconds; `no pong in 10 s`: /cmd subscription, or the broker does not answer pings; `publish refused` |
@@ -580,4 +580,5 @@ The `ver` reply must not carry `(unsigned)` or `BAD SIGNATURE`. A signed answer 
 | `get cmd` shows `no slot` | step 8 not done, or `set cmd.slot 0` was the last command: do 8b step 3 |
 | `get cmd` shows `not connected` | the plane's slot in `get mqtt.status`; WiFi; clock |
 | `get cmd` shows `not subscribed` or `ping no pong in 10 s` | read again after a minute; if it stays, the broker side needs a look; the node is still configured right |
+| `get cmd` shows `/cmd refused` (lou-21) | the command server refused the plane's topic to this login: `set cmd on`, `reboot` |
 | mccontrol gets no answer later | `cmd ping` on the node first; then check `get cmd.pubkey` is your key |

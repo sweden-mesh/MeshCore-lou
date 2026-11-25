@@ -919,12 +919,12 @@ public:
   }
   void setControlWill(const char* topic) { _control_will = topic; }
 
-  // The control slot: connected, every subscription granted since it connected
-  // (SUBACK), and how it reaches the broker ("mqtts, jwt").
+  // The control slot: connected, what the broker has said about its subscriptions
+  // since it connected (MqttSubState), and how it reaches the broker ("mqtts, jwt").
   bool controlSlotConnected() const {
     return _control_slot >= 0 && _slots[_control_slot].connected;
   }
-  bool controlSubscribed() const { return _control_subscribed; }
+  uint8_t controlSubState() const { return _control_sub; }
   void controlSlotLink(char* out, size_t out_size) const;
 
 #ifdef WITH_MQTT_COMMAND
@@ -937,7 +937,7 @@ public:
 
 private:
   ControlSink* _control_sink = NULL;
-  volatile bool _control_subscribed = false;
+  volatile uint8_t _control_sub = MQTT_SUB_PENDING;
 #ifdef WITH_MQTT_COMMAND
   char _client_tag[MQTT_SLOT_CLIENT_TAG_LEN + 1] = {0};
 #endif

@@ -1865,14 +1865,17 @@ bool MQTTBridge::ensureSlotClient(int index) {
       });
     }
     // This slot subscribes to the control topics and nothing else, so every SUBACK
-    // since it connected is theirs; one that refuses a topic (0x80) clears the flag.
+    // since it connected is theirs. Each topic gets its own, and one that refuses (0x80)
+    // is not undone by the next one granting: mqttSubAfterSuback.
     slot.client->onSuback([this](int /*msg_id*/, const uint8_t* codes, int len) {
-      _control_subscribed = mqttSubackGranted(codes, len);
+      _control_sub = mqttSubAfterSuback(_control_sub, mqttSubackGranted(codes, len));
     });
     if (_control_will != NULL) slot.client->setWill(_control_will, 1, true, "", 0);
   }
 
   slot.client->onConnect([this, index](bool sessionPresent) {
+    // The client has sent this connection's SUBSCRIBEs and none is answered yet.
+    if (index == _control_slot) _control_sub = MQTT_SUB_PENDING;
     // A CONNECT started before this slot was disabled or reconfigured can still
     // complete afterwards. Accepting it marked a slot connected that the
     // operator had switched off, scheduled its status publish, and published
@@ -1921,7 +1924,7 @@ bool MQTTBridge::ensureSlotClient(int index) {
   });
   slot.client->onDisconnect([this, index](bool sessionPresent) {
     MQTT_DEBUG_PRINTLN("MQTT%d disconnected", index + 1);
-    if (index == _control_slot) _control_subscribed = false;
+    if (index == _control_slot) _control_sub = MQTT_SUB_PENDING;
     // Ended an attempt that never reached onConnect. A deliberate stop clears the flag
     // first; a bounced live session is still marked connected until this handler runs,
     // so its late DISCONNECTED after a timed-out softDisconnect() is not counted either.
