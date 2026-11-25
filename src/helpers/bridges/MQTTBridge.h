@@ -622,6 +622,10 @@ private:
   void checkConfigurationMismatch();
   bool isIATAValid() const;
   bool isSlotReady(int index, char* reason_buf = nullptr, size_t reason_size = 0) const;
+  // For the status and diag lines: a JWT slot held back for want of a clock, and a JWT
+  // slot whose refusal the unverified clock may explain.
+  bool slotWaitsForClock(int index) const;
+  bool slotRefusalSuspectsClock(int index) const;
 
   void optimizeMqttClientConfig(PsychicMqttClient* client, bool needs_large_buffer = false);
   void getClientVersion(char* buffer, size_t buffer_size) const;
@@ -855,7 +859,8 @@ public:
    *  slot is unconfigured (skip it). */
   struct SlotStatusSnapshot {
     const char* name;    // preset name or "custom"
-    const char* state;   // "inactive" | "wait" | "ok" | "fail" | "disc"
+    const char* state;   // "inactive" | "wait" | "ok" | "fail" | "disc" |
+                         // "refused: clock?" | "no clock"
     unsigned long publish_ok;
     unsigned long publish_err;
     // Raw packet-type allowlist. Kept as the mask rather than canonical text so

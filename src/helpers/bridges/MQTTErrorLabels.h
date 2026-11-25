@@ -122,4 +122,28 @@ static inline const char* connackReason(uint8_t code) {
   }
 }
 
+// A broker that refuses a JWT login with "bad user/password" or "not authorized" may be
+// refusing the token's time: minted from a wrong clock it is expired on arrival. While no
+// NTP server has confirmed the clock, that is the first thing to look at. A password
+// slot's refusal has nothing to do with the clock.
+static inline bool refusalSuspectsClock(bool slot_jwt, uint8_t connack_code,
+                                        bool clock_verified) {
+  return slot_jwt && !clock_verified &&
+         (connack_code == kConnackBadCredentials || connack_code == kConnackNotAuthorized);
+}
+
+// The state `get mqtt.status` and the stats snapshot show for a slot that is enabled,
+// ready and not connected. `waits_for_clock`: a JWT slot held back because the clock was
+// never set, which has not tried and so has no refusal to show.
+static inline const char* disconnectedSlotState(bool waits_for_clock, bool clock_suspect,
+                                                bool breaker_tripped) {
+  if (waits_for_clock) return "no clock";
+  if (clock_suspect) return "refused: clock?";
+  return breaker_tripped ? "fail" : "disc";
+}
+
+// What `get mqttN.diag` adds to such a slot's line.
+static const char* const kDiagClockNotVerified = "clock not verified: run time <epoch> or check NTP";
+static const char* const kDiagClockNotSet = "clock not set: run time <epoch> or check NTP";
+
 } // namespace MQTTErrorLabels

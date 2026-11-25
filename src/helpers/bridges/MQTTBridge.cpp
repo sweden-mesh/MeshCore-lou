@@ -281,6 +281,23 @@ static void formatDuration(char* buf, size_t len, uint32_t secs) {
 }
 #endif
 
+static bool slotSignsInWithJwt(const MQTTPresetDef* preset, const char* audience) {
+  return (preset && preset->auth_type == MQTT_AUTH_JWT) || (!preset && audience[0] != '\0');
+}
+
+bool MQTTBridge::slotWaitsForClock(int index) const {
+  const MQTTSlot& slot = _slots[index];
+  return !slot.connected && !MQTTConnectionPolicy::slotMayStart(
+      slotSignsInWithJwt(slot.preset, slot.audience), _clock_trust);
+}
+
+bool MQTTBridge::slotRefusalSuspectsClock(int index) const {
+  const MQTTSlot& slot = _slots[index];
+  return MQTTErrorLabels::refusalSuspectsClock(
+      slotSignsInWithJwt(slot.preset, slot.audience), slot.last_connack_code,
+      MQTTConnectionPolicy::clockVerified(_clock_trust));
+}
+
 void MQTTBridge::formatMqttStatusReply(char* buf, size_t bufsize, const MQTTPrefs* obs) {
   if (buf == nullptr || bufsize == 0) return;
   const char* msgs = (obs && obs->mqtt_status_enabled) ? "on" : "off";
@@ -323,12 +340,11 @@ void MQTTBridge::formatMqttStatusReply(char* buf, size_t bufsize, const MQTTPref
     } else if (slot.connected) {
       name = slot.preset ? slot.preset->name : "custom";
       state = "ok";
-    } else if (slot.circuit_breaker_tripped) {
-      name = slot.preset ? slot.preset->name : "custom";
-      state = "fail";
     } else {
       name = slot.preset ? slot.preset->name : "custom";
-      state = "disc";
+      state = MQTTErrorLabels::disconnectedSlotState(
+          b->slotWaitsForClock(i), b->slotRefusalSuspectsClock(i),
+          slot.circuit_breaker_tripped);
     }
     replyAppendf(buf, bufsize, &pos, ", %d: %s (%s)", i + 1, name, state);
   }
@@ -461,10 +477,10 @@ bool MQTTBridge::getSlotStatusSnapshot(int slot_index, SlotStatusSnapshot* out) 
       out->state = "wait";
     } else if (slot.connected) {
       out->state = "ok";
-    } else if (slot.circuit_breaker_tripped) {
-      out->state = "fail";
     } else {
-      out->state = "disc";
+      out->state = MQTTErrorLabels::disconnectedSlotState(
+          b->slotWaitsForClock(slot_index), b->slotRefusalSuspectsClock(slot_index),
+          slot.circuit_breaker_tripped);
     }
   }
   out->publish_ok = slot.client ? slot.client->getPublishOk() : 0;
@@ -601,6 +617,9 @@ void MQTTBridge::formatSlotDiagReply(char* buf, size_t bufsize, int slot_index) 
     // out of service for the rest of the boot and its resources are retained
     // on purpose.
     state = "quarantined";
+  } else if (b->slotWaitsForClock(slot_index)) {
+    // A JWT slot is not set up on a clock nobody set, so it has no client and no error.
+    state = "no clock";
   } else if (!slot.client) {
     // Ready to connect but the client object could not be allocated.
     state = "no client";
@@ -648,6 +667,9 @@ void MQTTBridge::formatSlotDiagReply(char* buf, size_t bufsize, int slot_index) 
       } else {
         replyAppendf(buf, bufsize, &pos, ", refused: code %u", (unsigned)slot.last_connack_code);
       }
+      if (!slot.connected && b->slotRefusalSuspectsClock(slot_index)) {
+        replyAppendf(buf, bufsize, &pos, ", %s", MQTTErrorLabels::kDiagClockNotVerified);
+      }
     }
     // TLS error with human-friendly description
     if (slot.last_tls_err != 0) {
@@ -677,6 +699,8 @@ void MQTTBridge::formatSlotDiagReply(char* buf, size_t bufsize, int slot_index) 
     } else {
       replyAppendf(buf, bufsize, &pos, ", %luh ago", ago_sec / 3600);
     }
+  } else if (b->slotWaitsForClock(slot_index)) {
+    replyAppendf(buf, bufsize, &pos, ", %s", MQTTErrorLabels::kDiagClockNotSet);
   } else if (!slot.connected) {
     replyAppendf(buf, bufsize, &pos, ", no error info");
   }

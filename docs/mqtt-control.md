@@ -267,6 +267,11 @@ a broken envelope -- adds `, unverified <n> (last <reason>)`, the reason as mcco
 broker can send one, so this is where it shows: `sig-invalid` means the node holds another
 command key than the sender's (`get cmd.pubkey`).
 
+When the slot is not connected, look at `get mqtt.status` first: from lou-21 a slot whose login
+the broker refused (CONNACK 4 or 5) while no NTP server has confirmed the node's clock shows as
+`refused: clock?`, a slot held back because the clock was never set shows as `no clock`, and
+`get mqttN.diag` adds `clock not verified: run time <epoch> or check NTP`.
+
 `cmd ping` proves the rest, at the console and without the owner's laptop. The node
 publishes `ping|<8-hex nonce>` on its own `/ping`, answers at once, and goes on repeating:
 
