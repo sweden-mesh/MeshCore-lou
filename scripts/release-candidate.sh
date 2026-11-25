@@ -19,8 +19,10 @@
 #
 # Refuses, before signing anything, a set that does not hold together: a file that is not
 # what SHA256SUMS says, an Observer image without its manifest or a manifest without its
-# image, two images for one variant, an image of another revision, or an Observer image
-# that does not carry this key's public half (it could never verify what is signed here).
+# image, a manifest not named for its variant, an image of another revision, or an Observer
+# image that does not carry this key's public half (it could never verify what is signed
+# here). An Observer arrc image has, beside its own manifest, an alias for the board's ar
+# and rc nodes (scripts/manifest.py): one that leaves either without a manifest is refused.
 # Then signs every manifest (scripts/manifest.py sign), verifies each signature back, writes
 # and verifies the signed index the web page reads (firmware-index.json), and counts the
 # assets against GitHub's limit.
@@ -59,8 +61,6 @@ for img in $images; do
   case "$img" in *-"$REV"-*) ;; *) fail "$img is not $REV" ;; esac
 done
 for img in $(echo "$images" | grep '_observer_mqtt-.*\.bin$' || true); do
-  m=$(grep -l "\"fileName\": \"$img\"" *.unsigned.json 2>/dev/null || true)
-  [ "$(echo "$m" | grep -c .)" -eq 1 ] || fail "$img has $(echo "$m" | grep -c .) manifests, not one"
   grep -qa "$PUB" "$img" || fail "$img does not carry the public key of $KEY"
 done
 for m in *.unsigned.json; do
@@ -68,8 +68,9 @@ for m in *.unsigned.json; do
   f=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["fileName"])' "$m")
   [ -f "$f" ] || fail "$m describes $f, which is not in the candidate"
 done
-dups=$(ls *.unsigned.json 2>/dev/null | sed 's/\.unsigned\.json$//' | sort | uniq -d)
-[ -z "$dups" ] || fail "two manifests for $dups"
+# One manifest of its own per Observer image, each named for its variant (so no two are for
+# one), and every name a node of the board may ask by answered.
+"$PY" "$ROOT/scripts/manifest.py" candidate . >&2 || fail "the manifests do not fit the images"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -95,7 +96,10 @@ cd "$OUT"
 sha256sum * > SHA256SUMS
 count=$(ls | wc -l)
 [ "$count" -le "$MAX_ASSETS" ] || fail "$count assets, over GitHub's $MAX_ASSETS per release"
-echo "release $TAG: $count assets in $OUT ($(ls "$CAND"/*.unsigned.json 2>/dev/null | wc -l) signed manifests, firmware-index.json), key ${PUB:0:12}..."
+# `|| true`: under pipefail a candidate without manifests, or without aliases, must not stop here.
+signed=$({ ls "$CAND"/*.unsigned.json 2>/dev/null || true; } | wc -l)
+aliases=$({ grep -l '"aliasOf"' "$CAND"/*.unsigned.json 2>/dev/null || true; } | wc -l)
+echo "release $TAG: $count assets in $OUT ($signed signed manifests, $aliases of them aliases, firmware-index.json), key ${PUB:0:12}..."
 # A release is a full release: the OTA channel is releases/latest/download, which skips
 # pre-releases. A release candidate is a pre-release for that very reason.
 cmd=(gh release create "$TAG" --repo "$REPO" --title "$TAG" --notes-file RELEASE_NOTES.md --draft $PRE)

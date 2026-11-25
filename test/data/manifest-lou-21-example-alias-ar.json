@@ -1,0 +1,14 @@
+{
+ "version": "esp32s3-v1.18.0-lou-21-arrc-1a2b3c4d",
+ "baseVersion": "v1.18.0",
+ "build": 0,
+ "fileName": "Heltec_v3_repeater_observer_mqtt-esp32s3-v1.18.0-lou-21-arrc-1a2b3c4d.bin",
+ "sha256": "d21f96a8ba36edf12893ad00c8cc8fa07a14993a1cb2e4fb434a74acc30a663b",
+ "partSig": "",
+ "variant": "Heltec_v3_repeater_observer_mqtt-ar",
+ "features": "ar",
+ "aliasOf": "Heltec_v3_repeater_observer_mqtt-arrc",
+ "file": "https://github.com/sweden-mesh/MeshCore-lou/releases/download/v1.18.0-lou-21/Heltec_v3_repeater_observer_mqtt-esp32s3-v1.18.0-lou-21-arrc-1a2b3c4d.bin",
+ "sig": "b1670407aad95d191fd04fd6baec12920c770c25bcc562f764a30d9cad64f66486ec6400e031dbd6d67f039e1340c306ce70a699c0f5d9fb4d21026e7db7ad08",
+ "sig2": "35090b1e44372e4cf68ae3ceecdb349ad7dd41515e3e26e50cafabde0efcb8ac4a491f6e3548650b96197c39c03be64acf6ca662721e07cfb977d96342e1f80c"
+}

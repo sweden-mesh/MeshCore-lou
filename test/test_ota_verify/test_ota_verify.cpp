@@ -221,16 +221,22 @@ static std::string jsonField(const std::string& doc, const std::string& key) {
   return doc.substr(at, doc.find('"', at) - at);
 }
 
-TEST(OtaCombination, TheReleaseToolsManifestVerifiesOnTheNode) {
-  makeReleaseKey();
-  EXPECT_EQ("2543B92FF1095511476ADC8369DB6DDC933665A11978DDA1404EE1066CA9559D", R_PUB_HEX);
-  FILE* f = fopen("test/data/manifest-lou-14-example.json", "r");
-  ASSERT_NE(nullptr, f) << "run from the repository root";
+static std::string readManifest(const char* path) {
   std::string doc;
+  FILE* f = fopen(path, "r");
+  if (f == nullptr) return doc;
   char buf[512];
   size_t n;
   while ((n = fread(buf, 1, sizeof(buf), f)) > 0) doc.append(buf, n);
   fclose(f);
+  return doc;
+}
+
+TEST(OtaCombination, TheReleaseToolsManifestVerifiesOnTheNode) {
+  makeReleaseKey();
+  EXPECT_EQ("2543B92FF1095511476ADC8369DB6DDC933665A11978DDA1404EE1066CA9559D", R_PUB_HEX);
+  const std::string doc = readManifest("test/data/manifest-lou-14-example.json");
+  ASSERT_FALSE(doc.empty()) << "run from the repository root";
   const std::string sha = jsonField(doc, "sha256"), ver = jsonField(doc, "version"),
                     file = jsonField(doc, "file"), variant = jsonField(doc, "variant"),
                     features = jsonField(doc, "features");
@@ -242,6 +248,72 @@ TEST(OtaCombination, TheReleaseToolsManifestVerifiesOnTheNode) {
   EXPECT_EQ(OTA_COMBO_OTHER_VARIANT, otaManifestCombination(R_PUB_HEX.c_str(), sha.c_str(), ver.c_str(),
             file.c_str(), variant.c_str(), features.c_str(), sig2.c_str(),
             "Heltec_v3_repeater_observer_mqtt-arrc", "arrc"));
+}
+
+// ---- one full image per Observer board, and the alias its ar and rc nodes ask for (lou-21) --
+// The two manifests scripts/manifest.py writes for one arrc image (scripts/test_manifest.py
+// makes them again and compares): its own, and the alias under the ar node's name. What the
+// node compares is unchanged, so a lou-20 ar image takes the alias and nothing else.
+
+static OtaCombination combinationOf(const std::string& doc, const char* own_variant, const char* own_features) {
+  return otaManifestCombination(R_PUB_HEX.c_str(), jsonField(doc, "sha256").c_str(),
+                                jsonField(doc, "version").c_str(), jsonField(doc, "file").c_str(),
+                                jsonField(doc, "variant").c_str(), jsonField(doc, "features").c_str(),
+                                jsonField(doc, "sig2").c_str(), own_variant, own_features);
+}
+
+TEST(OtaAlias, AnArNodeTakesTheAliasOfTheFullImage) {
+  makeReleaseKey();
+  const std::string alias = readManifest("test/data/manifest-lou-21-example-alias-ar.json");
+  ASSERT_FALSE(alias.empty()) << "run from the repository root";
+  const std::string ver = jsonField(alias, "version");
+  EXPECT_EQ("esp32s3-v1.18.0-lou-21-arrc-1a2b3c4d", ver);
+  EXPECT_EQ("Heltec_v3_repeater_observer_mqtt-ar", jsonField(alias, "variant"));
+  EXPECT_EQ("ar", jsonField(alias, "features"));
+  EXPECT_TRUE(otaManifestSignatureOk(R_PUB_HEX.c_str(), jsonField(alias, "sha256").c_str(), ver.c_str(),
+                                     jsonField(alias, "file").c_str(), jsonField(alias, "sig").c_str()));
+  EXPECT_EQ(OTA_COMBO_OK, combinationOf(alias, "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+  // and it is an update to the ar image of the release before
+  EXPECT_EQ(OTA_NEWER, otaUpdateVerdict("esp32s3-v1.18.0-lou-20-ar-observer-9c6c0a0", ver.c_str(), 0, 0, false));
+  // The alias is the ar node's alone: the board's rc and arrc nodes, and another board, refuse it.
+  EXPECT_EQ(OTA_COMBO_OTHER_VARIANT, combinationOf(alias, "Heltec_v3_repeater_observer_mqtt-rc", "rc"));
+  EXPECT_EQ(OTA_COMBO_OTHER_VARIANT, combinationOf(alias, "Heltec_v3_repeater_observer_mqtt-arrc", "arrc"));
+  EXPECT_EQ(OTA_COMBO_OTHER_VARIANT, combinationOf(alias, "heltec_v4_repeater_observer_mqtt-ar", "ar"));
+}
+
+TEST(OtaAlias, AnArNodeRefusesACopyOfTheFullImagesOwnManifest) {
+  makeReleaseKey();
+  const std::string full = readManifest("test/data/manifest-lou-21-example-arrc.json");
+  const std::string alias = readManifest("test/data/manifest-lou-21-example-alias-ar.json");
+  ASSERT_FALSE(full.empty()) << "run from the repository root";
+  // The same image, version and file as the alias: only the names and sig2 differ.
+  EXPECT_EQ(jsonField(alias, "sha256"), jsonField(full, "sha256"));
+  EXPECT_EQ(jsonField(alias, "version"), jsonField(full, "version"));
+  EXPECT_EQ(jsonField(alias, "file"), jsonField(full, "file"));
+  EXPECT_EQ(jsonField(alias, "sig"), jsonField(full, "sig"));
+  EXPECT_NE(jsonField(alias, "sig2"), jsonField(full, "sig2"));
+  // Served byte for byte under the ar node's name, it is still the arrc node's manifest.
+  EXPECT_EQ(OTA_COMBO_OTHER_VARIANT, combinationOf(full, "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+  EXPECT_EQ(OTA_COMBO_OK, combinationOf(full, "Heltec_v3_repeater_observer_mqtt-arrc", "arrc"));
+  // With its names edited to the ar node's, its sig2 no longer verifies.
+  EXPECT_EQ(OTA_COMBO_UNSIGNED, otaManifestCombination(R_PUB_HEX.c_str(), jsonField(full, "sha256").c_str(),
+            jsonField(full, "version").c_str(), jsonField(full, "file").c_str(),
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar", jsonField(full, "sig2").c_str(),
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
+}
+
+TEST(OtaAlias, AnRcNodesAliasIsSignedOverItsOwnNames) {
+  makeReleaseKey();
+  const char* ver = "esp32s3-v1.18.0-lou-21-arrc-1a2b3c4d";
+  const char* file = "https://github.com/sweden-mesh/MeshCore-lou/releases/download/v1.18.0-lou-21/"
+                     "Heltec_v3_repeater_observer_mqtt-esp32s3-v1.18.0-lou-21-arrc-1a2b3c4d.bin";
+  std::string s2 = sign2(SHA, ver, file, "Heltec_v3_repeater_observer_mqtt-rc", "rc");
+  EXPECT_EQ(OTA_COMBO_OK, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), ver, file,
+            "Heltec_v3_repeater_observer_mqtt-rc", "rc", s2.c_str(),
+            "Heltec_v3_repeater_observer_mqtt-rc", "rc"));
+  EXPECT_EQ(OTA_COMBO_OTHER_VARIANT, otaManifestCombination(R_PUB_HEX.c_str(), SHA.c_str(), ver, file,
+            "Heltec_v3_repeater_observer_mqtt-rc", "rc", s2.c_str(),
+            "Heltec_v3_repeater_observer_mqtt-ar", "ar"));
 }
 
 int main(int argc, char** argv) {

@@ -19,8 +19,11 @@
 #   OTA_VARIANT      = <env>-<features>     the manifest this image asks its channel for
 # and build.sh build-firmware. The images keep build.sh's names,
 # <env>-<mcu>-v1.17.1-lou-14-<features>-<hash>.bin. Each Observer image also gets
-# <OTA_VARIANT>.unsigned.json, its manifest without signatures (scripts/manifest.py). Images
-# without the Observer bridge have no pull OTA, and their OTA_VARIANT goes unused.
+# <OTA_VARIANT>.unsigned.json, its manifest without signatures (scripts/manifest.py), and an
+# Observer arrc image an alias manifest for each of ar and rc this run does not build: the
+# board's nodes on those images ask for <env>-ar.json and <env>-rc.json, and from lou-21 are
+# answered with the full image. Images without the Observer bridge have no pull OTA, and
+# their OTA_VARIANT goes unused.
 #
 # An Observer image carries two update addresses: the latest full release, which it follows
 # by default and as `ota branch prod`, and from lou-21 the release tagged beta, which
@@ -155,6 +158,13 @@ for combo in $COMBOS; do
       python3 scripts/manifest.py unsigned "$img" "$variant" "$combo" "$ver" "$BASE_VERSION" \
         "${FIRMWARE_BUILD_NUMBER:-0}" "out/$env.partsig" "$OUT/$variant.unsigned.json" \
         || failed="$failed $variant(manifest)"
+      if [ "$combo" = arrc ]; then
+        for old in ar rc; do
+          case " $COMBOS " in *" $old "*) continue ;; esac
+          python3 scripts/manifest.py alias "$OUT/$variant.unsigned.json" "$old" \
+            "$OUT/$env-$old.unsigned.json" || failed="$failed $env-$old(alias)"
+        done
+      fi
       python3 scripts/verify_ota_channel.py --expect prod --no-compat "$img" >> "$LOGS/$variant.log" 2>&1 \
         || failed="$failed $variant(update-address)"
     fi

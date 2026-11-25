@@ -60,6 +60,9 @@ test/data/build-matrix-core.txt
 test/data/build-matrix-observer.txt
 scripts/manifest.py
 test/data/manifest-lou-14-example.json
+test/data/manifest-lou-21-example-alias-ar.json
+test/data/manifest-lou-21-example-arrc.json
+scripts/test_manifest.py
 .github/workflows/fork-matrix.yml
 scripts/ci-plan.sh
 scripts/release-candidate.sh
