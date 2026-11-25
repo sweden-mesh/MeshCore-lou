@@ -561,6 +561,13 @@ a node whose broker answers never takes commands over the air; until then a sign
 answered `mesh-closed` (code 19). `get cmd.mesh` says which, and `get cmd` adds
 `, mesh <mode> ok <n> refused <n>`. With `set cmd off` the road is closed too.
 
+From lou-21 a slot that is connected while the server refuses it the plane's topic (`get cmd`
+reads `/cmd refused`) counts as down as well: a node whose login the command server only half
+accepts hears no command over MQTT, so after the same 15 minutes it can be reached, and mended,
+over the air. `get cmd.mesh` then reads `> auto, open: the server refuses /cmd 17 min` where it
+would read `MQTT down 17 min`. The moment between a connect and the broker's answer is not
+counted as down.
+
 **A node answers over the mesh on an airtime budget of its own:** 5 % of 15 minutes, then 1 %
 (9 s) of the next 15, then a burst again. A request that arrives when the budget is used up
 is not answered at all, and `get cmd` counts it under `refused`. Wait a few minutes and send

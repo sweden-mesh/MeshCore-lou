@@ -13,6 +13,7 @@
 #include "MQTTObserverValidation.h"   // mqttOwnerKeyValid
 #include "MQTTPacketFilter.h"         // kAllPacketTypes, what the plane's slot carries
 #include "MQTTReplyFormat.h"          // replyAppendf
+#include "MQTTSlotAuth.h"             // MqttSubState, what the broker said about the plane's topics
 #include "OtaAutoLogic.h"             // the check interval the file carries a default for
 
 // Pure, dependency-free decisions behind the MQTT control plane. Factored out of
@@ -1395,6 +1396,14 @@ static inline bool mqttCtrlMeshParseMode(const char* text, uint8_t* out) {
   return false;
 }
 
+// Whether the command slot can carry a command: connected, and the broker has not refused
+// the plane's topics. A login the server takes and then refuses mcc/ to is a slot that is
+// down for the plane, and has to open the mesh road like any other outage. Before the
+// broker has answered the slot counts as up: every connect passes through that moment.
+static inline bool mqttCtrlSlotUp(bool connected, uint8_t sub_state) {
+  return connected && sub_state != MQTT_SUB_REFUSED;
+}
+
 // When the command slot went down, in millis(), or 0 while it is up. Called every loop.
 static inline uint32_t mqttCtrlMeshDownSince(bool up, uint32_t down_since, uint32_t now_ms) {
   if (up) return 0;
@@ -1428,9 +1437,10 @@ static inline const char* mqttCtrlMeshRegion(bool uplink, const char* iata) {
   return uplink ? iata : MQTTCTRL_MESH_ONLY_REGION;
 }
 
-// `get cmd.mesh`: the mode and whether the road is open now, and why not.
+// `get cmd.mesh`: the mode and whether the road is open now, and why not. 'refused' is a
+// slot that is connected and counts as down because the server refuses the plane's topic.
 static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint32_t now_ms,
-                                        char* out, size_t out_size) {
+                                        bool refused, char* out, size_t out_size) {
   if (out == NULL || out_size == 0) return;
   const char* name = mqttCtrlMeshModeName(mode);
   if (mode != MQTTCTRL_MESH_AUTO) {
@@ -1438,8 +1448,9 @@ static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint3
   } else if (down_since == 0) {
     snprintf(out, out_size, "> auto, closed: MQTT up");
   } else {
-    snprintf(out, out_size, "> auto, %s: MQTT down %lu min",
+    snprintf(out, out_size, "> auto, %s: %s %lu min",
              mqttCtrlMeshOpen(mode, down_since, now_ms) ? "open" : "closed",
+             refused ? "the server refuses /cmd" : "MQTT down",
              (unsigned long)((now_ms - down_since) / 60000UL));
   }
 }

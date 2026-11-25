@@ -2606,6 +2606,38 @@ TEST(MeshRoad, AutoOpensFifteenMinutesAfterTheSlotWentDown) {
   EXPECT_EQ(19, (int)MQTTCTRL_ERR_MESH_CLOSED);
 }
 
+TEST(MeshRoad, ASlotTheServerRefusesIsDown) {
+  EXPECT_TRUE(mqttCtrlSlotUp(true, MQTT_SUB_GRANTED));
+  EXPECT_TRUE(mqttCtrlSlotUp(true, MQTT_SUB_PENDING));       // just connected, no SUBACK yet
+  EXPECT_FALSE(mqttCtrlSlotUp(true, MQTT_SUB_REFUSED));
+  EXPECT_FALSE(mqttCtrlSlotUp(false, MQTT_SUB_PENDING));
+  EXPECT_FALSE(mqttCtrlSlotUp(false, MQTT_SUB_GRANTED));
+  EXPECT_FALSE(mqttCtrlSlotUp(false, MQTT_SUB_REFUSED));
+}
+
+TEST(MeshRoad, ARefusedSlotOpensTheRoadAfterTheUsualWait) {
+  // connected the whole time: pending for a moment, then mcc/cmd refused, and it stays so
+  uint32_t since = 0, now = 5000;
+  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, MQTT_SUB_PENDING), since, now);
+  EXPECT_EQ(0u, since);
+  now += 200;
+  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, MQTT_SUB_REFUSED), since, now);
+  EXPECT_EQ(5200u, since);
+  EXPECT_FALSE(mqttCtrlMeshOpen(MQTTCTRL_MESH_AUTO, since, now + MQTTCTRL_MESH_AUTO_AFTER_MS - 1));
+  EXPECT_TRUE(mqttCtrlMeshOpen(MQTTCTRL_MESH_AUTO, since, now + MQTTCTRL_MESH_AUTO_AFTER_MS));
+  EXPECT_FALSE(mqttCtrlMeshOpen(MQTTCTRL_MESH_OFF, since, now + MQTTCTRL_MESH_AUTO_AFTER_MS));
+  char out[MQTTCTRL_MAX_REPLY];
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, since, since + 3 * 60000, true, out, sizeof(out));
+  EXPECT_STREQ("> auto, closed: the server refuses /cmd 3 min", out);
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, since, since + 17 * 60000, true, out, sizeof(out));
+  EXPECT_STREQ("> auto, open: the server refuses /cmd 17 min", out);
+  // the slot granted again closes it
+  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, MQTT_SUB_GRANTED), since, now);
+  EXPECT_EQ(0u, since);
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, since, now, false, out, sizeof(out));
+  EXPECT_STREQ("> auto, closed: MQTT up", out);
+}
+
 TEST(MeshRoad, ModesParseAndDescribe) {
   uint8_t m = 9;
   ASSERT_TRUE(mqttCtrlMeshParseMode("off", &m)); EXPECT_EQ(MQTTCTRL_MESH_OFF, m);
@@ -2614,13 +2646,13 @@ TEST(MeshRoad, ModesParseAndDescribe) {
   EXPECT_FALSE(mqttCtrlMeshParseMode("yes", &m));
   EXPECT_FALSE(mqttCtrlMeshParseMode("", &m));
   char out[MQTTCTRL_MAX_REPLY];
-  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 0, 1000, out, sizeof(out));
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 0, 1000, false, out, sizeof(out));
   EXPECT_STREQ("> auto, closed: MQTT up", out);
-  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 1000, 1000 + 3 * 60000, out, sizeof(out));
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 1000, 1000 + 3 * 60000, false, out, sizeof(out));
   EXPECT_STREQ("> auto, closed: MQTT down 3 min", out);
-  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 1000, 1000 + 17 * 60000, out, sizeof(out));
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 1000, 1000 + 17 * 60000, false, out, sizeof(out));
   EXPECT_STREQ("> auto, open: MQTT down 17 min", out);
-  mqttCtrlMeshDescribe(MQTTCTRL_MESH_OFF, 1000, 1000 + 17 * 60000, out, sizeof(out));
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_OFF, 1000, 1000 + 17 * 60000, false, out, sizeof(out));
   EXPECT_STREQ("> off, closed", out);
   mqttCtrlMeshNote(MQTTCTRL_MESH_AUTO, 2, 5, out, sizeof(out));
   EXPECT_STREQ(", mesh auto ok 2 refused 5", out);

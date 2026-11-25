@@ -291,7 +291,8 @@ void Fork::loopMqttControl() {
   refreshMcc3Keys();
   refreshRekeyKeys();
   if (_mqtt_control.rekeyJustDone()) debugLine("rekey: the new key signed a command and is the key now");
-  const bool up = _mesh.bridge != NULL && _mesh.bridge->controlSlotConnected();
+  const bool up = _mesh.bridge != NULL && mqttCtrlSlotUp(_mesh.bridge->controlSlotConnected(),
+                                                         _mesh.bridge->controlSubState());
   _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
   if (_mesh.bridge != NULL) loopAlive();
   loopRelay();
@@ -611,7 +612,10 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
     return true;
   }
   if (strcmp(command, "get cmd.mesh") == 0) {
-    mqttCtrlMeshDescribe(_mqtt_control.meshMode(), _mesh_down_since, millis(), reply, MQTTCTRL_MAX_REPLY);
+    const bool refused = _mesh.bridge != NULL && _mesh.bridge->controlSlotConnected()
+                         && _mesh.bridge->controlSubState() == MQTT_SUB_REFUSED;
+    mqttCtrlMeshDescribe(_mqtt_control.meshMode(), _mesh_down_since, millis(), refused, reply,
+                         MQTTCTRL_MAX_REPLY);
     return true;
   }
   if (memcmp(command, "set cmd.mesh ", 13) == 0) {
