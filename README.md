@@ -14,7 +14,7 @@ MeshCore. Two branches carry the fork: `fork/observer` (this one, on the Observe
 
 ## Flavours
 
-Each release is built in six flavours, all repeaters. The
+Each release is built in four flavours, all repeaters. The
 [firmware page](https://sweden-mesh.github.io/firmware/) picks the right one for you.
 
 | flavour | built from | boards | for |
@@ -22,9 +22,7 @@ Each release is built in six flavours, all repeaters. The
 | **Auto-reply** (`ar`) | stock MeshCore, `fork/core` | 93: ESP32, nRF52, RP2040, STM32 | a repeater that answers `test` on its county's test channel, no Wi-Fi needed |
 | **Remote control** (`rc`) | stock MeshCore, `fork/core` | 93 | signed commands over the mesh, from a companion radio or through an Observer relay; no Wi-Fi needed (from lou-20) |
 | **Both** (`arrc`) | stock MeshCore, `fork/core` | 92 | both of the above |
-| **Observer + auto-reply** (`ar`) | the Observer, `fork/observer` | 33 ESP32 | the same, plus reporting what it hears to MQTT and updating itself over Wi-Fi |
-| **Observer + remote control** (`rc`) | the Observer, `fork/observer` | 33 ESP32 | an owner with several repeaters far apart, who wants to change their settings without a visit |
-| **Observer + both** (`arrc`) | the Observer, `fork/observer` | 33 ESP32 | both of the above |
+| **Observer** (`arrc`) | the Observer, `fork/observer` | 33 ESP32 | auto-reply and remote control in one image, each off until a setting switches it on, plus reporting what it hears to MQTT and updating itself over Wi-Fi. Up to lou-20 there were also Observer `ar` and `rc` images: their nodes update to this one, and the feature they lacked starts off ([docs/ota.md](docs/ota.md)) |
 
 What the features do:
 
@@ -39,8 +37,9 @@ What the features do:
   set by cable, once over the admin login for a node without one, and replaced with `rekey`.
   Identity, radio and destructive commands are refused. On stock boards remote control works
   over the mesh only. Sent with [mccontrol](https://mccontrol.meshcoresverige.se). From lou-20
-  the settings are `cmd` (`set cmd on`); the `mqtt.cmd` names of lou-18 are gone:
-  [upgrading from lou-18](docs/mqtt-control.md#upgrading-from-lou-18). Also from lou-20:
+  the settings are `cmd` (`set cmd on`); the `mqtt.cmd` names of lou-18 are gone. From lou-21
+  the node speaks one scheme, mcc3, and the old topics and requests are gone:
+  [upgrading to lou-21](docs/mqtt-control.md#upgrading-to-lou-21). Also from lou-20:
   - [The relay](docs/mqtt-control.md#relaying-one-nodes-mqtt-for-another-nodes-command-lou-20): an Observer node
     sends its owner's commands over the air to the owner's nodes without Wi-Fi and returns the
     answers, one at a time, on a fixed airtime and flood budget. `set relay off|own`.
@@ -54,9 +53,9 @@ What the features do:
     behind, over the mesh only; [`get sensors`](docs/mqtt-control.md#what-may-be-sent) reads the node's sensors;
     [`set cmd.debug on|off`](docs/mqtt-control.md#joining-the-log-lines) prints the plane's decisions on the
     serial console.
-- **Signed OTA** ([docs/ota.md](docs/ota.md)): every Observer flavour. `ota update` fetches the
-  latest release of its own flavour over Wi-Fi and installs it only if the signature checks out.
-  The stock flavour has none.
+- **Signed OTA** ([docs/ota.md](docs/ota.md)): every Observer image. `ota update` fetches the
+  latest release over Wi-Fi and installs it only if the signature checks out. The stock
+  flavours have none.
 - **Auto-scope** (`as`): reserved, not built yet.
 
 Not here: with no features, use [MeshCore's own flasher](https://meshcore.io/flasher); for the
@@ -69,7 +68,7 @@ An image names its flavour in the file and in `ver`:
 ## For developers
 
 This branch adds auto-reply, signed remote control over MQTT and signed pull
-OTA to the MeshCore Observer firmware, built in any combination (`ar`, `rc`, `arrc`):
+OTA to the MeshCore Observer firmware, released as one image (`arrc`) from lou-21:
 [`docs/fork.md`](docs/fork.md) for the combinations and how they are built,
 [`docs/fork-overview.md`](docs/fork-overview.md) for what they do,
 [`docs/quick-check-guide.md`](docs/quick-check-guide.md) for setting up a repeater, and
