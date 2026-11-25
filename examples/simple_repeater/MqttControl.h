@@ -17,17 +17,6 @@
 #endif
 
 
-// One staged command, copied out of the MQTT event task so nothing expensive
-// happens there. Sized to the logic's own bounds; both are static, because the
-// DRAM fragmentation note in docs/mbedtls-tls-footprint.md makes a per-message
-// allocation on the reconnect path a measured hazard rather than a style point.
-struct MqttControlStaged {
-  char topic[MQTTCTRL_MAX_TOPIC + 1];
-  char payload[MQTTCTRL_MAX_PAYLOAD + 1];
-  size_t payload_len;
-  bool pending;
-};
-
 // Runs an allowlisted command through the node's CLI. An interface rather than a
 // direct call on MyMesh, so this class stays free of the application it serves and
 // its tests need no mesh at all.
@@ -92,7 +81,7 @@ class MqttControl {
   bool _rekey_done;
   uint8_t _node_key[PUB_KEY_SIZE];
 #ifdef WITH_MQTT_BRIDGE
-  MqttControlStaged _staged;
+  MqttCtrlQueue _queue;                        // arrivals, MQTT event task to loop task
   // The v2 key for this node's own command topic (TODO 17a): derived once per command
   // key, at boot and when the key changes, and kept in RAM only.
   uint8_t _v2_key[MQTTV2_KEY_LEN];
@@ -184,27 +173,29 @@ public:
   static bool buildResultTopic(const char* iata, const char* node_hex,
                                char* out, size_t out_size);
 
-  // Called on the MQTT event task. Copies and flags, nothing more: verification and
+  // Called on the MQTT event task. Copies and queues, nothing more: verification and
   // execution both need more stack than that task has, and executing a command
   // there would run a flash write on the network stack's own thread.
   void stage(const char* topic, const uint8_t* payload, size_t len);
-  bool hasPending() const { return _staged.pending; }
+  bool hasPending() const { return mqttCtrlQueueFront(&_queue) != NULL; }
+  uint32_t dropped() const { return mqttCtrlQueueDropped(&_queue); }   // arrivals that found the queue full
 
-  // Resolve a staged command without executing it. The slot holds one command and
-  // clears only when it is disposed of, so every path that declines to run one
-  // must call this or the slot latches and drops everything after it.
-  void discard() { _staged.pending = false; }
+  // Resolve the oldest staged command without executing it. It leaves the queue only
+  // when it is disposed of, so every path that declines to run one must call this
+  // or it stays at the front and holds back everything after it.
+  void discard() { mqttCtrlQueuePop(&_queue); }
 
   // A forward for the relay shares this node's mcc/cmd topic with its commands and is told
-  // from one by its kind byte. takeForward opens the staged one under K_fwd and resolves
-  // the slot whatever the verdict; nothing it holds reaches the CLI.
+  // from one by its kind byte. takeForward opens the oldest staged one under K_fwd and
+  // takes it off the queue whatever the verdict; nothing it holds reaches the CLI.
   bool forwardPending() const {
-    return _staged.pending && mcc3IsCommandTopic(_staged.topic)
-           && mcc3PayloadKind(_staged.payload, _staged.payload_len) == MCC3_KIND_FORWARD;
+    const MqttCtrlStaged* staged = mqttCtrlQueueFront(&_queue);
+    return staged != NULL && mcc3IsCommandTopic(staged->topic)
+           && mcc3PayloadKind(staged->payload, staged->payload_len) == MCC3_KIND_FORWARD;
   }
   MqttCtrlResult takeForward(Mcc3Forward* out);
 
-  // Called on the loop task. Verifies the staged command against 'owner' and runs
+  // Called on the loop task. Verifies the oldest staged command against 'owner' and runs
   // it through 'mesh' if it passes, writing a human-readable outcome into 'reply'
   // (at least 160 bytes, the CLI's own budget). Returns the verdict either way, so
   // the caller can publish a refusal without having to guess why.

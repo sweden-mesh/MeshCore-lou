@@ -276,12 +276,18 @@ void Fork::loopMqttControl() {
   _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
   if (_mesh.bridge != NULL) loopAlive();
   loopRelay();
+  const uint32_t dropped = _mqtt_control.dropped();
+  if (dropped != _ctrl_dropped_seen) {
+    debugLine("mqtt: %u arrival(s) dropped, the queue was full (%u since boot)",
+              (unsigned)(dropped - _ctrl_dropped_seen), (unsigned)dropped);
+    _ctrl_dropped_seen = dropped;
+  }
   if (!_mqtt_control.hasPending()) return;
 
-  // A staged command is always resolved -- run or discarded -- never left in the
-  // slot. These two returns used to leave it pending, which latched the slot for
-  // the life of the boot and dropped every command after it, including the ones
-  // sent once a key had finally been provisioned.
+  // A staged command is always resolved -- run or discarded -- never left at the
+  // front of the queue, and one a pass. Left there by either of these two returns it
+  // would hold back every command after it for the life of the boot, including the
+  // ones sent once a key had finally been provisioned.
   const char* owner_hex = _mqtt_control.pubkey();
   MqttCtrlResult ready = mqttCtrlOwnerReady(owner_hex);
   if (ready != MQTTCTRL_OK) {

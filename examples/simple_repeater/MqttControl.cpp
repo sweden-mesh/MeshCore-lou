@@ -63,10 +63,7 @@ MqttControl::MqttControl()
 #ifdef WITH_MQTT_BRIDGE
   _v2_key_for[0] = 0;
   _v2_topic[0] = 0;
-  _staged.pending = false;
-  _staged.payload_len = 0;
-  _staged.topic[0] = 0;
-  _staged.payload[0] = 0;
+  mqttCtrlQueueReset(&_queue);
 #endif
 }
 
@@ -150,18 +147,11 @@ bool MqttControl::buildResultTopic(const char* iata, const char* node_hex,
 
 void MqttControl::stage(const char* topic, const uint8_t* payload, size_t len) {
   // Runs on the client's esp-mqtt event task, which has a fraction of the stack the
-  // bridge task has and none of the loop task's right to touch flash. Copy, flag,
-  // and get out; MQTTBridge.cpp:1630-1636 says the same about publishing.
-  if (!_enabled || _staged.pending) return;          // a full slot drops the newer
-  if (topic == NULL || payload == NULL) return;
-  if (len == 0 || len > MQTTCTRL_MAX_PAYLOAD) return;
-  if (strlen(topic) > MQTTCTRL_MAX_TOPIC) return;
-
-  memcpy(_staged.topic, topic, strlen(topic) + 1);
-  memcpy(_staged.payload, payload, len);
-  _staged.payload[len] = 0;
-  _staged.payload_len = len;
-  _staged.pending = true;
+  // bridge task has and none of the loop task's right to touch flash. Copy, queue,
+  // and get out; MQTTBridge.cpp:1630-1636 says the same about publishing. A full
+  // queue drops the newer and counts it.
+  if (!_enabled) return;
+  mqttCtrlQueuePush(&_queue, topic, payload, len);
 }
 
 MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
@@ -171,7 +161,8 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
   if (out != NULL) {
     out->authentic = false; out->v2 = false; out->mcc3 = false; out->counter = 0; out->command[0] = 0;
   }
-  if (!_staged.pending) return MQTTCTRL_OK;
+  const MqttCtrlStaged* staged = mqttCtrlQueueFront(&_queue);
+  if (staged == NULL) return MQTTCTRL_OK;
 
   MqttCtrlResult result = MQTTCTRL_OK;
   MqttCtrlEnvelope env;
@@ -179,11 +170,11 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
   Mcc3Command mcc3;
 
   do {
-    if (mcc3IsCommandTopic(_staged.topic)) {
+    if (mcc3IsCommandTopic(staged->topic)) {
       // mcc3: the AEAD under K_cmd, then the owner's signature inside it; the topic is
       // this node's own, the only mcc/ topic it subscribes to.
       if (!_mcc3_ready) { result = MQTTCTRL_ERR_NO_OWNER_KEY; break; }
-      result = mcc3OpenCommand(&_mcc3, _node_key, _staged.payload, _staged.payload_len,
+      result = mcc3OpenCommand(&_mcc3, _node_key, staged->payload, staged->payload_len,
                                [](void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len) {
                                  return ((const mesh::Identity*)ctx)->verify(sig, msg, (int)len);
                                }, (void*)&owner, &mcc3);
@@ -191,7 +182,7 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
       const Mcc3Keys* waiting = result != MQTTCTRL_OK ? rekeyKeys(millis()) : NULL;
       mesh::Identity next;
       if (waiting != NULL && mesh::Utils::fromHex(next.pub_key, PUB_KEY_SIZE, _rekey)) {
-        MqttCtrlResult again = mcc3OpenCommand(waiting, _node_key, _staged.payload, _staged.payload_len,
+        MqttCtrlResult again = mcc3OpenCommand(waiting, _node_key, staged->payload, staged->payload_len,
                                  [](void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len) {
                                    return ((const mesh::Identity*)ctx)->verify(sig, msg, (int)len);
                                  }, (void*)&next, &mcc3);
@@ -210,18 +201,18 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
         out->mcc3 = true;
         memcpy(out->rid, mcc3.rid, MCC3_RID_LEN);
       }
-    } else if (mqttV2IsEnvelope(_staged.payload, _staged.payload_len)) {
+    } else if (mqttV2IsEnvelope(staged->payload, staged->payload_len)) {
       // Sealed (v2): only on this node's own topic -- a broadcast stays v1 -- and the
       // AEAD opened before anything else is believed. The tag proves the holder of the
       // command key, which is what the v1 signature check proves below.
       if (!_v2_ready) { result = MQTTCTRL_ERR_NO_OWNER_KEY; break; }
-      if (strcmp(_staged.topic, _v2_topic) != 0) { result = MQTTCTRL_ERR_BAD_VERSION; break; }
-      result = mqttV2OpenCommand(_v2_key, _staged.payload, _staged.payload_len, &env, v2_text);
+      if (strcmp(staged->topic, _v2_topic) != 0) { result = MQTTCTRL_ERR_BAD_VERSION; break; }
+      result = mqttV2OpenCommand(_v2_key, staged->payload, staged->payload_len, &env, v2_text);
       if (result != MQTTCTRL_OK) break;
       if (env.command_len > MQTTCTRL_MAX_COMMAND) { result = MQTTCTRL_ERR_TOO_LONG; break; }
       if (out != NULL) out->v2 = true;
     } else {
-      result = mqttCtrlParseEnvelope(_staged.payload, _staged.payload_len, &env);
+      result = mqttCtrlParseEnvelope(staged->payload, staged->payload_len, &env);
       if (result != MQTTCTRL_OK) break;
 
       // The signature is checked before anything it protects, and over the topic as
@@ -230,7 +221,7 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
       // would never notice.
       uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
       size_t signed_len = 0;
-      if (!mqttCtrlBuildSignedMessage(_staged.topic, &env, signed_bytes,
+      if (!mqttCtrlBuildSignedMessage(staged->topic, &env, signed_bytes,
                                       sizeof(signed_bytes), &signed_len)) {
         result = MQTTCTRL_ERR_TOO_LONG;
         break;
@@ -240,16 +231,17 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
         break;
       }
     }
-    result = execute(env, _staged.topic, false, now, runner, reply, out);
+    result = execute(env, staged->topic, false, now, runner, reply, out);
   } while (false);
 
-  _staged.pending = false;
+  mqttCtrlQueuePop(&_queue);
   return result;
 }
 
 MqttCtrlResult MqttControl::takeForward(Mcc3Forward* out) {
-  MqttCtrlResult result = mcc3OpenForward(mcc3Keys(), _staged.payload, _staged.payload_len, out);
-  _staged.pending = false;
+  const MqttCtrlStaged* staged = mqttCtrlQueueFront(&_queue);
+  MqttCtrlResult result = mcc3OpenForward(mcc3Keys(), staged->payload, staged->payload_len, out);
+  mqttCtrlQueuePop(&_queue);
   return result;
 }
 #endif
