@@ -14,12 +14,14 @@ MeshCore. Two branches carry the fork: `fork/core` (this one, on stock MeshCore)
 
 ## Flavours
 
-Each release is built in four flavours, all repeaters. The
+Each release is built in six flavours, all repeaters. The
 [firmware page](https://sweden-mesh.github.io/firmware/) picks the right one for you.
 
 | flavour | built from | boards | for |
 |---|---|---|---|
 | **Auto-reply** (`ar`) | stock MeshCore, `fork/core` | 93: ESP32, nRF52, RP2040, STM32 | a repeater that answers `test` on its county's test channel, no Wi-Fi needed |
+| **Remote control** (`rc`) | stock MeshCore, `fork/core` | 93 | signed commands over the mesh, from a companion radio or through an Observer relay; no Wi-Fi needed (from lou-20) |
+| **Both** (`arrc`) | stock MeshCore, `fork/core` | 92 | both of the above |
 | **Observer + auto-reply** (`ar`) | the Observer, `fork/observer` | 33 ESP32 | the same, plus reporting what it hears to MQTT and updating itself over Wi-Fi |
 | **Observer + remote control** (`rc`) | the Observer, `fork/observer` | 33 ESP32 | an owner with several repeaters far apart, who wants to change their settings without a visit |
 | **Observer + both** (`arrc`) | the Observer, `fork/observer` | 33 ESP32 | both of the above |
@@ -29,13 +31,17 @@ What the features do:
 - **Auto-reply** ([docs/autoreply.md](docs/autoreply.md)): the repeater answers `test` on
   `#test-<region>`, where the region is its `region home` (for example `#test-se-jkp`), so
   anyone can see which repeaters hear them. Replies wait 10 to 120 seconds in a slot of their
-  own so they don't collide, and are rate limited. An Observer node with no region falls back to
+  own so they don't collide, and are rate limited. It also answers on the national `#test-se`
+  (`set autoreply.national auto|off|<region>`) and, on an Observer node, on the legacy
   `#test-<iata>`.
 - **Remote control** ([docs/mqtt-control.md](docs/mqtt-control.md)): console commands sent over
-  MQTT, signed with the owner's Ed25519 key and checked on the node. The key is set by cable
-  only, and identity, radio and destructive commands are refused. Sent with
-  [mccontrol](https://github.com/sweden-mesh/mccontrol). Needs the Observer's MQTT link, so there
-  is no stock flavour.
+  MQTT or over the mesh, signed with the owner's Ed25519 key and checked on the node. The key is
+  set by cable, once over the admin login for a node without one, and replaced with `rekey`.
+  Identity, radio and destructive commands are refused. An Observer node also relays its
+  owner's commands to the owner's nodes without Wi-Fi, and announces itself to its owner so the
+  tools find it. On stock boards remote control works over the mesh only. Sent with
+  [mccontrol](https://mccontrol.meshcoresverige.se). From lou-20 the settings are `cmd`
+  (`set cmd on`); the `mqtt.cmd` names of lou-18 are gone.
 - **Signed OTA** ([docs/ota.md](docs/ota.md)): every Observer flavour. `ota update` fetches the
   latest release of its own flavour over Wi-Fi and installs it only if the signature checks out.
   The stock flavour has none.
@@ -46,13 +52,13 @@ Observer alone, [agessaman's Observer firmware](https://observer.gessaman.com/).
 
 An image names its flavour in the file and in `ver`:
 `<board>-<mcu>-v<MeshCore version>-lou-<nn>-<features>-<hash>`, for example
-`Heltec_v3_repeater_observer_mqtt-esp32s3-v1.18.0-lou-15-ar-0ce69e4.bin`.
+`Heltec_v3_repeater_observer_mqtt-esp32s3-v1.18.0-lou-20-ar-9c6c0a0.bin`.
 
 ## For developers
 
 This branch adds repeater auto-reply to upstream MeshCore's release
-`repeater-v1.18.0` (the `ar` image; the fork's MQTT features need the Observer and live on
-`fork/observer`): [`docs/fork.md`](docs/fork.md) for the combinations and how they are built,
+`repeater-v1.18.0`, and remote control over the mesh (the `ar`, `rc` and `arrc` images; MQTT and
+OTA need the Observer and live on `fork/observer`): [`docs/fork.md`](docs/fork.md) for the combinations and how they are built,
 [`docs/fork-overview.md`](docs/fork-overview.md) and [`docs/autoreply.md`](docs/autoreply.md)
 for what it does, [`docs/quick-check-guide.md`](docs/quick-check-guide.md) for setting up a
 repeater, and [`docs/fork-contributing.md`](docs/fork-contributing.md) before changing anything.
