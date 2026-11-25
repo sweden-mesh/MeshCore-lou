@@ -4,8 +4,9 @@
 #
 #   scripts/build-matrix.sh [-c "ar rc arrc"] [-b "env ..."] [-r lou-14] [-o DIR] [-n]
 #
-#   -c  combinations, the codes as/ar/rc run together in that order. Default: ar rc arrc.
-#       rc on a board without the Observer bridge (fork/core) is mesh only.
+#   -c  combinations, the codes as/ar/rc run together in that order. Default: arrc on
+#       fork/observer, the one full image a board gets from lou-21 (each feature is off until
+#       a setting switches it on); ar rc arrc on fork/core, where rc is mesh only.
 #   -b  boards (env names). Default: every *_repeater_observer_mqtt env on fork/observer,
 #       scripts/boards-core.txt on fork/core. "all": every *_repeater_observer_mqtt env on
 #       fork/observer, every *_repeater env on fork/core -- the sweep for which boards fit.
@@ -18,8 +19,17 @@
 #   OTA_VARIANT      = <env>-<features>     the manifest this image asks its channel for
 # and build.sh build-firmware. The images keep build.sh's names,
 # <env>-<mcu>-v1.17.1-lou-14-<features>-<hash>.bin. Each Observer image also gets
-# <OTA_VARIANT>.unsigned.json, its manifest without signatures (scripts/manifest.py). Images
-# without the Observer bridge have no pull OTA, and their OTA_VARIANT goes unused.
+# <OTA_VARIANT>.unsigned.json, its manifest without signatures (scripts/manifest.py), and an
+# Observer arrc image an alias manifest for each of ar and rc this run does not build: the
+# board's nodes on those images ask for <env>-ar.json and <env>-rc.json, and from lou-21 are
+# answered with the full image. Images without the Observer bridge have no pull OTA, and
+# their OTA_VARIANT goes unused.
+#
+# An Observer image carries two update addresses: the latest full release, which it follows
+# by default and as `ota branch prod`, and from lou-21 the release tagged beta, which
+# `ota branch beta` points it at, so a release can be taken by a few nodes before every node
+# is offered it. OTA_MANIFEST_BASE_URL, _STABLE_URL and _DEV_URL in the environment win. Each
+# image built is read back (scripts/verify_ota_channel.py) and fails without the two.
 #
 # A failed build is retried once -- on the small host a link killed for memory is the usual
 # cause -- and a second failure is listed at the end and makes the exit status 1; the
@@ -42,7 +52,9 @@ while getopts "c:b:r:o:n" opt; do
 done
 
 if [ -f src/helpers/bridges/MQTTBridge.h ]; then BASE=observer; else BASE=core; fi
-[ -z "$COMBOS" ] && COMBOS="ar rc arrc"
+if [ -z "$COMBOS" ]; then
+  if [ "$BASE" = observer ]; then COMBOS="arrc"; else COMBOS="ar rc arrc"; fi
+fi
 if [ -z "$BOARDS" ]; then
   if [ "$BASE" = observer ]; then
     BOARDS=$(bash build.sh list | awk '{print $1}' | grep '_repeater_observer_mqtt$' | LC_ALL=C sort)
@@ -56,6 +68,11 @@ if [ "$BOARDS" = all ]; then
 fi
 echo "$REV" | grep -qE '^lou-[0-9]+(rc[0-9]*)?$' || { echo "revision must be lou-<nn> or lou-<nn>rc[<n>], not '$REV'" >&2; exit 2; }
 BASE_VERSION=$(grep -m1 -oE 'FIRMWARE_VERSION +"v[0-9.]+"' examples/simple_repeater/MyMesh.h | grep -oE 'v[0-9.]+')
+
+# build.sh bakes these in; the first is its own default, named here to check the image by.
+export OTA_MANIFEST_BASE_URL="${OTA_MANIFEST_BASE_URL:-https://github.com/sweden-mesh/MeshCore-lou/releases/latest/download}"
+export OTA_MANIFEST_BASE_STABLE_URL="${OTA_MANIFEST_BASE_STABLE_URL:-$OTA_MANIFEST_BASE_URL}"
+export OTA_MANIFEST_BASE_DEV_URL="${OTA_MANIFEST_BASE_DEV_URL:-https://github.com/sweden-mesh/MeshCore-lou/releases/download/beta}"
 
 # The -D flags for a combination; the codes must be known and in the fixed order, so one
 # combination never has two names.
@@ -141,6 +158,15 @@ for combo in $COMBOS; do
       python3 scripts/manifest.py unsigned "$img" "$variant" "$combo" "$ver" "$BASE_VERSION" \
         "${FIRMWARE_BUILD_NUMBER:-0}" "out/$env.partsig" "$OUT/$variant.unsigned.json" \
         || failed="$failed $variant(manifest)"
+      if [ "$combo" = arrc ]; then
+        for old in ar rc; do
+          case " $COMBOS " in *" $old "*) continue ;; esac
+          python3 scripts/manifest.py alias "$OUT/$variant.unsigned.json" "$old" \
+            "$OUT/$env-$old.unsigned.json" || failed="$failed $env-$old(alias)"
+        done
+      fi
+      python3 scripts/verify_ota_channel.py --expect prod --no-compat "$img" >> "$LOGS/$variant.log" 2>&1 \
+        || failed="$failed $variant(update-address)"
     fi
   done
 done

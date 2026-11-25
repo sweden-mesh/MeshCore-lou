@@ -13,6 +13,7 @@
 #include "MQTTObserverValidation.h"   // mqttOwnerKeyValid
 #include "MQTTPacketFilter.h"         // kAllPacketTypes, what the plane's slot carries
 #include "MQTTReplyFormat.h"          // replyAppendf
+#include "MQTTSlotAuth.h"             // MqttSubState, what the broker said about the plane's topics
 #include "OtaAutoLogic.h"             // the check interval the file carries a default for
 
 // Pure, dependency-free decisions behind the MQTT control plane. Factored out of
@@ -448,6 +449,31 @@ static inline void mqttCtrlApplySlotPlan(const MqttCtrlSlotPlan* plan, char* pre
   snprintf(server, server_size, "%s", plan->server);
   snprintf(audience, audience_size, "%s", plan->audience);
   *filter = plan->filter;
+}
+
+// The brokers that carry the plane and refuse mcc/ topics to a password login: the preset's
+// own and the two names it has also answered to.
+static inline bool mqttCtrlPlaneHost(const char* host) {
+  static const char* const names[] = { "mqtt.louie.se", "mqtt-meshcore.louie.se", "mqtt.meshcore-jkp.se" };
+  if (host == NULL) return false;
+  const char* scheme = strstr(host, "://");
+  if (scheme != NULL) host = scheme + 3;
+  const size_t len = strcspn(host, ":/");
+  for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+    if (strlen(names[i]) == len && strncasecmp(host, names[i], len) == 0) return true;
+  }
+  return false;
+}
+
+// A command slot from before the `mccontrol` preset: a custom slot on one of the plane's
+// brokers that signs in with a username and password. The broker lets it in and refuses its
+// mcc/ topics, so the plane looks up and hears nothing. A custom slot with an audience is
+// one `set cmd on <host>` wrote, signs in with a token, and is left alone on any host.
+static inline bool mqttCtrlSlotNeedsRepair(const char* preset, const char* host,
+                                           const char* username, const char* audience) {
+  if (preset == NULL || username == NULL || audience == NULL) return false;
+  return strcasecmp(preset, "custom") == 0 && audience[0] == 0 && username[0] != 0
+         && mqttCtrlPlaneHost(host);
 }
 
 // Does this command change the MQTT slot the command plane rides? Any form does it:
@@ -1292,9 +1318,12 @@ static inline bool mqttCtrlMeshCommandAllowed(const char* command, size_t len, b
   return mqttCtrlMeshAllowance(command, len) || mqttCtrlCommandAllowed(command, len, auto_reply);
 }
 
-// A node cut off from Wi-Fi may have lost NTP, and after a reboot its clock is the
-// firmware's 2024 default, against which every expiry is meaningless. Then the counter alone
-// stops a replay, as it does anyway (operator ruling 2026-11-16).
+// A node cut off from Wi-Fi may have lost NTP, and a clock still at the 2024 default of a
+// board that does not seed one (VolatileRTCClock, `clock reset`) makes every expiry
+// meaningless. Then the counter alone stops a replay, as it does anyway (operator ruling
+// 2026-11-16). An ESP32 after a power cycle starts at 1 March 2026 instead
+// (MQTTConnectionPolicy::kPowerOnClockEpoch), which is past this threshold: there the expiry
+// is judged against that clock, and `time <epoch>` below is the way out.
 static inline MqttCtrlResult mqttCtrlMeshCheckExpiry(uint32_t now, uint32_t expiry) {
   if (now < MQTTConnectionPolicy::kSyncedClockEpoch) return MQTTCTRL_OK;
   return mqttCtrlCheckExpiry(now, expiry);
@@ -1367,6 +1396,14 @@ static inline bool mqttCtrlMeshParseMode(const char* text, uint8_t* out) {
   return false;
 }
 
+// Whether the command slot can carry a command: connected, and the broker has not refused
+// the plane's topics. A login the server takes and then refuses mcc/ to is a slot that is
+// down for the plane, and has to open the mesh road like any other outage. Before the
+// broker has answered the slot counts as up: every connect passes through that moment.
+static inline bool mqttCtrlSlotUp(bool connected, uint8_t sub_state) {
+  return connected && sub_state != MQTT_SUB_REFUSED;
+}
+
 // When the command slot went down, in millis(), or 0 while it is up. Called every loop.
 static inline uint32_t mqttCtrlMeshDownSince(bool up, uint32_t down_since, uint32_t now_ms) {
   if (up) return 0;
@@ -1400,9 +1437,10 @@ static inline const char* mqttCtrlMeshRegion(bool uplink, const char* iata) {
   return uplink ? iata : MQTTCTRL_MESH_ONLY_REGION;
 }
 
-// `get cmd.mesh`: the mode and whether the road is open now, and why not.
+// `get cmd.mesh`: the mode and whether the road is open now, and why not. 'refused' is a
+// slot that is connected and counts as down because the server refuses the plane's topic.
 static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint32_t now_ms,
-                                        char* out, size_t out_size) {
+                                        bool refused, char* out, size_t out_size) {
   if (out == NULL || out_size == 0) return;
   const char* name = mqttCtrlMeshModeName(mode);
   if (mode != MQTTCTRL_MESH_AUTO) {
@@ -1410,10 +1448,27 @@ static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint3
   } else if (down_since == 0) {
     snprintf(out, out_size, "> auto, closed: MQTT up");
   } else {
-    snprintf(out, out_size, "> auto, %s: MQTT down %lu min",
+    snprintf(out, out_size, "> auto, %s: %s %lu min",
              mqttCtrlMeshOpen(mode, down_since, now_ms) ? "open" : "closed",
+             refused ? "the server refuses /cmd" : "MQTT down",
              (unsigned long)((now_ms - down_since) / 60000UL));
   }
+}
+
+// `get cmd` up to the ping, for a plane that has a slot. After the connection comes how the
+// slot signs in, since a password login on one of the plane's own brokers connects and is
+// then refused the plane's topics (mqttCtrlSlotNeedsRepair): there the line names the cure.
+// 'age' and 'ping' are the caller's words for the last command and the last ping.
+static inline void mqttCtrlDescribeSlot(bool enabled, uint32_t counter, int slot, bool connected,
+                                        bool jwt, const char* url, uint8_t sub_state,
+                                        const char* age, const char* ping, char* out,
+                                        size_t out_size) {
+  if (out == NULL || out_size == 0) return;
+  snprintf(out, out_size, "> %s, counter %lu, slot %d %s, %s, /cmd %s, last command %s, ping %s",
+           enabled ? "on" : "off", (unsigned long)counter, slot,
+           connected ? "connected" : "not connected",
+           jwt ? "jwt" : mqttCtrlPlaneHost(url) ? "password (run set cmd on)" : "password",
+           mqttSubStateName(sub_state), age != NULL ? age : "-", ping != NULL ? ping : "-");
 }
 
 // What `get cmd` adds about the mesh road.

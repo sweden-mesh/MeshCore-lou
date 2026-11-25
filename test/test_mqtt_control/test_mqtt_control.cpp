@@ -1810,7 +1810,7 @@ TEST(Unverified, TheNoteNamesTheCountAndTheLastReason) {
   // fits beside a day-old `get cmd` line in the 160-byte reply; the caller passes what
   // is left of it, so a longer one is cut, never overrun
   mqttCtrlRefusalNote(65535, MQTTCTRL_ERR_BROADCAST_TRANSMIT, out, sizeof(out));
-  EXPECT_LE(strlen(out) + strlen("> on, counter 1794734056, slot 3 connected, /cmd subscribed, "
+  EXPECT_LE(strlen(out) + strlen("> on, counter 1794734056, slot 3 connected, jwt, /cmd subscribed, "
                                  "last command 86400 s ago, ping pong in 1234 ms"),
             (size_t)MQTTCTRL_MAX_REPLY - 1);
   char tiny[12];
@@ -1923,6 +1923,52 @@ TEST(SlotPlan, TheHostFormRewritesTheSlotAsBefore) {
   EXPECT_STREQ("mqtts://mqtt.meshcore-vgr.se:8883", server);
   EXPECT_STREQ("mqtt.meshcore-vgr.se", audience);
   EXPECT_EQ(MQTTPacketFilter::kAllPacketTypes, filter);
+}
+
+TEST(SlotRepair, TheOldPasswordSlotIsFoundInEveryFormItWasStoredIn) {
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt://mqtt.louie.se:1883", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtts://mqtt.louie.se:8883", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "wss://mqtt.louie.se:443/mqtt", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "MQTT.Louie.SE", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt-meshcore.louie.se", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt://mqtt.meshcore-jkp.se", "someone", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se/mqtt", "mcoar", ""));
+}
+
+TEST(SlotRepair, ASlotSetOnPurposeIsLeftAlone) {
+  // `set cmd on <host>` leaves an audience, and that slot signs in with a token
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtts://mqtt.meshcore-vgr.se:8883", "",
+                                       "mqtt.meshcore-vgr.se"));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtts://mqtt.louie.se:8883", "mcoar",
+                                       "mqtt.louie.se"));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("mccontrol", "", "", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("mccontrol", "mqtt.louie.se", "mcoar", ""));   // stale fields
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("none", "mqtt.louie.se", "mcoar", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("", "mqtt.louie.se", "mcoar", ""));
+  // somebody else's broker, with a password
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.example.org", "user", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt://mqtt.example.org:1883", "user", ""));
+  // no username is no password login
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se", "", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair(nullptr, "mqtt.louie.se", "mcoar", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", nullptr, "mcoar", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se", nullptr, ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se", "mcoar", nullptr));
+}
+
+TEST(SlotRepair, AHostThatOnlyContainsOneOfTheNamesIsNotOurs) {
+  EXPECT_FALSE(mqttCtrlPlaneHost("evilmqtt.louie.se.example.org"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt.louie.se.example.org"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("evilmqtt.louie.se"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt.louie.s"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt://mqtt.louie.se@example.org:1883"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt://example.org/mqtt.louie.se"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt://"));
+  EXPECT_FALSE(mqttCtrlPlaneHost(""));
+  EXPECT_FALSE(mqttCtrlPlaneHost(nullptr));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se.example.org", "mcoar", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt://evilmqtt.louie.se.example.org:1883", "mcoar", ""));
 }
 
 TEST(PlaneSlot, NoCommandFormChangesTheSlotThePlaneRides) {
@@ -2560,6 +2606,94 @@ TEST(MeshRoad, AutoOpensFifteenMinutesAfterTheSlotWentDown) {
   EXPECT_EQ(19, (int)MQTTCTRL_ERR_MESH_CLOSED);
 }
 
+TEST(GetCmd, TheLineNamesTheLogin) {
+  char out[MQTTCTRL_MAX_REPLY];
+  mqttCtrlDescribeSlot(true, 41, 2, true, true, "mqtts://mqtt-meshcore.louie.se:8883",
+                       MQTT_SUB_GRANTED, "312 s ago", "pong in 230 ms", out, sizeof(out));
+  EXPECT_STREQ("> on, counter 41, slot 2 connected, jwt, /cmd subscribed, last command 312 s ago, "
+               "ping pong in 230 ms", out);
+  // a password login somewhere else is somebody's own broker, and theirs to judge
+  mqttCtrlDescribeSlot(false, 7, 3, false, false, "mqtt://mqtt.example.org:1883",
+                       MQTT_SUB_PENDING, "none yet", "-", out, sizeof(out));
+  EXPECT_STREQ("> off, counter 7, slot 3 not connected, password, /cmd not subscribed, "
+               "last command none yet, ping -", out);
+  mqttCtrlDescribeSlot(true, 7, 3, true, false, nullptr, MQTT_SUB_GRANTED, nullptr, nullptr,
+                       out, sizeof(out));
+  EXPECT_STREQ("> on, counter 7, slot 3 connected, password, /cmd subscribed, last command -, ping -",
+               out);
+}
+
+TEST(GetCmd, APasswordLoginOnThePlanesOwnBrokerNamesTheCure) {
+  char out[MQTTCTRL_MAX_REPLY];
+  for (const char* url : { "mqtt://mqtt.louie.se:1883", "mqtts://mqtt.louie.se:8883",
+                           "mqtt://mqtt-meshcore.louie.se:1883", "mqtt.meshcore-jkp.se" }) {
+    mqttCtrlDescribeSlot(true, 41, 3, true, false, url, MQTT_SUB_REFUSED, "none yet",
+                         "no pong in 10 s", out, sizeof(out));
+    EXPECT_STREQ("> on, counter 41, slot 3 connected, password (run set cmd on), /cmd refused, "
+                 "last command none yet, ping no pong in 10 s", out) << url;
+  }
+  // a token login there is the plane as it should be
+  mqttCtrlDescribeSlot(true, 41, 3, true, true, "mqtts://mqtt.louie.se:8883", MQTT_SUB_GRANTED,
+                       "none yet", "-", out, sizeof(out));
+  EXPECT_EQ(nullptr, strstr(out, "set cmd on"));
+  mqttCtrlDescribeSlot(true, 41, 3, true, false, "mqtt://mqtt.louie.se.example.org:1883",
+                       MQTT_SUB_GRANTED, "none yet", "-", out, sizeof(out));
+  EXPECT_EQ(nullptr, strstr(out, "set cmd on"));
+}
+
+TEST(GetCmd, TheLineStaysInsideTheReply) {
+  // a day-old line on a ten-digit counter leaves room for the mesh note, with either login
+  char out[MQTTCTRL_MAX_REPLY], note[40];
+  mqttCtrlMeshNote(MQTTCTRL_MESH_AUTO, 0, 0, note, sizeof(note));
+  mqttCtrlDescribeSlot(true, 1794734056UL, 3, true, true, "mqtts://mqtt-meshcore.louie.se:8883",
+                       MQTT_SUB_GRANTED, "86400 s ago", "pong in 1234 ms", out, sizeof(out));
+  EXPECT_LE(strlen(out) + strlen(note), (size_t)MQTTCTRL_MAX_REPLY - 1);
+  mqttCtrlDescribeSlot(true, 1794734056UL, 3, true, false, "mqtt://mqtt.louie.se:1883",
+                       MQTT_SUB_REFUSED, "none yet", "no pong in 10 s", out, sizeof(out));
+  EXPECT_LE(strlen(out) + strlen(note), (size_t)MQTTCTRL_MAX_REPLY - 1);
+  // and whatever it is given, it is cut and never overrun
+  char tiny[24];
+  memset(tiny, 'x', sizeof(tiny));
+  mqttCtrlDescribeSlot(false, 4294967295UL, 6, false, false, "mqtt.louie.se", MQTT_SUB_PENDING,
+                       "4294967 s ago", "no pong in 10 s", tiny, sizeof(tiny) - 4);
+  EXPECT_STREQ("> off, counter 4294", tiny);
+  EXPECT_EQ('x', tiny[20]);
+  mqttCtrlDescribeSlot(true, 1, 1, true, true, "", MQTT_SUB_GRANTED, "", "", nullptr, 10);
+  mqttCtrlDescribeSlot(true, 1, 1, true, true, "", MQTT_SUB_GRANTED, "", "", tiny, 0);
+}
+
+TEST(MeshRoad, ASlotTheServerRefusesIsDown) {
+  EXPECT_TRUE(mqttCtrlSlotUp(true, MQTT_SUB_GRANTED));
+  EXPECT_TRUE(mqttCtrlSlotUp(true, MQTT_SUB_PENDING));       // just connected, no SUBACK yet
+  EXPECT_FALSE(mqttCtrlSlotUp(true, MQTT_SUB_REFUSED));
+  EXPECT_FALSE(mqttCtrlSlotUp(false, MQTT_SUB_PENDING));
+  EXPECT_FALSE(mqttCtrlSlotUp(false, MQTT_SUB_GRANTED));
+  EXPECT_FALSE(mqttCtrlSlotUp(false, MQTT_SUB_REFUSED));
+}
+
+TEST(MeshRoad, ARefusedSlotOpensTheRoadAfterTheUsualWait) {
+  // connected the whole time: pending for a moment, then mcc/cmd refused, and it stays so
+  uint32_t since = 0, now = 5000;
+  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, MQTT_SUB_PENDING), since, now);
+  EXPECT_EQ(0u, since);
+  now += 200;
+  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, MQTT_SUB_REFUSED), since, now);
+  EXPECT_EQ(5200u, since);
+  EXPECT_FALSE(mqttCtrlMeshOpen(MQTTCTRL_MESH_AUTO, since, now + MQTTCTRL_MESH_AUTO_AFTER_MS - 1));
+  EXPECT_TRUE(mqttCtrlMeshOpen(MQTTCTRL_MESH_AUTO, since, now + MQTTCTRL_MESH_AUTO_AFTER_MS));
+  EXPECT_FALSE(mqttCtrlMeshOpen(MQTTCTRL_MESH_OFF, since, now + MQTTCTRL_MESH_AUTO_AFTER_MS));
+  char out[MQTTCTRL_MAX_REPLY];
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, since, since + 3 * 60000, true, out, sizeof(out));
+  EXPECT_STREQ("> auto, closed: the server refuses /cmd 3 min", out);
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, since, since + 17 * 60000, true, out, sizeof(out));
+  EXPECT_STREQ("> auto, open: the server refuses /cmd 17 min", out);
+  // the slot granted again closes it
+  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, MQTT_SUB_GRANTED), since, now);
+  EXPECT_EQ(0u, since);
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, since, now, false, out, sizeof(out));
+  EXPECT_STREQ("> auto, closed: MQTT up", out);
+}
+
 TEST(MeshRoad, ModesParseAndDescribe) {
   uint8_t m = 9;
   ASSERT_TRUE(mqttCtrlMeshParseMode("off", &m)); EXPECT_EQ(MQTTCTRL_MESH_OFF, m);
@@ -2568,13 +2702,13 @@ TEST(MeshRoad, ModesParseAndDescribe) {
   EXPECT_FALSE(mqttCtrlMeshParseMode("yes", &m));
   EXPECT_FALSE(mqttCtrlMeshParseMode("", &m));
   char out[MQTTCTRL_MAX_REPLY];
-  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 0, 1000, out, sizeof(out));
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 0, 1000, false, out, sizeof(out));
   EXPECT_STREQ("> auto, closed: MQTT up", out);
-  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 1000, 1000 + 3 * 60000, out, sizeof(out));
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 1000, 1000 + 3 * 60000, false, out, sizeof(out));
   EXPECT_STREQ("> auto, closed: MQTT down 3 min", out);
-  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 1000, 1000 + 17 * 60000, out, sizeof(out));
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, 1000, 1000 + 17 * 60000, false, out, sizeof(out));
   EXPECT_STREQ("> auto, open: MQTT down 17 min", out);
-  mqttCtrlMeshDescribe(MQTTCTRL_MESH_OFF, 1000, 1000 + 17 * 60000, out, sizeof(out));
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_OFF, 1000, 1000 + 17 * 60000, false, out, sizeof(out));
   EXPECT_STREQ("> off, closed", out);
   mqttCtrlMeshNote(MQTTCTRL_MESH_AUTO, 2, 5, out, sizeof(out));
   EXPECT_STREQ(", mesh auto ok 2 refused 5", out);

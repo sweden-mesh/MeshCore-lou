@@ -142,6 +142,8 @@ public:
    */
   bool directFlood() const { return _direct_flood; }
   bool enabled() const { return _enabled; }
+  // Off and nothing else: every other setting stays (Fork::settleArrival).
+  void switchOff() { if (_enabled) { _enabled = false; save(); } }
   uint16_t windowStart() const { return _window_start; }
   uint16_t windowEnd() const { return _window_end; }
   uint8_t slots() const { return _slots; }

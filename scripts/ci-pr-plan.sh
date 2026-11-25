@@ -1,16 +1,15 @@
 #!/bin/bash
-# What a pull request compiles (TODO 22 analysis ticket 24): every combination of this
-# branch's base on one ESP32 board and one nRF52 board, as GitHub Actions matrix rows.
+# What a pull request compiles (TODO 22 analysis ticket 24): the combinations this branch's
+# base releases on one ESP32 board and one nRF52 board, as GitHub Actions matrix rows. An
+# Observer board has one image from lou-21, the full one (arrc).
 # The Observer has no nRF52 Observer env, so there the nRF52 builds are upstream's plain
 # repeater, with auto-reply and with both features, remote command then mesh only.
 #
-#   scripts/ci-pr-plan.sh      -> [{"env":"Heltec_v3_repeater_observer_mqtt","combo":"ar"}, ...]
+#   scripts/ci-pr-plan.sh      -> [{"env":"Heltec_v3_repeater_observer_mqtt","combo":"arrc"}, ...]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [ -f src/helpers/bridges/MQTTBridge.h ]; then
-  rows="Heltec_v3_repeater_observer_mqtt ar
-Heltec_v3_repeater_observer_mqtt rc
-Heltec_v3_repeater_observer_mqtt arrc
+  rows="Heltec_v3_repeater_observer_mqtt arrc
 RAK_4631_repeater ar
 RAK_4631_repeater arrc"
 else

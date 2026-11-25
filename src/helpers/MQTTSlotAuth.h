@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 // Which way a broker slot authenticates -- one rule, in one place, reachable from the
@@ -38,6 +39,27 @@ static inline bool mqttSubackGranted(const uint8_t* codes, int len) {
     if (codes[i] & 0x80) return false;
   }
   return true;
+}
+
+// What the broker has said about a slot's subscriptions since it connected. Each topic is a
+// SUBSCRIBE of its own with a SUBACK of its own, and the SUBACKs carry no topic, so the last
+// one cannot speak for the rest: a refusal stays a refusal whatever is granted after it,
+// until the slot connects again. Nothing heard yet is neither.
+enum MqttSubState : uint8_t {
+  MQTT_SUB_PENDING = 0,     // connected or not, no SUBACK since
+  MQTT_SUB_GRANTED,         // every SUBACK since the connect granted
+  MQTT_SUB_REFUSED,         // one of them refused a topic
+};
+
+static inline uint8_t mqttSubAfterSuback(uint8_t state, bool granted) {
+  if (state == MQTT_SUB_REFUSED || !granted) return MQTT_SUB_REFUSED;
+  return MQTT_SUB_GRANTED;
+}
+
+// The word `get cmd` puts after "/cmd".
+static inline const char* mqttSubStateName(uint8_t state) {
+  return state == MQTT_SUB_GRANTED ? "subscribed"
+       : state == MQTT_SUB_REFUSED ? "refused" : "not subscribed";
 }
 
 // The client id a slot connects with: the node's 8-hex id, the slot number and a tag

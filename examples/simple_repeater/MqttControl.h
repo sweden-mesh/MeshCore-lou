@@ -115,6 +115,8 @@ public:
   uint8_t slot() const { return _slot; }
   // `set cmd on` with no slot configured chooses one (MyMesh::autoSetupMqttControl).
   void setSlotAndEnable(uint8_t slot) { _slot = slot; _enabled = true; save(); }
+  // Off and nothing else: the key, the slot and the counter stay (Fork::settleArrival).
+  void switchOff() { if (_enabled) { _enabled = false; save(); } }
   const char* pubkey() const { return _pubkey; }
   uint8_t keyVia() const { return _key_via; }
   uint8_t meshMode() const { return _mesh_mode; }

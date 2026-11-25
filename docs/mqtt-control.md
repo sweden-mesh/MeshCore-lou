@@ -159,6 +159,18 @@ opening TLS and presenting a token where a password login was meant, while `get 
 and `get mqttN.server` read exactly as intended. `get mqtt.stats` ends each slot with the mode it
 is really in — `s2=11/0 pw` or `s2=0/4 jwt` — and `set mqttN.audience` with no value clears it.
 
+**A command slot from before the `mccontrol` preset is mended at start (lou-21).** A node set
+up before lou-17 has the plane on a custom slot that signs in with a username and password on
+`mqtt.louie.se`. The broker lets that login in and refuses it the `mcc/` topics, so the slot
+reads connected and no command arrives. At every start the node looks at the plane's slot, and
+one that is a custom slot with a username, no audience and one of the plane's broker names
+(`mqtt.louie.se`, `mqtt-meshcore.louie.se`, `mqtt.meshcore-jkp.se`) is rewritten as a bare
+`set cmd on` would: the `mccontrol` preset, every packet type, and the old username, password
+and port cleared. The serial console says `CMD: slot N was on the old login; moved to the
+mccontrol preset`, once, and the slot connects on the preset in the same start. A plane that was
+`off` stays off with its slot mended. A slot `set cmd on <host>` wrote (it has an audience), a
+custom slot on any other broker, and settings that could not be read at start are left alone.
+
 **Each slot connects with its own client id**, the node's 8-hex id, the slot number and a tag
 derived from the node's private key (`A0586238-3-9F04C21B`), so one node may keep an Observer
 slot and the command slot on the same broker. The tag keeps the id private: a broker closes
@@ -255,17 +267,31 @@ observer tooling watches. That separation was never needed: the tooling matches 
 `get cmd` answers on one line (from ar-12):
 
 ```
-> on, counter 41, slot 2 connected, /cmd subscribed, last command 312 s ago, ping pong in 230 ms
+> on, counter 41, slot 2 connected, jwt, /cmd subscribed, last command 312 s ago, ping pong in 230 ms
 ```
 
-whether the slot is connected, whether the broker acknowledged the subscription since it
-connected, how long ago the command key last vouched for a command, and how the last ping
+whether the slot is connected, how it signs in (from lou-21: `jwt`, as the `mccontrol` preset
+and a slot `set cmd on <host>` wrote do, or `password`), what the broker said about the subscriptions since it
+connected (`subscribed`, `not subscribed` while no answer has come, and from lou-21 `refused`
+when it refused one of the plane's topics, which a later topic it grants does not undo), how
+long ago the command key last vouched for a command, and how the last ping
 ended: `pong in N ms`, `no pong in 10 s`, `publish refused`, `waiting` or `-` (no ping since boot).
 From lou-18 a command refused before the key vouched for it -- no command key, the wrong one,
 a broken envelope -- adds `, unverified <n> (last <reason>)`, the reason as mccontrol names it
 (`sig-invalid`, `no-owner-key`, ...). Such a refusal is never answered, since anyone on the
 broker can send one, so this is where it shows: `sig-invalid` means the node holds another
 command key than the sender's (`get cmd.pubkey`).
+
+A slot that signs in with a password on one of the plane's own brokers reads
+`password (run set cmd on)`: the command server takes that login and refuses it the `mcc/`
+topics, so `/cmd refused` follows it. `set cmd on` and a reboot put the slot on the preset. A
+node updated from before lou-17 gets this done for it at start ("Which broker"); the hint is
+for a slot the start could not mend, or one made by hand since.
+
+When the slot is not connected, look at `get mqtt.status` first: from lou-21 a slot whose login
+the broker refused (CONNACK 4 or 5) while no NTP server has confirmed the node's clock shows as
+`refused: clock?`, a slot held back because the clock was never set shows as `no clock`, and
+`get mqttN.diag` adds `clock not verified: run time <epoch> or check NTP`.
 
 `cmd ping` proves the rest, at the console and without the owner's laptop. The node
 publishes `ping|<8-hex nonce>` on its own `/ping`, answers at once, and goes on repeating:
@@ -541,6 +567,13 @@ road is open. `auto`, the default, opens it once the command slot has been down 
 a node whose broker answers never takes commands over the air; until then a signed request is
 answered `mesh-closed` (code 19). `get cmd.mesh` says which, and `get cmd` adds
 `, mesh <mode> ok <n> refused <n>`. With `set cmd off` the road is closed too.
+
+From lou-21 a slot that is connected while the server refuses it the plane's topic (`get cmd`
+reads `/cmd refused`) counts as down as well: a node whose login the command server only half
+accepts hears no command over MQTT, so after the same 15 minutes it can be reached, and mended,
+over the air. `get cmd.mesh` then reads `> auto, open: the server refuses /cmd 17 min` where it
+would read `MQTT down 17 min`. The moment between a connect and the broker's answer is not
+counted as down.
 
 **A node answers over the mesh on an airtime budget of its own:** 5 % of 15 minutes, then 1 %
 (9 s) of the next 15, then a burst again. A request that arrives when the budget is used up

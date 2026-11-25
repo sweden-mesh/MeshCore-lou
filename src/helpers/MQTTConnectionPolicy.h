@@ -20,8 +20,11 @@ static const uint32_t kMinimumValidEpoch = 1000000000UL;
 static const uint32_t kJwtReconnectSafetyMarginSecs = 60UL;
 static const uint32_t kJwtClockThreshold = 1735689600UL; // 2025-01-01 UTC
 // A wall clock at or past this instant was set from a real source (NTP or an
-// admin); anything earlier is the firmware's unset-clock default (1715770351,
-// 15 May 2024), so a delta spanning the sync is meaningless.
+// admin); anything earlier is the unset-clock default of a board without a seeded
+// clock (VolatileRTCClock and `clock reset`: 1715770351, 15 May 2024), so a delta
+// spanning the sync is meaningless. An ESP32 that lost power starts later than this,
+// at kPowerOnClockEpoch below: this threshold does not see that clock as unset,
+// clockNeverSet() does.
 static const uint32_t kSyncedClockEpoch = kJwtClockThreshold;
 
 // Unsigned subtraction is intentionally used: it is the standard millis()
@@ -218,8 +221,47 @@ static inline bool renewalAttemptAllowed(uint32_t now, uint32_t last_attempt) {
   return elapsedMs(now, last_attempt) >= kRenewalThrottleMs;
 }
 
-static inline bool jwtClockAvailable(bool ntp_synced, uint32_t current_time) {
-  return ntp_synced || current_time >= kJwtClockThreshold;
+// How far the node's clock can be trusted.
+enum class ClockTrust : uint8_t {
+  NeverSet,    // the power-on placeholder, or nothing usable
+  Unverified,  // plausibly real (kept over a soft reset, a clock chip, set by hand),
+               // but no server has confirmed it
+  Verified,    // an NTP server answered
+};
+
+// What a finished time sync leaves. A server's answer verifies. Without one a usable
+// fallback clock is believed but not verified, and a clock no source vouches for stays
+// what it was. One answer verifies for good: a later sync that reaches no server (the
+// hourly refresh on a flaky link) does not send the node back to asking every 30 s.
+static inline ClockTrust clockTrustAfterSync(ClockTrust before, bool server_answered,
+                                             bool fallback_usable) {
+  if (server_answered || before == ClockTrust::Verified) return ClockTrust::Verified;
+  return fallback_usable ? ClockTrust::Unverified : before;
+}
+
+// A clock set by hand (`time <epoch>`, `clock sync`) is a clock somebody set: good enough
+// for a login, confirmed by no server. A verified clock stays verified, and the hourly
+// refresh corrects a wrong hand.
+static inline ClockTrust clockTrustAfterManualSet(ClockTrust before) {
+  return before == ClockTrust::NeverSet ? ClockTrust::Unverified : before;
+}
+
+// The time sync keeps asking on its short schedule until a server has answered.
+static inline bool clockVerified(ClockTrust trust) { return trust == ClockTrust::Verified; }
+
+// A login token carries the time it was made, and a broker refuses one from the past. A
+// clock nobody set is nine months back or more, so a JWT slot waits for a clock; an
+// unverified one is good enough to try, and the stale-token pass mends it if a later
+// sync moves the clock. The wall clock's value is not asked: the power-on placeholder
+// is later than any threshold that could be put here.
+static inline bool jwtClockAvailable(ClockTrust trust) {
+  return trust != ClockTrust::NeverSet;
+}
+
+// Slots are set up once the first time sync has finished, whatever it found: a slot that
+// signs in with a password needs no clock, and a JWT slot is held by jwtClockAvailable().
+static inline bool slotMayStart(bool uses_jwt, ClockTrust trust) {
+  return !uses_jwt || jwtClockAvailable(trust);
 }
 
 // How a given MQTT slot fares at bridge setup on this hardware. MQTTBridge's
@@ -283,18 +325,95 @@ enum class ClockSource : uint8_t {
   Rtc,     // libc does not, but the RTC does
 };
 
+// What ESP32RTCClock::begin() stamps into libc when a reset left no time to restore:
+// RTC_TIME_MIN in ESP32Board.h (1 Mar 2026). MQTTBridge.cpp static_asserts that the two
+// agree. A board without that seeding passes its own baseline, or 0 for none.
+static const uint32_t kPowerOnClockEpoch = 1772323200UL;
+// Slack between the baseline and a reading of the clock: the seconds before the uptime
+// counter starts, and the gap between the last reading kept across a soft reset and the
+// reset itself. A clock that was set is months past the baseline, so this costs nothing.
+static const uint32_t kClockNeverSetMarginSecs = 120UL;
+
+// A clock that reads no later than the baseline plus the time since boot is the power-on
+// placeholder counting up, not a time anybody set. `baseline` is the placeholder, or a
+// later reading of the same never-set clock that a soft reset carried over (the reset
+// restores the clock, so the placeholder alone would then look like a set clock).
+static inline bool clockNeverSet(uint32_t clock_time, uint32_t baseline, uint32_t uptime_secs) {
+  const uint64_t latest_unset = (uint64_t)baseline + uptime_secs + kClockNeverSetMarginSecs;
+  return (uint64_t)clock_time <= latest_unset;
+}
+
 // System first: a clock SNTP set recently outranks an RTC that may have drifted.
-// The RTC matters on a cold boot, where ESP32RTCClock::begin() seeds libc with a 2024
-// placeholder on power-on while a detected chip already holds real time and
-// AutoDiscoverRTCClock::begin() never copies one into the other. Never while
+// The RTC matters on a cold boot, where ESP32RTCClock::begin() seeds libc with the
+// power-on placeholder (kPowerOnClockEpoch) while a detected chip already holds real time.
+// The placeholder is past min_valid_epoch, so the floor alone would take it for a clock:
+// a reading that clockNeverSet() is no source at all, and that goes for rtc_time too,
+// which on a board without a chip is the same system clock read again. Never while
 // validating a server: that asks whether a specific host answers, and no clock can
 // answer it. Pass rtc_time 0 when the board has no clock to consult.
 static inline ClockSource chooseFallbackClock(bool validating_server, uint32_t system_time,
-                                              uint32_t rtc_time, uint32_t min_valid_epoch) {
+                                              uint32_t rtc_time, uint32_t min_valid_epoch,
+                                              uint32_t never_set_baseline, uint32_t uptime_secs) {
   if (validating_server) return ClockSource::None;
-  if (system_time >= min_valid_epoch) return ClockSource::System;
-  if (rtc_time >= min_valid_epoch) return ClockSource::Rtc;
+  if (system_time >= min_valid_epoch &&
+      !clockNeverSet(system_time, never_set_baseline, uptime_secs)) {
+    return ClockSource::System;
+  }
+  if (rtc_time >= min_valid_epoch && !clockNeverSet(rtc_time, never_set_baseline, uptime_secs)) {
+    return ClockSource::Rtc;
+  }
   return ClockSource::None;
+}
+
+// Whether a time the sync accepted is written to the clocks. A server's answer is, and a
+// chip's reading is copied into libc. The system clock taken as its own fallback already
+// holds that time: it is written once, when the node first gets a clock, so that a clock
+// chip receives it, and never again. Each write drops the fraction of a second, and at one
+// retry every 30 s that would be a clock losing minutes a day.
+static inline bool acceptedClockNeedsWriting(bool server_answered, ClockSource fallback,
+                                             ClockTrust before) {
+  return server_answered || fallback == ClockSource::Rtc || before == ClockTrust::NeverSet;
+}
+
+// A refused login asks for a time sync: a token minted from a wrong clock is refused as
+// expired or not yet valid, and the broker's refusal is the only word of it the node gets.
+// One slot's run of refusals with no connection between them is a streak.
+struct RefusalResyncState {
+  uint8_t refused;      // refusals in this streak, saturating
+  bool synced;          // a sync was asked for in this streak
+  uint8_t synced_step;  // the reconnect backoff step it was asked at
+};
+
+// Several slots refused in the same minute share one sync.
+static const uint32_t kRefusalResyncMinGapSecs = 60UL;
+
+static inline void refusalStreakNote(RefusalResyncState& st) {
+  if (st.refused < 0xFF) st.refused++;
+}
+
+static inline void refusalStreakEnded(RefusalResyncState& st) {
+  st.refused = 0;
+  st.synced = false;
+  st.synced_step = 0;
+}
+
+// Not one sync per attempt. A clock no server has confirmed is asked about once per
+// backoff step of the streak; a verified clock once per streak, because the broker may
+// still be right (a server answered long ago and the clock has since been set wrong).
+// `secs_since_forced` is the time since the last sync a refusal asked for, on any slot;
+// pass UINT32_MAX when there has been none.
+static inline bool refusalResyncDue(const RefusalResyncState& st, uint8_t backoff_step,
+                                    bool clock_verified, uint32_t secs_since_forced) {
+  if (st.refused == 0) return false;
+  if (secs_since_forced < kRefusalResyncMinGapSecs) return false;
+  if (!st.synced) return true;
+  if (clock_verified) return false;
+  return backoff_step != st.synced_step;
+}
+
+static inline void refusalResyncTaken(RefusalResyncState& st, uint8_t backoff_step) {
+  st.synced = true;
+  st.synced_step = backoff_step;
 }
 
 } // namespace MQTTConnectionPolicy
