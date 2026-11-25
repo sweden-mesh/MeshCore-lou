@@ -45,13 +45,12 @@ struct MqttCommandRunner {
 // persisted per node, and chosen by the requester.
 struct MqttCtrlOutcome {
   bool authentic;                            // signature verified; safe to publish
-  bool v2;                                   // came sealed (v2), so is answered sealed (r3)
   bool mcc3;                                 // came on mcc/cmd, so is answered sealed on mcc/r/<rid>
   uint32_t counter;                          // the request's counter
   uint8_t rid[MCC3_RID_LEN];                 // mcc3: the reply id the command named
   char command[MQTTCTRL_MAX_COMMAND + 1];    // echoed back, NUL-terminated
 
-  MqttCtrlOutcome() : authentic(false), v2(false), mcc3(false), counter(0) { command[0] = 0; }
+  MqttCtrlOutcome() : authentic(false), mcc3(false), counter(0) { command[0] = 0; }
 };
 
 class MqttControl {
@@ -82,12 +81,6 @@ class MqttControl {
   uint8_t _node_key[PUB_KEY_SIZE];
 #ifdef WITH_MQTT_BRIDGE
   MqttCtrlQueue _queue;                        // arrivals, MQTT event task to loop task
-  // The v2 key for this node's own command topic (TODO 17a): derived once per command
-  // key, at boot and when the key changes, and kept in RAM only.
-  uint8_t _v2_key[MQTTV2_KEY_LEN];
-  bool _v2_ready;
-  char _v2_key_for[PUB_KEY_SIZE * 2 + 1];      // the command key it was derived from
-  char _v2_topic[MQTTCTRL_MAX_TOPIC + 1];      // the only topic a v2 command may arrive on
 #endif
   MqttCtrlBudget _commands;
   MqttCtrlBudget _transmits;
@@ -103,7 +96,7 @@ class MqttControl {
   void load();
   void save();
   void toStored(MqttCtrlStoredConfig* c) const;
-  MqttCtrlResult execute(const MqttCtrlEnvelope& env, const char* topic, bool mesh, uint32_t now,
+  MqttCtrlResult execute(const MqttCtrlEnvelope& env, bool mesh, uint32_t now,
                          MqttCommandRunner* runner, char* reply, MqttCtrlOutcome* out);
 
 public:
@@ -158,23 +151,7 @@ public:
   // True once after a takeover, for the caller's log line.
   bool rekeyJustDone() { const bool d = _rekey_done; _rekey_done = false; return d; }
 
-  // Build the topics this node answers on. 'out' must hold MQTTCTRL_MAX_TOPIC + 1.
-  static bool buildTopic(const char* iata, const char* node_hex, char* out, size_t out_size);
-
 #ifdef WITH_MQTT_BRIDGE
-  // The command key the v2 key was derived from, "" when none.
-  const char* v2KeyFor() const { return _v2_key_for; }
-  void setV2Key(const uint8_t key[MQTTV2_KEY_LEN], const char* key_for, const char* topic) {
-    memcpy(_v2_key, key, MQTTV2_KEY_LEN);
-    StrHelper::strncpy(_v2_key_for, key_for, sizeof(_v2_key_for));
-    StrHelper::strncpy(_v2_topic, topic, sizeof(_v2_topic));
-    _v2_ready = key_for[0] != 0;
-  }
-  const uint8_t* v2Key() const { return _v2_key; }
-
-  static bool buildResultTopic(const char* iata, const char* node_hex,
-                               char* out, size_t out_size);
-
   // Called on the MQTT event task. Copies and queues, nothing more: verification and
   // execution both need more stack than that task has, and executing a command
   // there would run a flash write on the network stack's own thread.
@@ -216,15 +193,11 @@ public:
                        MqttCtrlOutcome* out = NULL);
 #endif
 
-  // The same, for a command that came over the mesh (mqttCtrlMeshParse) addressed to
-  // 'topic', this node's own command topic. 'open' is mqttCtrlMeshRoadOpen now. 'answer' says
-  // whether the outcome may go back over the air: only once the key has vouched for the
-  // command, its counter is new and the mesh budget allowed it, so that nobody who heard a
-  // request can make the node transmit by sending it again.
-  MqttCtrlResult meshCommand(const mesh::Identity& owner, const char* topic,
-                             const MqttCtrlMeshRequest& req, uint32_t now, bool open,
-                             MqttCommandRunner* runner, char* reply, bool* answer);
-  // The same for an mcc3 request (0xC2), which mcc3MeshOpen has already opened and verified.
+  // The same, for a command that came over the mesh (0xC2), which mcc3MeshOpen has already
+  // opened and verified. 'open' is mqttCtrlMeshRoadOpen now. 'answer' says whether the
+  // outcome may go back over the air: only once the key has vouched for the command, its
+  // counter is new and the mesh budget allowed it, so that nobody who heard a request can
+  // make the node transmit by sending it again.
   MqttCtrlResult meshCommand(const Mcc3Command& cmd, uint32_t now, bool open,
                              MqttCommandRunner* runner, char* reply, bool* answer);
 

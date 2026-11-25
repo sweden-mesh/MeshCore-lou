@@ -27,132 +27,24 @@ extern "C" {
 #include "ed25519/ed_25519.h"
 }
 
-// 128 hex characters, the length JWTHelper already emits.
-static std::string sig(char fill = 'A') { return std::string(MQTTCTRL_SIG_HEX_LEN, fill); }
-
-static std::string envelope(const std::string& signed_part) {
-  return signed_part + "|" + sig();
-}
-
-static MqttCtrlResult parse(const std::string& payload, MqttCtrlEnvelope* out) {
-  return mqttCtrlParseEnvelope(payload.data(), payload.size(), out);
-}
-
-// MqttCtrlEnvelope points into the payload buffer, which must outlive it. Tests
-// that keep an envelope past the statement that made it hold the bytes here --
-// a temporary std::string would leave every pointer dangling.
-struct Held {
-  std::string bytes;
+// A command as the checks after the envelope see it: counter, expiry and text, whatever
+// road and seal brought it. The text is held here because the envelope points into it.
+struct Cmd {
+  std::string text;
   MqttCtrlEnvelope env;
-  explicit Held(const std::string& signed_part) : bytes(envelope(signed_part)) {
-    EXPECT_EQ(MQTTCTRL_OK, mqttCtrlParseEnvelope(bytes.data(), bytes.size(), &env));
+  Cmd(uint32_t counter, uint32_t expiry, const std::string& command) : text(command) {
+    memset(&env, 0, sizeof(env));
+    env.counter = counter;
+    env.expiry = expiry;
+    env.command = text.data();
+    env.command_len = text.size();
   }
+  Cmd(const Cmd&) = delete;   // a copy's envelope would point into the original
 };
 
 // ---- the happy path, so the hostile cases mean something --------------------
 
-TEST(ParseEnvelope, AcceptsAWellFormedCommand) {
-  MqttCtrlEnvelope e;
-  ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|7|1788200000|trigger test"), &e));
-  EXPECT_EQ(7u, e.counter);
-  EXPECT_EQ(1788200000u, e.expiry);
-  EXPECT_EQ(std::string("trigger test"), std::string(e.command, e.command_len));
-}
-
-TEST(ParseEnvelope, SignedSpanExcludesTheSignature) {
-  // The signed span must be a literal byte range of what arrived: we verify
-  // exactly the bytes received, with no canonicalisation step to get wrong.
-  const std::string signed_part = "v1|1|1788200000|get autoreply";
-  Held h(signed_part);
-  EXPECT_EQ(signed_part.size(), h.env.signed_len);
-  EXPECT_EQ(signed_part, std::string(h.env.signed_part, h.env.signed_len));
-}
-
-TEST(ParseEnvelope, DecodesSignatureBytes) {
-  MqttCtrlEnvelope e;
-  std::string hex(MQTTCTRL_SIG_HEX_LEN, '0');
-  hex[0] = 'f'; hex[1] = 'f'; hex[2] = 'A'; hex[3] = 'b';
-  ASSERT_EQ(MQTTCTRL_OK, parse("v1|1|1788200000|get autoreply|" + hex, &e));
-  EXPECT_EQ(0xFF, e.signature[0]);
-  EXPECT_EQ(0xAB, e.signature[1]);   // hex decoding is case-insensitive
-  EXPECT_EQ(0x00, e.signature[63]);
-}
-
 // ---- malformed and hostile envelopes ---------------------------------------
-
-TEST(ParseEnvelope, RejectsEmptyAndOversized) {
-  MqttCtrlEnvelope e;
-  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlParseEnvelope(NULL, 10, &e));
-  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlParseEnvelope("x", 0, &e));
-  std::string huge = "v1|1|1788200000|" + std::string(MQTTCTRL_MAX_PAYLOAD, 'a') + "|" + sig();
-  EXPECT_EQ(MQTTCTRL_ERR_TOO_LONG, parse(huge, &e));
-}
-
-TEST(ParseEnvelope, RejectsMissingOrWrongLengthSignature) {
-  MqttCtrlEnvelope e;
-  EXPECT_EQ(MQTTCTRL_ERR_NO_SIGNATURE, parse("v1 1 1788200000 trigger test", &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_SIG_LEN, parse("v1|1|1788200000|trigger test|ABCD", &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_SIG_LEN,
-            parse("v1|1|1788200000|trigger test|" + std::string(127, 'A'), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_SIG_LEN,
-            parse("v1|1|1788200000|trigger test|" + std::string(129, 'A'), &e));
-}
-
-TEST(ParseEnvelope, RejectsNonHexSignature) {
-  MqttCtrlEnvelope e;
-  std::string bad = sig();
-  bad[64] = 'g';
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_SIG_HEX, parse("v1|1|1788200000|trigger test|" + bad, &e));
-  // ' 1' would satisfy strtol; it must not satisfy this.
-  std::string spaced = sig();
-  spaced[0] = ' '; spaced[1] = '1';
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_SIG_HEX, parse("v1|1|1788200000|trigger test|" + spaced, &e));
-}
-
-TEST(ParseEnvelope, RejectsWrongVersionTag) {
-  MqttCtrlEnvelope e;
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_VERSION, parse(envelope("v2|1|1788200000|trigger test"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_VERSION, parse(envelope("|1|1788200000|trigger test"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_VERSION, parse(envelope("v1x|1|1788200000|trigger test"), &e));
-}
-
-TEST(ParseEnvelope, RejectsMissingFields) {
-  MqttCtrlEnvelope e;
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_FIELDS, parse(envelope("v1|1"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_FIELDS, parse(envelope("v1|1|1788200000"), &e));
-}
-
-TEST(ParseEnvelope, RejectsCounterThatIsNotAPlainNumber) {
-  MqttCtrlEnvelope e;
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_COUNTER, parse(envelope("v1||1788200000|trigger test"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_COUNTER, parse(envelope("v1|-1|1788200000|trigger test"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_COUNTER, parse(envelope("v1|+1|1788200000|trigger test"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_COUNTER, parse(envelope("v1| 1|1788200000|trigger test"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_COUNTER, parse(envelope("v1|0x10|1788200000|trigger test"), &e));
-  // A counter that wrapped would silently reopen the replay window.
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_COUNTER, parse(envelope("v1|4294967296|1788200000|trigger test"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_COUNTER, parse(envelope("v1|99999999999|1788200000|trigger test"), &e));
-}
-
-TEST(ParseEnvelope, SplitsAtTheLastSeparatorNotTheFirst) {
-  // A command containing '|' must not be able to manufacture a second split
-  // point and steer which bytes the signature is taken to cover.
-  MqttCtrlEnvelope e;
-  EXPECT_EQ(MQTTCTRL_ERR_COMMAND_CHARS,
-            parse("v1|1|1788200000|trigger test|" + sig() + "|" + sig(), &e));
-}
-
-TEST(ParseEnvelope, RejectsControlCharactersInCommand) {
-  MqttCtrlEnvelope e;
-  EXPECT_EQ(MQTTCTRL_ERR_COMMAND_CHARS, parse(envelope("v1|1|1788200000|get autoreply\n"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_COMMAND_CHARS, parse(envelope("v1|1|1788200000|get\tautoreply"), &e));
-  EXPECT_EQ(MQTTCTRL_ERR_COMMAND_CHARS, parse(envelope("v1|1|1788200000|"), &e));
-
-  // An embedded NUL must not truncate the command into something else.
-  std::string with_nul = "v1|1|1788200000|get autoreply";
-  with_nul[20] = '\0';
-  EXPECT_EQ(MQTTCTRL_ERR_COMMAND_CHARS, parse(with_nul + "|" + sig(), &e));
-}
 
 TEST(CommandChars, AdmitsWellFormedUtf8SoANameCanHoldSwedishLetters) {
   const char* name = "set name SE-JKP-V\xC3\xA4ster-6F8C";   // "Väster"
@@ -178,58 +70,7 @@ TEST(CommandChars, RefusesBytesThatAreNotWellFormedUtf8) {
   EXPECT_FALSE(mqttCtrlCommandCharsOk("get a\xC1\xBC", 7));
 }
 
-TEST(ParseEnvelope, AdmitsAUtf8Command) {
-  MqttCtrlEnvelope e;
-  EXPECT_EQ(MQTTCTRL_OK, parse(envelope("v1|1|1788200000|set name V\xC3\xA4ster"), &e));
-}
-
 // ---- the bytes the signature covers ----------------------------------------
-
-TEST(SignedMessage, BindsTheTopicSoOneSignatureFitsOneDestination) {
-  Held h("v1|1|1788200000|trigger test");
-  MqttCtrlEnvelope& e = h.env;
-
-  uint8_t a[MQTTCTRL_MAX_SIGNED], b[MQTTCTRL_MAX_SIGNED];
-  size_t alen = 0, blen = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage("meshcore/JKG/AA04/cmd", &e, a, sizeof(a), &alen));
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage("meshcore/JKG/BB05/cmd", &e, b, sizeof(b), &blen));
-
-  // Same payload, different node: the verified bytes must differ, so a command
-  // captured from one node cannot be replayed at another.
-  ASSERT_EQ(alen, blen);
-  EXPECT_NE(0, memcmp(a, b, alen));
-}
-
-TEST(SignedMessage, PerNodeAndBroadcastAreDistinct) {
-  Held h("v1|1|1788200000|trigger test");
-  MqttCtrlEnvelope& e = h.env;
-  uint8_t one[MQTTCTRL_MAX_SIGNED], all[MQTTCTRL_MAX_SIGNED];
-  size_t l1 = 0, l2 = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage("meshcore/JKG/AA04/cmd", &e, one, sizeof(one), &l1));
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage("meshcore/JKG/all/cmd", &e, all, sizeof(all), &l2));
-  EXPECT_FALSE(l1 == l2 && memcmp(one, all, l1) == 0);
-}
-
-TEST(SignedMessage, LaysOutTopicNewlineSignedPart) {
-  Held h("v1|1|1788200000|trigger test");
-  MqttCtrlEnvelope& e = h.env;
-  uint8_t out[MQTTCTRL_MAX_SIGNED];
-  size_t len = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage("t/x", &e, out, sizeof(out), &len));
-  EXPECT_EQ(std::string("t/x\nv1|1|1788200000|trigger test"), std::string((char*)out, len));
-}
-
-TEST(SignedMessage, RefusesToOverrunOrTakeAnEmptyTopic) {
-  Held h("v1|1|1788200000|trigger test");
-  MqttCtrlEnvelope& e = h.env;
-  uint8_t small[8];
-  size_t len = 0;
-  EXPECT_FALSE(mqttCtrlBuildSignedMessage("meshcore/JKG/AA04/cmd", &e, small, sizeof(small), &len));
-  uint8_t out[MQTTCTRL_MAX_SIGNED];
-  EXPECT_FALSE(mqttCtrlBuildSignedMessage("", &e, out, sizeof(out), &len));
-  EXPECT_FALSE(mqttCtrlBuildSignedMessage(std::string(MQTTCTRL_MAX_TOPIC + 1, 'x').c_str(),
-                                          &e, out, sizeof(out), &len));
-}
 
 // ---- the replay window -----------------------------------------------------
 
@@ -526,7 +367,7 @@ TEST(Allowlist, RejectsEmptyOverlongAndNonPrintable) {
 // ---- the whole decision, in order ------------------------------------------
 
 TEST(Authorise, AcceptsAFreshAllowedCommand) {
-  Held h("v1|9|1788200060|trigger test");
+  Cmd h(9, 1788200060, "trigger test");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&h.env, 8, 1788200000, true));
 }
 
@@ -534,18 +375,18 @@ TEST(Authorise, StopsAtTheFirstRefusalInOrder) {
   // Replay is checked before expiry, and expiry before the allowlist: a replayed
   // command reports replay even when it is also expired and also forbidden, so a
   // caller publishing the reason cannot be used to probe the later checks.
-  Held replayed("v1|5|1|erase");
+  Cmd replayed(5, 1, "erase");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthorise(&replayed.env, 5, 1788200000, true));
 
-  Held expired("v1|9|1|erase");
+  Cmd expired(9, 1, "erase");
   EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthorise(&expired.env, 8, 1788200000, true));
 
-  Held forbidden("v1|9|1788200060|erase");
+  Cmd forbidden(9, 1788200060, "erase");
   EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&forbidden.env, 8, 1788200000, true));
 }
 
 TEST(Authorise, RefusesEverythingWithoutAClock) {
-  Held h("v1|9|1788200060|trigger test");
+  Cmd h(9, 1788200060, "trigger test");
   EXPECT_EQ(MQTTCTRL_ERR_NO_CLOCK, mqttCtrlAuthorise(&h.env, 8, 0, true));
 }
 
@@ -710,19 +551,15 @@ TEST(ErrorCodes, ExhaustedBudgetIsNotTheSameAsUnauthorised) {
   EXPECT_NE(MQTTCTRL_ERR_RATE_LIMITED, MQTTCTRL_ERR_NOT_ALLOWED);
   EXPECT_EQ(mqttCtrlRateResult(true, false, false), MQTTCTRL_ERR_RATE_LIMITED);
 
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|7|1788200000|set prv.key deadbeef"), &env));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 6, 1788199000, true));
+  Cmd key(7, 1788200000, "set prv.key deadbeef");
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&key.env, 6, 1788199000, true));
 }
 
 TEST(ErrorCodes, AForgedSignatureIsNotTheSameAsAMalformedOne) {
-  // BAD_SIG_HEX is still produced at parse time for a field that is not 128 hex
-  // characters; SIG_INVALID is reserved for one that parsed and did not verify.
-  MqttCtrlEnvelope env;
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_SIG_LEN, parse("v1|7|1788200000|get txdelay|zzzz", &env));
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_SIG_HEX,
-            parse("v1|7|1788200000|get txdelay|" + sig('z'), &env));
+  // BAD_SIG_HEX was the old text envelope's, for a field that was not 128 hex characters;
+  // SIG_INVALID is one that was read and did not verify. Both numbers stay.
   EXPECT_NE(MQTTCTRL_ERR_SIG_INVALID, MQTTCTRL_ERR_BAD_SIG_HEX);
+  EXPECT_NE(MQTTCTRL_ERR_SIG_INVALID, MQTTCTRL_ERR_BAD_SIG_LEN);
 }
 
 TEST(ErrorCodes, TheNewCodesAreAppendedAndNothingShifted) {
@@ -748,69 +585,6 @@ TEST(RateLimit, TriggerCapIsTighterThanTheGeneralCap) {
   // The constants themselves are the defence: a leaked key bounded only by the
   // general cap could still put 20 floods an hour on a shared network.
   EXPECT_LT(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_CMD_MAX);
-}
-
-// ---- the cross-check: does the Python signer produce what this accepts? ------
-
-// Generated by panopticon/control.py with a fixed seed and a fixed clock. Two
-// independent implementations of one envelope is exactly where a project like
-// this goes wrong quietly: a canonicalisation difference of one byte produces a
-// signature that never verifies, and the failure looks like a broken radio.
-static const char* GOLDEN_PUB =
-    "C9571EEB4AA9DE1159858BC6A3D4A626C4F4845E8EEBD5F554B2EC0F50C68860";
-static const char* GOLDEN_TOPIC = "meshcore/JKG/AA04792D/cmd";
-static const char* GOLDEN_PAYLOAD =
-    "v1|42|1788000600|set autoreply.hops 5|"
-    "D6E615B85660933377ACE10C946A42DFABFFC5CF9736CA6D6FEF25B863170241"
-    "A4FFA470C77D30CFD1D47F37D1E3DB380287AE108E243C452D83993B619DB408";
-
-static void hexToBytes(const char* hex, uint8_t* out, size_t n) {
-  for (size_t i = 0; i < n; i++) out[i] = (uint8_t)mqttCtrlHexByte(hex[i * 2], hex[i * 2 + 1]);
-}
-
-TEST(GoldenEnvelope, PythonSignerVerifiesAgainstTheRealEd25519) {
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK,
-            mqttCtrlParseEnvelope(GOLDEN_PAYLOAD, strlen(GOLDEN_PAYLOAD), &env));
-  EXPECT_EQ(42u, env.counter);
-  EXPECT_EQ(1788000600u, env.expiry);
-  EXPECT_EQ(std::string("set autoreply.hops 5"), std::string(env.command, env.command_len));
-
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage(GOLDEN_TOPIC, &env, signed_bytes,
-                                         sizeof(signed_bytes), &signed_len));
-
-  uint8_t pub[32];
-  hexToBytes(GOLDEN_PUB, pub, sizeof(pub));
-  EXPECT_EQ(1, ed25519_verify(env.signature, signed_bytes, signed_len, pub));
-}
-
-TEST(GoldenEnvelope, TheSameSignatureIsRefusedAtAnotherNode) {
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK,
-            mqttCtrlParseEnvelope(GOLDEN_PAYLOAD, strlen(GOLDEN_PAYLOAD), &env));
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage("meshcore/JKG/BB05DEAD/cmd", &env,
-                                         signed_bytes, sizeof(signed_bytes), &signed_len));
-  uint8_t pub[32];
-  hexToBytes(GOLDEN_PUB, pub, sizeof(pub));
-  EXPECT_EQ(0, ed25519_verify(env.signature, signed_bytes, signed_len, pub));
-}
-
-TEST(GoldenEnvelope, ATamperedCommandIsRefused) {
-  std::string tampered(GOLDEN_PAYLOAD);
-  tampered.replace(tampered.find("hops 5"), 6, "hops 1");
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlParseEnvelope(tampered.data(), tampered.size(), &env));
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage(GOLDEN_TOPIC, &env, signed_bytes,
-                                         sizeof(signed_bytes), &signed_len));
-  uint8_t pub[32];
-  hexToBytes(GOLDEN_PUB, pub, sizeof(pub));
-  EXPECT_EQ(0, ed25519_verify(env.signature, signed_bytes, signed_len, pub));
 }
 
 // ---- get stats: the node's counters as one line ---------------------------------
@@ -1099,146 +873,7 @@ TEST(OwnerReady, ExistingCodesKeepTheirNumbers) {
   EXPECT_EQ((int)MQTTCTRL_ERR_NO_OWNER_KEY, 15);
 }
 
-// ---- the published result -----------------------------------------------------
-//
-// The topic names the node; the counter names the question. Without it a `get`
-// answer is "> 0.5" -- true of whatever was asked, which is not enough to act on
-// when one requester is polling several nodes.
-
-TEST(FormatResult, CarriesCounterCodeCommandAndReply) {
-  char out[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatResult(out, sizeof(out), 42, 0, "get txdelay", "> 0.5");
-  EXPECT_EQ(std::string("r1|42|0|get txdelay|> 0.5"), std::string(out));
-  EXPECT_EQ(n, strlen(out));
-}
-
-TEST(FormatResult, ARefusalStillNamesItsRequest) {
-  // No command ran, so the reply is empty -- but the counter and the code are
-  // what make a refusal distinguishable from a node that never answered.
-  char out[MQTTCTRL_MAX_RESULT];
-  mqttCtrlFormatResult(out, sizeof(out), 9, (int)MQTTCTRL_ERR_RATE_LIMITED,
-                       "trigger test", "");
-  EXPECT_EQ(std::string("r1|9|17|trigger test|"), std::string(out));
-}
-
-TEST(FormatResult, TruncatesRatherThanDiscarding) {
-  // The existing payload builders drop a payload over budget rather than
-  // shortening it, which would mean the longest replies never arrive. Here the
-  // reply is last and every earlier field is bounded, so a clamp leaves a line
-  // that still parses.
-  std::string huge(400, 'x');
-  char out[64];
-  size_t n = mqttCtrlFormatResult(out, sizeof(out), 7, 0, "get radio", huge.c_str());
-  EXPECT_EQ(n, sizeof(out) - 1);
-  EXPECT_EQ(strlen(out), sizeof(out) - 1);
-  EXPECT_EQ(std::string("r1|7|0|get radio|"), std::string(out).substr(0, 17));
-}
-
-TEST(FormatResult, TheFieldsBeforeTheReplyCannotBeAmbiguous) {
-  // mqttCtrlCommandCharsOk refuses a command containing the separator, so only
-  // the trailing reply can hold one and a parser takes the rest of the line.
-  EXPECT_FALSE(mqttCtrlCommandCharsOk("get a|b", 7));
-
-  char out[MQTTCTRL_MAX_RESULT];
-  mqttCtrlFormatResult(out, sizeof(out), 1, 0, "get radio", "a|b|c");
-  std::string s(out);
-  EXPECT_EQ(std::string("r1|1|0|get radio|a|b|c"), s);
-
-  // Split on the first four separators; whatever follows is the reply, however
-  // many separators it happens to contain.
-  size_t pos = 0;
-  for (int i = 0; i < 4; i++) pos = s.find('|', pos) + 1;
-  EXPECT_EQ(std::string("a|b|c"), s.substr(pos));
-  EXPECT_EQ(std::string("get radio"), s.substr(7, pos - 8));
-}
-
-TEST(FormatResult, RefusesABufferItCannotUse) {
-  char out[8];
-  EXPECT_EQ(0u, mqttCtrlFormatResult(NULL, sizeof(out), 1, 0, "x", "y"));
-  EXPECT_EQ(0u, mqttCtrlFormatResult(out, 0, 1, 0, "x", "y"));
-}
-
-TEST(FormatResult, ANullCommandOrReplyIsAnEmptyField) {
-  char out[MQTTCTRL_MAX_RESULT];
-  mqttCtrlFormatResult(out, sizeof(out), 3, 0, NULL, NULL);
-  EXPECT_EQ(std::string("r1|3|0||"), std::string(out));
-}
-
-TEST(FormatResult, TheBufferFitsTheLongestPossibleLine) {
-  std::string cmd(MQTTCTRL_MAX_COMMAND, 'c');
-  std::string rep(MQTTCTRL_MAX_REPLY - 1, 'r');
-  char out[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatResult(out, sizeof(out), 4294967295u, 17,
-                                  cmd.c_str(), rep.c_str());
-  EXPECT_LT(n, sizeof(out) - 1) << "MQTTCTRL_MAX_RESULT must not clamp a legal line";
-}
-
 // ---- guard rails on the trigger -----------------------------------------------
-
-TEST(BroadcastGuard, RecognisesTheBroadcastTopic) {
-  EXPECT_TRUE(mqttCtrlTopicIsBroadcast("meshcore/JKG/all/cmd"));
-  EXPECT_FALSE(mqttCtrlTopicIsBroadcast("meshcore/JKG/a1b2c3d4/cmd"));
-  EXPECT_FALSE(mqttCtrlTopicIsBroadcast("meshcore/JKG/all/res"));
-  EXPECT_FALSE(mqttCtrlTopicIsBroadcast("all/cmd"));   // no region segment
-  EXPECT_FALSE(mqttCtrlTopicIsBroadcast(NULL));
-}
-
-TEST(BroadcastGuard, ARegionCommandMayBeAddressedToEveryNode) {
-  // A scope rollout is one signed publish to meshcore/{IATA}/all/cmd: every node that
-  // verifies it adds the name. Setting a value costs no airtime, so the broadcast guard
-  // has nothing to say about it; only a trigger is refused that way.
-  const char* cmd = "region put se-jkp *";
-  bool transmit = mqttCtrlIsTransmitCommand(cmd, strlen(cmd));
-  EXPECT_FALSE(transmit);
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlTransmitTopicResult(transmit, "meshcore/JKG/all/cmd"));
-}
-
-TEST(BroadcastGuard, ATransmitCommandMayNotBeAddressedToEveryNode) {
-  // The rate limits are per node -- four triggers an hour each. That bounds one
-  // node and says nothing about one publish reaching every node in a region, each
-  // then transmitting inside the same few seconds and each within budget. The
-  // workspace rule is that no design may scale transmissions with the node count.
-  EXPECT_EQ(MQTTCTRL_ERR_BROADCAST_TRANSMIT,
-            mqttCtrlTransmitTopicResult(true, "meshcore/JKG/all/cmd"));
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlTransmitTopicResult(true, "meshcore/JKG/a1b2c3d4/cmd"));
-}
-
-TEST(BroadcastGuard, ABroadcastParameterChangeIsStillAllowed) {
-  // Setting a value costs no airtime, so fleet-wide configuration stays possible.
-  // Only transmitting is refused.
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlTransmitTopicResult(false, "meshcore/JKG/all/cmd"));
-  EXPECT_FALSE(mqttCtrlIsTransmitCommand("set autoreply.delay 8", 21));
-  EXPECT_TRUE(mqttCtrlIsTransmitCommand("trigger test", 12));
-}
-
-TEST(BroadcastGuard, AnUpdateMayNotBeAddressedToEveryNode) {
-  // `ota update` restarts the node: one publish to all/cmd would take the region off the
-  // air together, all of it on an image no node had yet shown to work. Per node it goes.
-  const char* cmd = "ota update";
-  EXPECT_TRUE(allowed(cmd));
-  EXPECT_FALSE(mqttCtrlIsTransmitCommand(cmd, strlen(cmd)));      // not an airtime cost...
-  EXPECT_TRUE(mqttCtrlBroadcastRefused(cmd, strlen(cmd)));        // ...refused all the same
-  EXPECT_EQ(MQTTCTRL_ERR_BROADCAST_TRANSMIT,
-            mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(cmd, strlen(cmd)), "meshcore/JKG/all/cmd"));
-  EXPECT_EQ(MQTTCTRL_OK,
-            mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(cmd, strlen(cmd)), "meshcore/JKG/a1b2c3d4/cmd"));
-  EXPECT_TRUE(mqttCtrlBroadcastRefused("trigger test", 12));
-  EXPECT_FALSE(mqttCtrlBroadcastRefused("ota check", 9));
-  EXPECT_FALSE(mqttCtrlBroadcastRefused("region put se-jkp *", 19));
-}
-
-TEST(BroadcastGuard, ARebootGoesToOneNodeNeverToEveryNode) {
-  // One publish to all/cmd would restart the whole region together (operator, 2026-11-17).
-  const char* cmd = "reboot";
-  EXPECT_TRUE(allowed(cmd));
-  EXPECT_FALSE(mqttCtrlIsTransmitCommand(cmd, strlen(cmd)));
-  EXPECT_TRUE(mqttCtrlBroadcastRefused(cmd, strlen(cmd)));
-  EXPECT_EQ(MQTTCTRL_ERR_BROADCAST_TRANSMIT,
-            mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(cmd, strlen(cmd)), "meshcore/JKG/all/cmd"));
-  EXPECT_EQ(MQTTCTRL_OK,
-            mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(cmd, strlen(cmd)), "meshcore/JKG/a1b2c3d4/cmd"));
-  EXPECT_TRUE(mqttCtrlMeshCommandAllowed(cmd, strlen(cmd), true));   // the mesh road reaches one node
-}
 
 TEST(RateLimit, AnUpdateSpendsTheCommandBudget) {
   // Not a transmit, so it costs one of the ten commands an hour like any setting, and
@@ -1251,22 +886,6 @@ TEST(RateLimit, AnUpdateSpendsTheCommandBudget) {
   const uint32_t now = 1795000000;
   for (int i = 0; i < MQTTCTRL_CMD_MAX; i++) EXPECT_TRUE(commands.allow(now + i));
   EXPECT_EQ(MQTTCTRL_ERR_RATE_LIMITED, mqttCtrlRateResult(transmit, commands.allow(now + 60), true));
-}
-
-TEST(BroadcastGuard, TheRefusalHasItsOwnAppendedCode) {
-  EXPECT_EQ((int)MQTTCTRL_ERR_BROADCAST_TRANSMIT, 18);
-  EXPECT_NE(MQTTCTRL_ERR_BROADCAST_TRANSMIT, MQTTCTRL_ERR_NOT_ALLOWED);
-  EXPECT_NE(MQTTCTRL_ERR_BROADCAST_TRANSMIT, MQTTCTRL_ERR_RATE_LIMITED);
-}
-
-TEST(BroadcastGuard, ARefusalIsPublishableRatherThanSilent) {
-  // It is refused after the signature verified, so T-05 publishes it: a requester
-  // learns the node exists and declined, which is not what silence would say.
-  char out[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatResult(out, sizeof(out), 5,
-                                  (int)MQTTCTRL_ERR_BROADCAST_TRANSMIT, "trigger test", "");
-  EXPECT_GT(n, 0u);
-  EXPECT_EQ(std::string("r1|5|18|trigger test|"), std::string(out));
 }
 
 // ---- the read-only additions to the allowlist ---------------------------------
@@ -1502,66 +1121,6 @@ TEST(PrefixBoundary, ShorterThanThePrefixNeverReadsPastTheCommand) {
   EXPECT_TRUE(mqttCtrlPrefixWithBoundary(payload, 6, "get af"));
 }
 
-// ---- the exact command T-12 sends ---------------------------------------------
-//
-// The golden fixture above covers `set autoreply.hops 5`, which existed before this
-// sprint. T-12 reads a value back with `get txdelay` -- a command that only became
-// sendable when T-09 widened the allowlist -- so it gets its own fixture, produced
-// by panopticon/control.py and verified here by the firmware's own Ed25519.
-//
-// Proving this offline removes the whole class of on-hardware surprises where a
-// signature never verifies and the node simply stays silent, which is
-// indistinguishable from a node that was never listening.
-
-static const char* READ_PUB =
-    "6B734A8EFF246FE734B38D4046C148EEE5F04FE87B3A0A423955A77956DE066B";
-static const char* READ_TOPIC = "meshcore/JKG/AA04792D/cmd";
-static const char* READ_PAYLOAD =
-    "v1|43|1788000600|get txdelay|"
-    "2C22F81168EE96B8598B70B29B951DF365876413AC6C1B6CE1C14CB3E7D3E2BD"
-    "563F7F0905EE12EE5E41273B3CA515E50504CFD96D57D16A12DBD07D0BCDFD04";
-
-TEST(GoldenRead, TheCommandT12SendsVerifiesAndIsAllowed) {
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK,
-            mqttCtrlParseEnvelope(READ_PAYLOAD, strlen(READ_PAYLOAD), &env));
-  EXPECT_EQ(43u, env.counter);
-  EXPECT_EQ(std::string("get txdelay"), std::string(env.command, env.command_len));
-
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage(READ_TOPIC, &env, signed_bytes,
-                                         sizeof(signed_bytes), &signed_len));
-  uint8_t pub[32];
-  hexToBytes(READ_PUB, pub, sizeof(pub));
-  EXPECT_EQ(1, ed25519_verify(env.signature, signed_bytes, signed_len, pub));
-
-  // Verifying is not enough -- it must also survive authorisation, which is where
-  // a command absent from the allowlist would be refused.
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&env, 42, 1788000100, true));
-
-  // And it must not be treated as a transmit, or it would spend a trigger slot
-  // and be refused on the broadcast topic.
-  EXPECT_FALSE(mqttCtrlIsTransmitCommand(env.command, env.command_len));
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlTransmitTopicResult(false, READ_TOPIC));
-}
-
-TEST(GoldenRead, TheSameReadIsRefusedAtAnotherNode) {
-  // The topic is inside the signature, so a read captured off the public broker
-  // cannot be replayed at a different node.
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK,
-            mqttCtrlParseEnvelope(READ_PAYLOAD, strlen(READ_PAYLOAD), &env));
-
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage("meshcore/JKG/BB05C3D1/cmd", &env,
-                                         signed_bytes, sizeof(signed_bytes), &signed_len));
-  uint8_t pub[32];
-  hexToBytes(READ_PUB, pub, sizeof(pub));
-  EXPECT_EQ(0, ed25519_verify(env.signature, signed_bytes, signed_len, pub));
-}
-
 // ---- the private key is not reachable over MQTT -------------------------------
 //
 // Operator requirement, 2026-09-01: the node's identity key must be neither
@@ -1610,12 +1169,11 @@ TEST(PrivateKey, ASignedRequestForItIsRefusedAtAuthorisation) {
   // End of the chain: even a perfectly signed, fresh, unexpired envelope asking
   // for the key is refused -- and refused as NOT_ALLOWED, which is permanent,
   // rather than as anything a requester should retry.
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|9|1788200000|get prv.key"), &env));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 8, 1788199000, true));
+  Cmd get(9, 1788200000, "get prv.key");
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&get.env, 8, 1788199000, true));
 
-  ASSERT_EQ(MQTTCTRL_OK, parse(envelope("v1|9|1788200000|set prv.key deadbeef"), &env));
-  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&env, 8, 1788199000, true));
+  Cmd set(9, 1788200000, "set prv.key deadbeef");
+  EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&set.env, 8, 1788199000, true));
 }
 
 // ---- exact entries admit the command they name, and nothing else --------------
@@ -1702,30 +1260,6 @@ TEST(Denylist, TheNodesCountersAreReadableAndTheDumpsAreNot) {
   EXPECT_TRUE(allowed("get stats"));
   EXPECT_FALSE(allowed("stats-core"));
   EXPECT_FALSE(allowed("stats-radio"));
-}
-
-// ---- the topics name the node by its whole key (2026-10-08) -----------------------
-
-static const char* KEY64 = "4AC61A7FF4800A079A7311CA606A4C7037FE6943D40E53932230142829A4F786";
-
-TEST(Topics, TheLeafIsTheWholeKeyAndTheBroadcastIsTheWordAll) {
-  char out[MQTTCTRL_MAX_TOPIC + 1];
-  ASSERT_TRUE(mqttCtrlBuildTopic("JKG", KEY64, "cmd", out, sizeof(out)));
-  EXPECT_STREQ("meshcore/JKG/4AC61A7FF4800A079A7311CA606A4C7037FE6943D40E53932230142829A4F786/cmd", out);
-  ASSERT_TRUE(mqttCtrlBuildTopic("JKG", KEY64, "res", out, sizeof(out)));
-  EXPECT_EQ(81u, strlen(out));                      // 9 + 3 + 1 + 64 + 1 + 3
-  ASSERT_TRUE(mqttCtrlBuildTopic("JKG", "all", "cmd", out, sizeof(out)));
-  EXPECT_STREQ("meshcore/JKG/all/cmd", out);
-}
-
-TEST(Topics, TheWholeKeyFormFitsTheSignedMessageAndIsRefusedWhenItCannot) {
-  char out[MQTTCTRL_MAX_TOPIC + 1];
-  ASSERT_TRUE(mqttCtrlBuildTopic("JKG", KEY64, "cmd", out, sizeof(out)));
-  EXPECT_LE(strlen(out), (size_t)MQTTCTRL_MAX_TOPIC);
-  char tiny[40];
-  EXPECT_FALSE(mqttCtrlBuildTopic("JKG", KEY64, "cmd", tiny, sizeof(tiny)));
-  EXPECT_FALSE(mqttCtrlBuildTopic("", KEY64, "cmd", out, sizeof(out)));
-  EXPECT_FALSE(mqttCtrlBuildTopic("JKG", "", "cmd", out, sizeof(out)));
 }
 
 // ---- `set cmd on` picks a slot (2026-10-08) -------------------------------------
@@ -2058,14 +1592,12 @@ TEST(Ping, AStalePongWithNoPingInFlightChangesNothing) {
 }
 
 TEST(Ping, APongIsRecognisedBeforeAndNeverParsedAsACommand) {
-  // Abuse rule 5: the check is a prefix compare, and a pong is no envelope.
+  // Abuse rule 5: the check is a prefix compare, made before anything is opened.
   EXPECT_TRUE(mqttCtrlIsPong(bytes("pong|a1b2c3d4"), 13));
   EXPECT_TRUE(mqttCtrlIsPong(bytes("pong|"), 5));
   EXPECT_FALSE(mqttCtrlIsPong(bytes("pong"), 4));
   EXPECT_FALSE(mqttCtrlIsPong(bytes("{\"c\":1}"), 7));
   EXPECT_FALSE(mqttCtrlIsPong(nullptr, 0));
-  MqttCtrlEnvelope env;
-  EXPECT_NE(MQTTCTRL_OK, mqttCtrlParseEnvelope("pong|a1b2c3d4", 13, &env));
 }
 
 TEST(Ping, BeforeAnyPingTheStateSaysNone) {
@@ -2148,64 +1680,6 @@ TEST(Ping, IsAdmittedOverThePlaneExactlyAndIsNoTransmit) {
   EXPECT_FALSE(mqttCtrlIsTransmitCommand("cmd ping", 13));
 }
 
-// ---- signed results: r2 (2026-10-08, ar-11) ------------------------------------------
-
-static uint8_t T_PUB[32], T_PRV[64];
-static void testSigner(void* ctx, uint8_t sig[64], const uint8_t* msg, size_t len) {
-  (void)ctx;
-  ed25519_sign(sig, msg, len, T_PUB, T_PRV);
-}
-static void makeTestKey() {
-  uint8_t seed[32];
-  for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(0x11 + i);
-  ed25519_create_keypair(T_PUB, T_PRV, seed);
-}
-
-TEST(SignedResult, TheLineIsR2WithTheNodesSignatureOverTopicAndLine) {
-  makeTestKey();
-  const char* topic = "meshcore/JKG/4AC61A7FF4800A079A7311CA606A4C7037FE6943D40E53932230142829A4F786/res";
-  char out[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatSignedResult(out, sizeof(out), topic, 42, 0, "get txdelay", "> 0.5", testSigner, NULL);
-  ASSERT_GT(n, 0u);
-  std::string s(out, n);
-  EXPECT_EQ(0u, s.find("r2|42|0|get txdelay|> 0.5|"));
-  size_t line_len = 0;
-  const char* sig_hex = mqttCtrlSignedResultSplit(out, n, &line_len);
-  ASSERT_NE(nullptr, sig_hex);
-  EXPECT_EQ(std::string("r2|42|0|get txdelay|> 0.5"), std::string(out, line_len));
-  // a verifier rebuilds "<topic>\n<line>" and checks with the node's key
-  std::string msg = std::string(topic) + "\n" + std::string(out, line_len);
-  uint8_t sig[64];
-  hexToBytes(std::string(sig_hex, 128).c_str(), sig, sizeof(sig));
-  EXPECT_EQ(1, ed25519_verify(sig, (const uint8_t*)msg.data(), msg.size(), T_PUB));
-  // ... and not with another topic, nor with a changed reply
-  std::string other = std::string("meshcore/JKG/all/cmd") + "\n" + std::string(out, line_len);
-  EXPECT_EQ(0, ed25519_verify(sig, (const uint8_t*)other.data(), other.size(), T_PUB));
-  std::string changed = std::string(topic) + "\n" + "r2|42|0|get txdelay|> 0.6";
-  EXPECT_EQ(0, ed25519_verify(sig, (const uint8_t*)changed.data(), changed.size(), T_PUB));
-}
-
-TEST(SignedResult, TheReplyShortensSoTheSignatureAlwaysFits) {
-  makeTestKey();
-  std::string huge(400, 'x');
-  char out[MQTTCTRL_MAX_RESULT];
-  size_t n = mqttCtrlFormatSignedResult(out, sizeof(out), "meshcore/JKG/4AC61A7F/res", 7, 0, "get radio", huge.c_str(), testSigner, NULL);
-  ASSERT_GT(n, 0u);
-  EXPECT_EQ(sizeof(out) - 1, n);                          // full, not over
-  size_t line_len = 0;
-  ASSERT_NE(nullptr, mqttCtrlSignedResultSplit(out, n, &line_len));
-  EXPECT_EQ(sizeof(out) - 1 - 129, line_len);             // the line gave way, the signature did not
-  EXPECT_EQ(std::string("r2|7|0|get radio|"), std::string(out, 17));
-}
-
-TEST(SignedResult, AnR1OrAShortLineIsNotSplitAsSigned) {
-  size_t line_len = 0;
-  EXPECT_EQ(nullptr, mqttCtrlSignedResultSplit("r1|42|0|get txdelay|> 0.5", 25, &line_len));
-  EXPECT_EQ(nullptr, mqttCtrlSignedResultSplit("r2|42|0|x|y|abc", 15, &line_len));
-  char out[MQTTCTRL_MAX_RESULT];
-  EXPECT_EQ(0u, mqttCtrlFormatSignedResult(out, 100, "meshcore/JKG/x/res", 1, 0, "ver", "v", testSigner, NULL));   // no room for a signature
-}
-
 TEST(Denylist, TheAutomaticUpdateSettingsTravelAndSoDoesTheUpdateItself) {
   EXPECT_TRUE(allowed("set ota.auto on"));
   EXPECT_TRUE(allowed("set ota.check.hours 12"));
@@ -2272,135 +1746,24 @@ TEST(CrossCheck, EveryKnownCommandsVerdictIsWritten) {
 
 // ---- the mesh road (operator 2026-11-16) ---------------------------------------------
 //
-// One signed command, carried as an anonymous request instead of on /cmd. The vector is
-// planning/firmware/otm-wire-format-20261117.md's, made with test seeds only: the command
-// key from seed 0x11.., the node from seed 0xA0...
+// One signed command, carried as an anonymous request instead of on /cmd. The request itself
+// is mcc3's (test_mqtt_v3); what is here is what the road decides after it has been opened.
 
-static const char* MESH_TOPIC =
-    "meshcore/TST/4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4/cmd";
-static const char* MESH_SIG =
-    "186E3F7F0129BED3A92EB737FEF09CB59DF0B03A0DCEDAFFAFD4FA3D6415F54C"
-    "7B27A660E4CAA2C91E936B37B27082EC0B75697CA13ADBD4F961508C6D2C770F";
-static const char* MESH_REQUEST =
-    "00F15365C107000000C086FD6A"
-    "186E3F7F0129BED3A92EB737FEF09CB59DF0B03A0DCEDAFFAFD4FA3D6415F54C"
-    "7B27A660E4CAA2C91E936B37B27082EC0B75697CA13ADBD4F961508C6D2C770F"
-    "73657420776966692E7373696420486F6D654E6574";
-
-static std::vector<uint8_t> meshVector() {
-  std::vector<uint8_t> v(strlen(MESH_REQUEST) / 2);
-  hexToBytes(MESH_REQUEST, v.data(), v.size());
-  return v;
-}
-
-// A request as a companion sends it: the head, the command, zero padding to a block.
-static std::vector<uint8_t> meshRequest(uint32_t counter, uint32_t expiry, const std::string& cmd,
-                                        const char* topic = MESH_TOPIC, bool sign = true) {
-  makeTestKey();
-  std::vector<uint8_t> v(MQTTCTRL_MESH_HEAD + cmd.size());
-  mqttCtrlMeshPutU32(&v[0], 0x6553F100);
-  v[4] = MQTTCTRL_MESH_SUBTYPE;
-  mqttCtrlMeshPutU32(&v[5], counter);
-  mqttCtrlMeshPutU32(&v[9], expiry);
-  std::string msg = std::string(topic) + "\nv1|" + std::to_string(counter) + "|" +
-                    std::to_string(expiry) + "|" + cmd;
-  if (sign) ed25519_sign(&v[13], (const uint8_t*)msg.data(), msg.size(), T_PUB, T_PRV);
-  memcpy(&v[MQTTCTRL_MESH_HEAD], cmd.data(), cmd.size());
-  v.resize((v.size() + 15) / 16 * 16, 0);
-  return v;
-}
-
-static bool meshVerifies(const MqttCtrlMeshRequest& req, const char* topic = MESH_TOPIC) {
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  if (!mqttCtrlBuildSignedMessage(topic, &req.env, signed_bytes, sizeof(signed_bytes), &signed_len)) return false;
-  return ed25519_verify(req.env.signature, signed_bytes, signed_len, T_PUB) == 1;
-}
-
-TEST(MeshRoad, TheWorkedVectorParsesAndVerifies) {
-  makeTestKey();
-  std::vector<uint8_t> v = meshVector();
-  ASSERT_EQ(98u, v.size());
-  MqttCtrlMeshRequest req;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_EQ(0x6553F100u, req.tag);
-  EXPECT_EQ(7u, req.env.counter);
-  EXPECT_EQ(1795000000u, req.env.expiry);
-  EXPECT_EQ(std::string("set wifi.ssid HomeNet"), std::string(req.env.command, req.env.command_len));
-  EXPECT_EQ(std::string("v1|7|1795000000|set wifi.ssid HomeNet"),
-            std::string(req.env.signed_part, req.env.signed_len));
-  EXPECT_TRUE(meshVerifies(req));
-  EXPECT_FALSE(meshVerifies(req, "meshcore/TST/all/cmd"));
-}
-
-TEST(MeshRoad, OneEnvelopeIsValidOnBothRoads) {
-  // The MQTT payload with the same counter, expiry, command and signature verifies against
-  // the same topic: a signer signs once and either road carries it.
-  makeTestKey();
-  std::string payload = std::string("v1|7|1795000000|set wifi.ssid HomeNet|") + MESH_SIG;
-  MqttCtrlEnvelope env;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlParseEnvelope(payload.data(), payload.size(), &env));
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  ASSERT_TRUE(mqttCtrlBuildSignedMessage(MESH_TOPIC, &env, signed_bytes, sizeof(signed_bytes), &signed_len));
-  EXPECT_EQ(1, ed25519_verify(env.signature, signed_bytes, signed_len, T_PUB));
-}
-
-TEST(MeshRoad, PaddingEndsTheCommandAndATamperedByteFailsTheSignature) {
-  std::vector<uint8_t> v = meshRequest(9, 1795000000, "reboot");
-  EXPECT_EQ(0u, v.size() % 16);
-  MqttCtrlMeshRequest req;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_EQ(std::string("reboot"), std::string(req.env.command, req.env.command_len));
-  EXPECT_TRUE(meshVerifies(req));
-  v[MQTTCTRL_MESH_HEAD] = 'R';
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_FALSE(meshVerifies(req));
-  v = meshRequest(9, 1795000000, "reboot");
-  v[5] = 10;                                      // the counter is under the signature too
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_FALSE(meshVerifies(req));
-}
-
-TEST(MeshRoad, TheCommandBudgetIs59BytesAndALongerOneIsRefused) {
-  EXPECT_EQ(59, MQTTCTRL_MESH_MAX_COMMAND);
-  // What a companion can send at all: Mesh::createAnonDatagram's bound on the plaintext.
-  EXPECT_EQ(MQTTCTRL_MESH_MAX_PLAIN, MAX_PACKET_PAYLOAD - 1 - PUB_KEY_SIZE - (CIPHER_BLOCK_SIZE - 1));
-  std::string at(59, 'x');
-  at.replace(0, 4, "get ");
-  MqttCtrlMeshRequest req;
-  std::vector<uint8_t> v = meshRequest(1, 1795000000, at);
-  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  v = meshRequest(1, 1795000000, at + "x");
-  EXPECT_EQ(MQTTCTRL_ERR_TOO_LONG, mqttCtrlMeshParse(v.data(), v.size(), &req));
-}
-
-TEST(MeshRoad, MalformedRequestsAreRefusedBeforeAnySignature) {
-  MqttCtrlMeshRequest req;
-  std::vector<uint8_t> v = meshRequest(1, 1795000000, "ver");
-  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlMeshParse(v.data(), MQTTCTRL_MESH_HEAD, &req));
-  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlMeshParse(NULL, v.size(), &req));
-  std::vector<uint8_t> empty = v;
-  empty[MQTTCTRL_MESH_HEAD] = 0;
-  EXPECT_EQ(MQTTCTRL_ERR_EMPTY, mqttCtrlMeshParse(empty.data(), empty.size(), &req));
-  std::vector<uint8_t> sep = meshRequest(1, 1795000000, "get a|b");
-  EXPECT_EQ(MQTTCTRL_ERR_COMMAND_CHARS, mqttCtrlMeshParse(sep.data(), sep.size(), &req));
-  std::vector<uint8_t> other = v;
-  other[4] = 0x03;
-  EXPECT_EQ(MQTTCTRL_ERR_BAD_VERSION, mqttCtrlMeshParse(other.data(), other.size(), &req));
-}
-
-TEST(MeshRoad, OnlyItsOwnSubtypeIsTakenAndOldBuildsReadItAsAFailedLogin) {
-  std::vector<uint8_t> v = meshRequest(1, 1795000000, "ver");
-  EXPECT_TRUE(mqttCtrlMeshIsRequest(v.data(), v.size()));
-  for (uint8_t t : { 0x00, 0x01, 0x02, 0x03, 0xF0, 0x20, 0xC2 }) {
+TEST(MeshRoad, TheOldSubtypeIsStillKnownSoItIsNeverReadAsALogin) {
+  uint8_t v[20] = {0};
+  v[4] = 0xC1;
+  EXPECT_TRUE(mqttCtrlMeshIsOldRequest(v, sizeof(v)));
+  EXPECT_TRUE(mqttCtrlMeshIsOldRequest(v, 5));
+  EXPECT_FALSE(mqttCtrlMeshIsOldRequest(v, 4));
+  EXPECT_FALSE(mqttCtrlMeshIsOldRequest(NULL, sizeof(v)));
+  for (uint8_t t : { (uint8_t)0x00, (uint8_t)0x01, (uint8_t)0x02, (uint8_t)0x03, (uint8_t)' ', (uint8_t)'p',
+                     (uint8_t)0xC0, (uint8_t)0xC2 }) {
     v[4] = t;
-    EXPECT_FALSE(mqttCtrlMeshIsRequest(v.data(), v.size())) << (int)t;
+    EXPECT_FALSE(mqttCtrlMeshIsOldRequest(v, sizeof(v))) << (int)t;
   }
-  EXPECT_FALSE(mqttCtrlMeshIsRequest(v.data(), 4));
-  // Upstream reads a first byte from ' ' up as a password. 0xC1 starts no UTF-8 sequence,
-  // so no password typed anywhere begins with it, and the login fails without an answer.
-  EXPECT_GE(MQTTCTRL_MESH_SUBTYPE, ' ');
+  // Upstream reads a first byte from ' ' up as a password, so an old request nobody claims
+  // is a failed login. 0xC1 starts no UTF-8 sequence, so no real password begins with it.
+  EXPECT_GE(MQTTCTRL_MESH_OLD_SUBTYPE, ' ');
   const unsigned char c1[] = { 0xC1, 0x81 };
   EXPECT_EQ(0u, mqttCtrlUtf8SeqLen(c1, sizeof(c1)));
   EXPECT_FALSE(mqttCtrlCommandCharsOk((const char *)c1, sizeof(c1)));
@@ -2408,22 +1771,18 @@ TEST(MeshRoad, OnlyItsOwnSubtypeIsTakenAndOldBuildsReadItAsAFailedLogin) {
 
 TEST(MeshRoad, TheCounterIsSharedAcrossTheRoads) {
   // A command run over MQTT is a replay over the mesh, and the other way round.
-  makeTestKey();
   const uint32_t now = 1795000000 - 60;
-  Held mqtt("v1|7|1795000000|get name");
+  Cmd mqtt(7, 1795000000, "get name");
   uint32_t last = 0;
   ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthorise(&mqtt.env, last, now, true));
   last = mqtt.env.counter;
-  std::vector<uint8_t> v = meshRequest(7, 1795000000, "get name");
-  MqttCtrlMeshRequest req;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&req.env, last, now, true));
+  Cmd same(7, 1795000000, "get name");
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&same.env, last, now, true));
 
-  v = meshRequest(8, 1795000000, "get name");
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&req.env, last, now, true));
-  last = req.env.counter;
-  Held again("v1|8|1795000000|get name");
+  Cmd next(8, 1795000000, "get name");
+  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&next.env, last, now, true));
+  last = next.env.counter;
+  Cmd again(8, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthorise(&again.env, last, now, true));
 }
 
@@ -2466,7 +1825,7 @@ TEST(MeshRoad, AnUpdateTravelsAsOnTheBrokerAndTheNodeChecksItsOwnLink) {
 
 TEST(MeshRoad, ARepairArrivingOverMqttIsRefused) {
   const uint32_t now = 1795000000 - 60;
-  Held h("v1|9|1795000000|set wifi.pwd hunter2");
+  Cmd h(9, 1795000000, "set wifi.pwd hunter2");
   EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&h.env, 0, now, true));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 0, now, true));
 }
@@ -2477,27 +1836,27 @@ TEST(MeshRoad, ARepairArrivingOverMqttIsRefused) {
 TEST(MeshRoad, AClockStepMendsANodeThatIsWeeksBehind) {
   const uint32_t owner_now = 1795000000;
   const uint32_t behind = owner_now - 21u * 86400u;   // set once, then weeks behind
-  Held other("v1|9|1795000150|get name");
+  Cmd other(9, 1795000150, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&other.env, 0, behind, true));
-  Held step("v1|9|1795000150|time 1795000000");
+  Cmd step(9, 1795000150, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&step.env, 0, behind, true));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&step.env, 0, behind, true, false)) << "a mesh-only image too";
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&step.env, 0, owner_now, true)) << "and on a node whose clock is right";
 }
 
 TEST(MeshRoad, AClockStepIsStillACommandWithACounter) {
-  Held step("v1|9|1795000150|time 1795000000");
+  Cmd step(9, 1795000150, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&step.env, 9, 1700000000, true));
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&step.env, 10, 1700000000, true));
 }
 
 // The time must agree with the command's own signed expiry: at or before it, by an hour at most.
 TEST(MeshRoad, AClockStepMustAgreeWithItsOwnExpiry) {
-  Held late("v1|9|1795000150|time 1795000151");
+  Cmd late(9, 1795000150, "time 1795000151");
   EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthoriseMesh(&late.env, 0, 1700000000, true));
-  Held edge("v1|9|1795003600|time 1795000000");
+  Cmd edge(9, 1795003600, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&edge.env, 0, 1700000000, true));
-  Held far("v1|9|1795003601|time 1795000000");
+  Cmd far(9, 1795003601, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&far.env, 0, 1700000000, true));
 }
 
@@ -2510,15 +1869,15 @@ TEST(MeshRoad, OnlyAWholeClockStepIsOne) {
     EXPECT_FALSE(mqttCtrlMeshClockStep(c, strlen(c), &e)) << c;
   }
   const uint32_t now = 1795000000 - 60;
-  for (const char* body : { "v1|9|1795000000|time", "v1|9|1795000000|time 12", "v1|9|1795000000|time 1795000000 x" }) {
-    Held h(body);
+  for (const char* body : { "time", "time 12", "time 1795000000 x" }) {
+    Cmd h(9, 1795000000, body);
     EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthoriseMesh(&h.env, 0, now, true)) << body;
   }
 }
 
 // Over MQTT the clock stays out of reach: an Observer node has NTP, and a broker could hold a command.
 TEST(MeshRoad, AClockStepOverMqttIsRefused) {
-  Held step("v1|9|1795000150|time 1795000000");
+  Cmd step(9, 1795000150, "time 1795000000");
   EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthorise(&step.env, 0, 1795000000, true));
 }
 
@@ -2576,7 +1935,7 @@ TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlMeshCheckExpiry(1795000000, 1795000000 + MQTTCTRL_MAX_FUTURE_SECS + 1));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(1795000000, 1795000000 + MQTTCTRL_MAX_FUTURE_SECS));
   // ... and the replay still stops an unset clock.
-  Held h("v1|5|1795000000|get name");
+  Cmd h(5, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, unset, true));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, unset, true));
 }
@@ -3028,38 +2387,20 @@ TEST(MeshRoad, AFloodedRequestIsAnsweredOnceItsCopiesHaveDiedDown) {
   EXPECT_LT(MQTTCTRL_MESH_FLOOD_ANSWER_MIN_MS + MQTTCTRL_MESH_FLOOD_ANSWER_SPAN_MS + 2 * 30000UL, 120000UL);
 }
 
-TEST(MeshRoad, TheResponseCarriesTagClockCounterCodeAndAClampedReply) {
-  uint8_t out[200];
-  size_t n = mqttCtrlMeshFormatResponse(out, sizeof(out), 0x6553F100, 1715770351, 7,
-                                        MQTTCTRL_OK, "OK");
-  ASSERT_EQ(15u, n);
-  const uint8_t head[] = { 0x00, 0xF1, 0x53, 0x65, 0xEF, 0x93, 0x44, 0x66, 0x07, 0, 0, 0, 0, 'O', 'K' };
-  EXPECT_EQ(0, memcmp(head, out, sizeof(head)));
-  std::string long_reply(200, 'r');
-  EXPECT_EQ(167u, mqttCtrlMeshFormatResponse(out, mqttCtrlMeshResponseRoom(false, 0), 1, 2, 3, 4,
-                                             long_reply.c_str()));
+TEST(MeshRoad, TheResponseRoomIsTheDatagramsAndThePathReturns) {
   // Mesh::createDatagram and Mesh::createPathReturn's own bounds.
+  EXPECT_EQ(167u, mqttCtrlMeshResponseRoom(false, 0));
   EXPECT_EQ((size_t)(MAX_PACKET_PAYLOAD - CIPHER_MAC_SIZE - (CIPHER_BLOCK_SIZE - 1)),
             mqttCtrlMeshResponseRoom(false, 0));
   EXPECT_EQ((size_t)(MAX_PACKET_PAYLOAD - 2 - CIPHER_BLOCK_SIZE - 5 - 30), mqttCtrlMeshResponseRoom(true, 30));
   EXPECT_EQ(0u, mqttCtrlMeshResponseRoom(true, 200));
-  EXPECT_EQ(0u, mqttCtrlMeshFormatResponse(out, MQTTCTRL_MESH_RESP_HEAD - 1, 1, 2, 3, 4, "x"));
-  EXPECT_EQ((size_t)MQTTCTRL_MESH_RESP_HEAD,
-            mqttCtrlMeshFormatResponse(out, sizeof(out), 1, 2, 3, MQTTCTRL_ERR_MESH_CLOSED, NULL));
-  EXPECT_EQ(MQTTCTRL_ERR_MESH_CLOSED, out[12]);
 }
 
 // ---- mesh only (operator 2026-11-16, plan phase 5) -----------------------------------
 //
 // An image without Wi-Fi and MQTT (an nRF52 board, a non-Observer ESP32 build) has the mesh
-// road as the plane's only road: the same parse, signature, counter, expiry and deny list,
-// always open, the uplink's repairs refused, and its topic named by the word `mesh`.
-
-static const char* MESH_ONLY_SIG =
-    "D093D5E2427719074748634E73F8760E42F0D12772D74C9044D399B03202BF7B"
-    "1E375B1EE4A8BE81B190603638C3DB9DC9B4D54E5749492AF07ED609BCF23E09";
-static const char* MESH_ONLY_TOPIC =
-    "meshcore/mesh/4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4/cmd";
+// road as the plane's only road: the same counter, expiry and deny list, always open, the
+// uplink's repairs refused.
 
 // ---- alive (mcc3, lou-20) -------------------------------------------------------------
 
@@ -3134,28 +2475,6 @@ TEST(Alive, AChangeBringsTheNextOneCloserButNeverPutsItOff) {
   EXPECT_FALSE(mqttCtrlAliveDue(&down, 100000));
 }
 
-TEST(MeshOnly, TheTopicIsNamedMeshWhateverIataThereIs) {
-  EXPECT_STREQ("mesh", mqttCtrlMeshRegion(false, NULL));
-  EXPECT_STREQ("mesh", mqttCtrlMeshRegion(false, "TST"));
-  EXPECT_STREQ("TST", mqttCtrlMeshRegion(true, "TST"));
-  EXPECT_EQ(NULL, mqttCtrlMeshRegion(true, NULL));          // an Observer with no region stays silent
-  char topic[MQTTCTRL_MAX_TOPIC + 1];
-  ASSERT_TRUE(mqttCtrlBuildTopic(mqttCtrlMeshRegion(false, NULL),
-                                 "4FD099CCD47D7893DFE9EC24414ECB0D9B5420232AAD30D91C465BE33CBE65C4",
-                                 "cmd", topic, sizeof(topic)));
-  EXPECT_STREQ(MESH_ONLY_TOPIC, topic);
-  // Signed for that topic, a request verifies there and nowhere else.
-  std::vector<uint8_t> v = meshRequest(7, 1795000000, "get name", MESH_ONLY_TOPIC);
-  MqttCtrlMeshRequest req;
-  ASSERT_EQ(MQTTCTRL_OK, mqttCtrlMeshParse(v.data(), v.size(), &req));
-  EXPECT_TRUE(meshVerifies(req, MESH_ONLY_TOPIC));
-  EXPECT_FALSE(meshVerifies(req, MESH_TOPIC));
-  // The vector in planning/firmware/otm-wire-format-20261117.md, "Mesh only".
-  char sig[MQTTCTRL_SIG_HEX_LEN + 1];
-  for (int i = 0; i < MQTTCTRL_SIG_BYTES; i++) sprintf(&sig[i * 2], "%02X", req.env.signature[i]);
-  EXPECT_STREQ(MESH_ONLY_SIG, sig);
-}
-
 TEST(MeshOnly, TheRoadListensWhileThePlaneIsOnAndIsAlwaysOpen) {
   for (uint8_t mode : { MQTTCTRL_MESH_AUTO, MQTTCTRL_MESH_ON, MQTTCTRL_MESH_OFF }) {
     EXPECT_TRUE(mqttCtrlMeshListening(true, false, mode)) << (int)mode;
@@ -3171,11 +2490,11 @@ TEST(MeshOnly, TheRoadListensWhileThePlaneIsOnAndIsAlwaysOpen) {
 
 TEST(MeshOnly, ACommandIsAcceptedWithNoUplink) {
   const uint32_t now = 1795000000 - 60;
-  Held h("v1|9|1795000000|get name");
+  Cmd h(9, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 0, now, true, false));
-  Held r("v1|9|1795000000|reboot");
+  Cmd r(9, 1795000000, "reboot");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&r.env, 0, now, false, false));
-  Held t("v1|9|1795000000|trigger test");
+  Cmd t(9, 1795000000, "trigger test");
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&t.env, 0, now, true, false));
   EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthoriseMesh(&t.env, 0, now, false, false));
 }
@@ -3189,8 +2508,7 @@ TEST(MeshOnly, TheUplinksRepairsAndItsUpdateAreRefused) {
   const uint32_t now = 1795000000 - 60;
   for (const char* c : refused) {
     EXPECT_FALSE(mqttCtrlMeshCommandAllowed(c, strlen(c), true, false)) << c;
-    std::string text = std::string("v1|9|1795000000|") + c;
-    Held h(text.c_str());
+    Cmd h(9, 1795000000, c);
     EXPECT_EQ(MQTTCTRL_ERR_NOT_ALLOWED, mqttCtrlAuthoriseMesh(&h.env, 0, now, true, false)) << c;
   }
   // With an uplink the same commands travel as before.
@@ -3211,7 +2529,7 @@ TEST(MeshOnly, CounterExpiryAndDenyListAreUnchanged) {
               mqttCtrlMeshCommandAllowed(c, n, false, false)) << c;
   }
   const uint32_t unset = 1715770351 + 3600;
-  Held h("v1|5|1795000000|get name");
+  Cmd h(5, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, unset, true, false));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, unset, true, false));
   EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthoriseMesh(&h.env, 4, 1795000001, true, false));

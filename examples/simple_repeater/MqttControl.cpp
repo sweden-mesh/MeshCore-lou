@@ -43,7 +43,6 @@ MqttControl::MqttControl()
   : _fs(NULL), _enabled(false), _counter(0), _slot(0), _key_via(MQTTCTRL_KEY_VIA_USB),
     _alive_minutes(0), _boot(0), _mcc3_ready(false),
 #ifdef WITH_MQTT_BRIDGE
-    _v2_ready(false),
 #endif
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW),
@@ -61,8 +60,6 @@ MqttControl::MqttControl()
   _rekey_done = false;
   memset(&_rekey_mcc3, 0, sizeof(_rekey_mcc3));
 #ifdef WITH_MQTT_BRIDGE
-  _v2_key_for[0] = 0;
-  _v2_topic[0] = 0;
   mqttCtrlQueueReset(&_queue);
 #endif
 }
@@ -128,22 +125,7 @@ void MqttControl::save() {
   }
 }
 
-static bool buildOne(const char* iata, const char* leaf, const char* suffix,
-                     char* out, size_t out_size) {
-  return mqttCtrlBuildTopic(iata, leaf, suffix, out, out_size);
-}
-
-bool MqttControl::buildTopic(const char* iata, const char* node_hex,
-                             char* out, size_t out_size) {
-  return buildOne(iata, node_hex, "cmd", out, out_size);
-}
-
 #ifdef WITH_MQTT_BRIDGE
-
-bool MqttControl::buildResultTopic(const char* iata, const char* node_hex,
-                                   char* out, size_t out_size) {
-  return buildOne(iata, node_hex, "res", out, out_size);
-}
 
 void MqttControl::stage(const char* topic, const uint8_t* payload, size_t len) {
   // Runs on the client's esp-mqtt event task, which has a fraction of the stack the
@@ -159,14 +141,13 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
                                   MqttCtrlOutcome* out) {
   if (reply != NULL && reply_size > 0) reply[0] = 0;
   if (out != NULL) {
-    out->authentic = false; out->v2 = false; out->mcc3 = false; out->counter = 0; out->command[0] = 0;
+    out->authentic = false; out->mcc3 = false; out->counter = 0; out->command[0] = 0;
   }
   const MqttCtrlStaged* staged = mqttCtrlQueueFront(&_queue);
   if (staged == NULL) return MQTTCTRL_OK;
 
   MqttCtrlResult result = MQTTCTRL_OK;
   MqttCtrlEnvelope env;
-  char v2_text[MQTTV2_CMD_PAD_LARGE + 1];
   Mcc3Command mcc3;
 
   do {
@@ -201,37 +182,12 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
         out->mcc3 = true;
         memcpy(out->rid, mcc3.rid, MCC3_RID_LEN);
       }
-    } else if (mqttV2IsEnvelope(staged->payload, staged->payload_len)) {
-      // Sealed (v2): only on this node's own topic -- a broadcast stays v1 -- and the
-      // AEAD opened before anything else is believed. The tag proves the holder of the
-      // command key, which is what the v1 signature check proves below.
-      if (!_v2_ready) { result = MQTTCTRL_ERR_NO_OWNER_KEY; break; }
-      if (strcmp(staged->topic, _v2_topic) != 0) { result = MQTTCTRL_ERR_BAD_VERSION; break; }
-      result = mqttV2OpenCommand(_v2_key, staged->payload, staged->payload_len, &env, v2_text);
-      if (result != MQTTCTRL_OK) break;
-      if (env.command_len > MQTTCTRL_MAX_COMMAND) { result = MQTTCTRL_ERR_TOO_LONG; break; }
-      if (out != NULL) out->v2 = true;
     } else {
-      result = mqttCtrlParseEnvelope(staged->payload, staged->payload_len, &env);
-      if (result != MQTTCTRL_OK) break;
-
-      // The signature is checked before anything it protects, and over the topic as
-      // well as the body: without the topic bound in, a command signed for one node
-      // could be captured and republished on another's, and each node's own counter
-      // would never notice.
-      uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-      size_t signed_len = 0;
-      if (!mqttCtrlBuildSignedMessage(staged->topic, &env, signed_bytes,
-                                      sizeof(signed_bytes), &signed_len)) {
-        result = MQTTCTRL_ERR_TOO_LONG;
-        break;
-      }
-      if (!owner.verify(env.signature, signed_bytes, signed_len)) {
-        result = MQTTCTRL_ERR_SIG_INVALID;   // parsed as hex, did not verify
-        break;
-      }
+      // Nothing else is subscribed to; whatever a broker delivers here anyway is no command.
+      result = MQTTCTRL_ERR_BAD_VERSION;
+      break;
     }
-    result = execute(env, staged->topic, false, now, runner, reply, out);
+    result = execute(env, false, now, runner, reply, out);
   } while (false);
 
   mqttCtrlQueuePop(&_queue);
@@ -247,7 +203,7 @@ MqttCtrlResult MqttControl::takeForward(Mcc3Forward* out) {
 #endif
 
 // Everything after the key has vouched for a command, on either road.
-MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, const char* topic, bool mesh,
+MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, bool mesh,
                                     uint32_t now, MqttCommandRunner* runner, char* reply,
                                     MqttCtrlOutcome* out) {
   // Past this line the sender held the command key, so the outcome is safe to
@@ -269,10 +225,6 @@ MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, const char* top
   // every stateless check: otherwise anyone could drain the budget with garbage
   // that was going to be refused anyway.
   bool transmit = mqttCtrlIsTransmitCommand(env.command, env.command_len);
-
-  // Stateless, so it runs before the limiters spend anything.
-  result = mqttCtrlTransmitTopicResult(mqttCtrlBroadcastRefused(env.command, env.command_len), topic);
-  if (result != MQTTCTRL_OK) return result;
 
   // One limiter is asked, never both: a limiter spends when asked, and the two
   // budgets are disjoint. A transmit costs a transmit; a parameter change costs a
@@ -328,27 +280,6 @@ void MqttControl::rekeyTakeOver() {
   save();
 }
 
-MqttCtrlResult MqttControl::meshCommand(const mesh::Identity& owner, const char* topic,
-                                        const MqttCtrlMeshRequest& req, uint32_t now, bool open,
-                                        MqttCommandRunner* runner, char* reply, bool* answer) {
-  reply[0] = 0;
-  *answer = false;
-  uint8_t signed_bytes[MQTTCTRL_MAX_SIGNED];
-  size_t signed_len = 0;
-  if (!mqttCtrlBuildSignedMessage(topic, &req.env, signed_bytes, sizeof(signed_bytes), &signed_len)) {
-    return MQTTCTRL_ERR_TOO_LONG;
-  }
-  if (!owner.verify(req.env.signature, signed_bytes, signed_len)) return MQTTCTRL_ERR_SIG_INVALID;
-  if (!mqttCtrlCounterAccepted(_counter, req.env.counter)) return MQTTCTRL_ERR_REPLAY;
-  if (_mesh_answered_any && !mqttCtrlCounterAccepted(_mesh_answered, req.env.counter)) return MQTTCTRL_ERR_REPLAY;
-  if (!_mesh_answers.allows(now)) return MQTTCTRL_ERR_RATE_LIMITED;
-  *answer = true;
-  _mesh_answered = req.env.counter;
-  _mesh_answered_any = true;
-  if (!open) return MQTTCTRL_ERR_MESH_CLOSED;
-  return execute(req.env, topic, true, now, runner, reply, NULL);
-}
-
 MqttCtrlResult MqttControl::meshCommand(const Mcc3Command& cmd, uint32_t now, bool open,
                                         MqttCommandRunner* runner, char* reply, bool* answer) {
   reply[0] = 0;
@@ -365,7 +296,7 @@ MqttCtrlResult MqttControl::meshCommand(const Mcc3Command& cmd, uint32_t now, bo
   env.expiry = cmd.expiry;
   env.command = cmd.command;
   env.command_len = cmd.command_len;
-  return execute(env, "", true, now, runner, reply, NULL);
+  return execute(env, true, now, runner, reply, NULL);
 }
 
 bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,

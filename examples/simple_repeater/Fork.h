@@ -114,16 +114,13 @@ class Fork {
                          const uint8_t* data, size_t len);
   void answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender,
                          uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply,
-                         bool sealed, bool zero_hop);
+                         bool zero_hop);
 #endif
 #if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
-  // Owned here so the bridge's subscription list outlives every reconnect: mcc/cmd/<key>,
-  // and in lou-20 the old scheme's per-node topic beside it while the node has a region.
+  // Owned here so the bridge's subscription list outlives every reconnect: mcc/cmd/<key>.
   char _mcc3_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
   char _alive_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
-  char _ctrl_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
-  char _ctrl_result[MQTTCTRL_MAX_TOPIC + 1] = {0};
-  const char* _ctrl_topics[2];
+  const char* _ctrl_topics[1];
   MqttCtrlAliveClock _alive = {};
   uint32_t _alive_sequence = 0;
   // What alive says that is worth telling at once when it changes (mqttCtrlAliveNudge).
@@ -167,7 +164,6 @@ class Fork {
   void autoSetupMqttControl(const MqttCtrlSlotPlan& plan, char* reply);
   void pingMqttControl(char* reply);
   void loopMqttPing();
-  void refreshMqttControlV2Key();
   void loopMqttControl();
   void loopAlive();
   const char* homeRegion();

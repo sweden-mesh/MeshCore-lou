@@ -324,6 +324,15 @@ TEST(Mcc3Vectors, EveryForwardIsRebuiltAndOpens) {
     const Mcc3Forward f = forwardOf(v);
     EXPECT_EQ(v.body_len, unhex(v.body).size());
     char out[MCC3_FWD_B64 + 1];
+    if (f.body[0] == 0xC1) {
+      // The spec's vectors still hold lou-20's forward of an old request. It opens, since
+      // the owner sealed it, and is then a bad body: not built here, not sent on.
+      EXPECT_EQ(0u, mcc3BuildForward(&owner, NODE.pub, unhex(v.nonce).data(), &f, out, sizeof(out)));
+      Mcc3Forward old;
+      ASSERT_EQ(MQTTCTRL_OK, mcc3OpenForward(&node, v.payload, strlen(v.payload), &old));
+      EXPECT_FALSE(mcc3ForwardBodyOk(&old, NODE.pub));
+      continue;
+    }
     size_t n = mcc3BuildForward(&owner, NODE.pub, unhex(v.nonce).data(), &f, out, sizeof(out));
     EXPECT_EQ(std::string(v.payload), std::string(out, n));
     EXPECT_EQ(v.bytes, unb64(v.payload).size());
@@ -937,6 +946,32 @@ TEST(Mcc3Relay, OnlyAForwardOfTheOwnersOpens) {
   EXPECT_EQ(MQTTCTRL_ERR_BAD_FIELDS, openOnNode(node, NODE.pub, payload, OWNER.pub, &c));
 }
 
+// What Fork::onMeshCommand does with an anonymous request before upstream sees it. An old
+// request left unclaimed is a failed login to upstream, and five of them throttle the
+// sender's key for ten minutes.
+TEST(Mcc3Mesh, AnOldRequestIsClaimedANewOneRunAndALoginLeftAlone) {
+  uint8_t req[MCC3_MESH_REQUEST] = {0};
+  req[4] = 0xC1;
+  EXPECT_EQ(MCC3_CLAIM_OLD, mcc3MeshClaim(req, sizeof(req)));
+  EXPECT_EQ(MCC3_CLAIM_OLD, mcc3MeshClaim(req, 5));              // whatever follows, or nothing
+  req[4] = 0xC2;
+  EXPECT_EQ(MCC3_CLAIM_REQUEST, mcc3MeshClaim(req, sizeof(req)));
+  // A login: a password's first byte, printable or the start of a UTF-8 sequence.
+  for (int first = ' '; first < 256; first++) {
+    if (first == 0xC1 || first == 0xC2) continue;
+    req[4] = (uint8_t)first;
+    EXPECT_EQ(MCC3_CLAIM_NONE, mcc3MeshClaim(req, sizeof(req))) << first;
+  }
+  // Upstream's typed requests, and a request too short to have a type.
+  for (uint8_t typed : { (uint8_t)0x00, (uint8_t)0x01, (uint8_t)0x02, (uint8_t)0x03 }) {
+    req[4] = typed;
+    EXPECT_EQ(MCC3_CLAIM_NONE, mcc3MeshClaim(req, sizeof(req))) << (int)typed;
+  }
+  req[4] = 0xC1;
+  EXPECT_EQ(MCC3_CLAIM_NONE, mcc3MeshClaim(req, 4));
+  EXPECT_EQ(MCC3_CLAIM_NONE, mcc3MeshClaim(NULL, sizeof(req)));
+}
+
 TEST(Mcc3Relay, TheBodyRuleTheRouteThePathAndTheTarget) {
   Mcc3Forward f = forwardTo(TARGET, 9, 0);
   EXPECT_TRUE(mcc3ForwardBodyOk(&f, NODE.pub));
@@ -946,17 +981,17 @@ TEST(Mcc3Relay, TheBodyRuleTheRouteThePathAndTheTarget) {
   EXPECT_FALSE(mcc3ForwardBodyOk(&f, NODE.pub));
   f.body_len = 133;
   EXPECT_FALSE(mcc3ForwardBodyOk(&f, NODE.pub));
-  // 0xC1: 74..132, a request with at least one byte of command.
+  // 0xC1, the request of lou-20 and older, is no longer carried, at any length.
   f.body[0] = 0xC1;
   for (int len = 0; len < 256; len++) {
     f.body_len = (uint8_t)len;
-    EXPECT_EQ(len >= 74 && len <= 132, mcc3ForwardBodyOk(&f, NODE.pub)) << len;
+    EXPECT_FALSE(mcc3ForwardBodyOk(&f, NODE.pub)) << len;
   }
   // Nothing else: a login's first byte, upstream's typed requests, a sub-type not defined yet.
   f.body_len = 132;
   for (int first = 0; first < 256; first++) {
     f.body[0] = (uint8_t)first;
-    EXPECT_EQ(first == 0xC1 || first == 0xC2, mcc3ForwardBodyOk(&f, NODE.pub)) << first;
+    EXPECT_EQ(first == 0xC2, mcc3ForwardBodyOk(&f, NODE.pub)) << first;
   }
 
   f = forwardTo(TARGET, 9, 0);
@@ -1043,7 +1078,7 @@ TEST(Mcc3Relay, TheStatusesAreTheDesignNotesNumbers) {
   EXPECT_EQ(371, MCC3_FWD_B64);
   EXPECT_EQ(285, MCC3_FWD_RES_SIZE);
   EXPECT_EQ(380, MCC3_FWD_RES_B64);
-  EXPECT_EQ(74, MCC3_FWD_MIN_BODY);
+  EXPECT_EQ(132, MCC3_FWD_MIN_BODY);
   EXPECT_LE(MCC3_FWD_B64, MQTTCTRL_MAX_PAYLOAD);          // the plane's staging buffer takes it
 }
 
@@ -1119,8 +1154,7 @@ TEST(Mcc3Relay, AForwardCounterIsTakenOnceEvenWhenItsBodyIsRefused) {
   bad.body[0] = 0xC3;
   EXPECT_EQ(MCC3_FWD_BAD_BODY, b.take(bad, RELAY_NOW + 5));
   bad = forwardTo(TARGET, 23, 0);
-  bad.body[0] = 0xC1;
-  bad.body_len = 73;
+  bad.body[0] = 0xC1;   // a whole request of the old scheme: refused, as a short one was
   EXPECT_EQ(MCC3_FWD_BAD_BODY, b.take(bad, RELAY_NOW + 6));
   bad = forwardTo(TARGET, 24, 0);
   bad.body_len = 131;
