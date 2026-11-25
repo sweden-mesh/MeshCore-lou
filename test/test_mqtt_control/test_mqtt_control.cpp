@@ -1925,6 +1925,52 @@ TEST(SlotPlan, TheHostFormRewritesTheSlotAsBefore) {
   EXPECT_EQ(MQTTPacketFilter::kAllPacketTypes, filter);
 }
 
+TEST(SlotRepair, TheOldPasswordSlotIsFoundInEveryFormItWasStoredIn) {
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt://mqtt.louie.se:1883", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtts://mqtt.louie.se:8883", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "wss://mqtt.louie.se:443/mqtt", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "MQTT.Louie.SE", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt-meshcore.louie.se", "mcoar", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt://mqtt.meshcore-jkp.se", "someone", ""));
+  EXPECT_TRUE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se/mqtt", "mcoar", ""));
+}
+
+TEST(SlotRepair, ASlotSetOnPurposeIsLeftAlone) {
+  // `set cmd on <host>` leaves an audience, and that slot signs in with a token
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtts://mqtt.meshcore-vgr.se:8883", "",
+                                       "mqtt.meshcore-vgr.se"));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtts://mqtt.louie.se:8883", "mcoar",
+                                       "mqtt.louie.se"));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("mccontrol", "", "", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("mccontrol", "mqtt.louie.se", "mcoar", ""));   // stale fields
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("none", "mqtt.louie.se", "mcoar", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("", "mqtt.louie.se", "mcoar", ""));
+  // somebody else's broker, with a password
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.example.org", "user", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt://mqtt.example.org:1883", "user", ""));
+  // no username is no password login
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se", "", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair(nullptr, "mqtt.louie.se", "mcoar", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", nullptr, "mcoar", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se", nullptr, ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se", "mcoar", nullptr));
+}
+
+TEST(SlotRepair, AHostThatOnlyContainsOneOfTheNamesIsNotOurs) {
+  EXPECT_FALSE(mqttCtrlPlaneHost("evilmqtt.louie.se.example.org"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt.louie.se.example.org"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("evilmqtt.louie.se"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt.louie.s"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt://mqtt.louie.se@example.org:1883"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt://example.org/mqtt.louie.se"));
+  EXPECT_FALSE(mqttCtrlPlaneHost("mqtt://"));
+  EXPECT_FALSE(mqttCtrlPlaneHost(""));
+  EXPECT_FALSE(mqttCtrlPlaneHost(nullptr));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt.louie.se.example.org", "mcoar", ""));
+  EXPECT_FALSE(mqttCtrlSlotNeedsRepair("custom", "mqtt://evilmqtt.louie.se.example.org:1883", "mcoar", ""));
+}
+
 TEST(PlaneSlot, NoCommandFormChangesTheSlotThePlaneRides) {
   // Slot 2, as on a board without PSRAM: analyzer.eu on or off, the slot's preset, its
   // server, anything under mqtt2.

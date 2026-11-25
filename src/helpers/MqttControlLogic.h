@@ -450,6 +450,31 @@ static inline void mqttCtrlApplySlotPlan(const MqttCtrlSlotPlan* plan, char* pre
   *filter = plan->filter;
 }
 
+// The brokers that carry the plane and refuse mcc/ topics to a password login: the preset's
+// own and the two names it has also answered to.
+static inline bool mqttCtrlPlaneHost(const char* host) {
+  static const char* const names[] = { "mqtt.louie.se", "mqtt-meshcore.louie.se", "mqtt.meshcore-jkp.se" };
+  if (host == NULL) return false;
+  const char* scheme = strstr(host, "://");
+  if (scheme != NULL) host = scheme + 3;
+  const size_t len = strcspn(host, ":/");
+  for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+    if (strlen(names[i]) == len && strncasecmp(host, names[i], len) == 0) return true;
+  }
+  return false;
+}
+
+// A command slot from before the `mccontrol` preset: a custom slot on one of the plane's
+// brokers that signs in with a username and password. The broker lets it in and refuses its
+// mcc/ topics, so the plane looks up and hears nothing. A custom slot with an audience is
+// one `set cmd on <host>` wrote, signs in with a token, and is left alone on any host.
+static inline bool mqttCtrlSlotNeedsRepair(const char* preset, const char* host,
+                                           const char* username, const char* audience) {
+  if (preset == NULL || username == NULL || audience == NULL) return false;
+  return strcasecmp(preset, "custom") == 0 && audience[0] == 0 && username[0] != 0
+         && mqttCtrlPlaneHost(host);
+}
+
 // Does this command change the MQTT slot the command plane rides? Any form does it:
 // `set mqttN.<anything>` for that slot, and `set mqtt.analyzer.us|eu ...`, which write
 // slots 1 and 2 whatever they hold. Each would take the plane off its slot in silence --
