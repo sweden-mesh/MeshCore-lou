@@ -16,7 +16,12 @@ and dev tags match the workflow's URLs, and the native tag is the URL of the
 channel named by --expect.
 
   python3 scripts/verify_ota_channel.py --expect prod
+  python3 scripts/verify_ota_channel.py --expect prod --no-compat <image.bin> ...
   python3 scripts/verify_ota_channel.py --self-test
+
+Named images are checked instead of out/. --no-compat leaves the ota-compat tag out of
+the check: the fork's images carry none, since nothing in their update path reads one
+(scripts/build-matrix.sh checks each Observer image it builds this way).
 
 URLs default to OTA_MANIFEST_BASE_URL, OTA_MANIFEST_BASE_STABLE_URL and
 OTA_MANIFEST_BASE_DEV_URL from the environment. Stdlib only.
@@ -37,7 +42,7 @@ def read_tags(data):
     return tags
 
 
-def check(data, expect, native_url, stable_url, dev_url):
+def check(data, expect, native_url, stable_url, dev_url, compat=True):
     """Return a list of problems with one binary's tags (empty when it passes)."""
     problems = []
     if stable_url == dev_url:
@@ -51,10 +56,12 @@ def check(data, expect, native_url, stable_url, dev_url):
         found = sorted(tags[name])
         if found != [want]:
             problems.append("ota-base-%s: expected [%s], found %s" % (name, want, found or "nothing"))
+    if not compat:
+        return problems
     # Without its compat tag a build cannot be the target of a channel switch.
-    compat = sorted({m.group(1).decode() for m in COMPAT_RE.finditer(data)})
-    if len(compat) != 1:
-        problems.append("ota-compat: expected one value, found %s" % (compat or "nothing"))
+    found = sorted({m.group(1).decode() for m in COMPAT_RE.finditer(data)})
+    if len(found) != 1:
+        problems.append("ota-compat: expected one value, found %s" % (found or "nothing"))
     return problems
 
 
@@ -89,6 +96,23 @@ def self_test():
         if got != ok:
             failed += 1
             print("FAIL: %s" % name)
+    # The fork's release images: the latest full release by default and as prod, the beta
+    # release as beta, and no compat tag. Up to lou-20 all three were the one address.
+    L = "https://github.com/sweden-mesh/MeshCore-lou/releases/latest/download"
+    D = "https://github.com/sweden-mesh/MeshCore-lou/releases/download/beta"
+    bare = lambda dev: blob(L, L, dev).replace(b"ota-compat:1\x00", b"")
+    fork_cases = [
+        ("fork image with a beta address passes", bare(D), D, False, True),
+        ("fork image with one address for both fails", bare(L), D, False, False),
+        ("one address asked for both fails", bare(L), L, False, False),
+        ("fork image fails the compat check", bare(D), D, True, False),
+    ]
+    for name, data, dev, compat, ok in fork_cases:
+        got = not check(data, "prod", L, L, dev, compat)
+        if got != ok:
+            failed += 1
+            print("FAIL: %s" % name)
+    cases += fork_cases
     print("self-test: %d/%d passed" % (len(cases) - failed, len(cases)))
     return 1 if failed else 0
 
@@ -101,6 +125,8 @@ def main():
     ap.add_argument("--stable-url", default=os.environ.get("OTA_MANIFEST_BASE_STABLE_URL"))
     ap.add_argument("--dev-url", default=os.environ.get("OTA_MANIFEST_BASE_DEV_URL"))
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--no-compat", action="store_true", help="do not ask for an ota-compat tag")
+    ap.add_argument("bins", nargs="*", help="images to check instead of every .bin in --bin-dir")
     args = ap.parse_args()
 
     if args.self_test:
@@ -111,14 +137,15 @@ def main():
         if not getattr(args, opt):
             ap.error("--%s (or its environment variable) is required" % opt.replace("_", "-"))
 
-    bins = sorted(find_bins(args.bin_dir)) if os.path.isdir(args.bin_dir) else []
+    bins = args.bins or (sorted(find_bins(args.bin_dir)) if os.path.isdir(args.bin_dir) else [])
     if not bins:
         print("ERROR: no .bin files in %s" % args.bin_dir, file=sys.stderr)
         return 1
     bad = 0
     for path in bins:
         with open(path, "rb") as f:
-            problems = check(f.read(), args.expect, args.native_url, args.stable_url, args.dev_url)
+            problems = check(f.read(), args.expect, args.native_url, args.stable_url, args.dev_url,
+                             not args.no_compat)
         for p in problems:
             print("ERROR: %s: %s" % (path, p), file=sys.stderr)
         bad += bool(problems)

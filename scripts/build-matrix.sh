@@ -22,6 +22,12 @@
 # <OTA_VARIANT>.unsigned.json, its manifest without signatures (scripts/manifest.py). Images
 # without the Observer bridge have no pull OTA, and their OTA_VARIANT goes unused.
 #
+# An Observer image carries two update addresses: the latest full release, which it follows
+# by default and as `ota branch prod`, and from lou-21 the release tagged beta, which
+# `ota branch beta` points it at, so a release can be taken by a few nodes before every node
+# is offered it. OTA_MANIFEST_BASE_URL, _STABLE_URL and _DEV_URL in the environment win. Each
+# image built is read back (scripts/verify_ota_channel.py) and fails without the two.
+#
 # A failed build is retried once -- on the small host a link killed for memory is the usual
 # cause -- and a second failure is listed at the end and makes the exit status 1; the
 # board is then left to CI.
@@ -59,6 +65,11 @@ if [ "$BOARDS" = all ]; then
 fi
 echo "$REV" | grep -qE '^lou-[0-9]+(rc[0-9]*)?$' || { echo "revision must be lou-<nn> or lou-<nn>rc[<n>], not '$REV'" >&2; exit 2; }
 BASE_VERSION=$(grep -m1 -oE 'FIRMWARE_VERSION +"v[0-9.]+"' examples/simple_repeater/MyMesh.h | grep -oE 'v[0-9.]+')
+
+# build.sh bakes these in; the first is its own default, named here to check the image by.
+export OTA_MANIFEST_BASE_URL="${OTA_MANIFEST_BASE_URL:-https://github.com/sweden-mesh/MeshCore-lou/releases/latest/download}"
+export OTA_MANIFEST_BASE_STABLE_URL="${OTA_MANIFEST_BASE_STABLE_URL:-$OTA_MANIFEST_BASE_URL}"
+export OTA_MANIFEST_BASE_DEV_URL="${OTA_MANIFEST_BASE_DEV_URL:-https://github.com/sweden-mesh/MeshCore-lou/releases/download/beta}"
 
 # The -D flags for a combination; the codes must be known and in the fixed order, so one
 # combination never has two names.
@@ -144,6 +155,8 @@ for combo in $COMBOS; do
       python3 scripts/manifest.py unsigned "$img" "$variant" "$combo" "$ver" "$BASE_VERSION" \
         "${FIRMWARE_BUILD_NUMBER:-0}" "out/$env.partsig" "$OUT/$variant.unsigned.json" \
         || failed="$failed $variant(manifest)"
+      python3 scripts/verify_ota_channel.py --expect prod --no-compat "$img" >> "$LOGS/$variant.log" 2>&1 \
+        || failed="$failed $variant(update-address)"
     fi
   done
 done
