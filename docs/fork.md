@@ -14,6 +14,9 @@ built, and any combination of them builds from the same tree:
 | Observer (`fork/observer`), 33 repeater boards | built | built | built | `as`, `asar`, `asrc`, `asarrc`: not yet |
 | core MeshCore (`fork/core`), 93 boards (`scripts/boards-core.txt`) | built | built, mesh only | built, mesh only | `as`, `asar`: not yet |
 
+The Wio-E5 mini has no `arrc` image: it does not fit the board's flash (`ar` and `rc` do), so
+`fork/core` builds 92 `arrc` images.
+
 Every Observer image also carries signed pull OTA; a core image has none. Room-server and
 companion images are not built (TODO 22a rulings 14, 23).
 

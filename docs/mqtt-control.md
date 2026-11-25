@@ -110,6 +110,34 @@ never reaches the key: it is told apart from a remote admin by an explicit flag 
 login's path, never by the clock, and the deny list refuses it as well. Every password login is
 throttled: a sender key that gives a wrong password 5 times is refused for 10 minutes.
 
+## Upgrading from lou-18
+
+- **The names changed, the settings did not.** `mqtt.cmd` is `cmd`: `set cmd on [<host>]`,
+  `set cmd off`, `get cmd`, `set cmd.pubkey`, `set cmd.slot`, `cmd ping`. A lou-20 node answers
+  the old names as unknown. The command key, its counter and the slot are read from the same
+  file as before, so a node that was on the plane is on it after the update.
+- **`set cmd on <host>` once more.** On lou-18 `set mqtt.cmd on <host>` did not survive a
+  reboot (above). A node meant for a region's own broker needs `set cmd on <host>` and a
+  `reboot` after the update.
+- **The bare `set cmd on` now rewrites the plane's slot** to the shared broker
+  (`mqtt-meshcore.louie.se`). On lou-18 it only turned the plane on. On a node whose plane is
+  on another broker, give the host.
+- **The old scheme is still accepted** on a node with `mqtt.iata` set: commands on
+  `meshcore/{IATA}/{NODE}/cmd`, results on `/res`, the `0xC1` mesh request. A tool that knows
+  only lou-18 still reaches the node. lou-21 removes it.
+- **No command to a whole region.** `meshcore/{IATA}/all/cmd` is not subscribed. A change for
+  many nodes is one command to each.
+- **On by default after the update,** on a node with a command key: the alive message
+  (`alive.interval`), the mesh road in `auto` (`cmd.mesh`) and, on an Observer image, the relay
+  for the node's own key (`set relay off` stops it). The command budget is 50 an hour, from 10.
+- **Rolling back to lou-18 keeps the command key, the counter and the slot:** they are stored
+  where lou-18 reads them. What lou-20 added (`cmd.mesh`, `relay`, `alive.interval`) lou-18
+  does not read.
+
+Outside the plane, lou-20 also throttles password logins (above) and, on ESP32, answers
+`start ota` and the setup access point only on serial and the local console
+([fork-overview.md](fork-overview.md)).
+
 ## Which broker
 
 Commands arrive on one MQTT slot and results leave by the same one, `cmd.slot`, from 1 to
@@ -258,6 +286,10 @@ A pong is not a command. It is recognised before any signature parsing, so it co
 compare, never an Ed25519 verify; it is never executed, answered, logged or counted towards
 the signed command that marks a new OTA image valid; and it is taken only with the nonce of
 the one ping in flight, which it consumes, so a second or a stale pong changes nothing.
+
+**After a network drop** the slot's MQTT client reconnects by itself. Measured on the bench
+(2026-11-24): the node was back on the plane about 3 minutes after the network returned. A new
+alive message follows 5-60 s after the reconnect. Until then `get cmd` says `not connected`.
 
 `cmd ping` is admitted over the plane as a read, inside the 50-commands-an-hour budget.
 Sent that way, its `r2` result is held until the ping settles and then carries the outcome --
@@ -539,7 +571,13 @@ On an Observer image the mesh road already reaches the broker slots' settings (`
 as the deny list admits them, so a broken Observer feed can be repaired over the mesh.
 
 Set it up on the console: `set cmd.pubkey <64 hex>` (serial, or a remote admin's first key), then
-`set cmd on`.
+`set cmd on`, which answers `OK` and needs no reboot. `get cmd` then answers
+`> on, counter <n>, mesh only, mesh on ok 0 refused 0`: the two counts are the requests heard
+since the last restart. Step by step, with the check from a companion or through a relay:
+[quick-check-guide.md](quick-check-guide.md), 8c.
+
+A mesh-only board is updated by USB or Bluetooth DFU, as stock MeshCore is. There is no update
+over the mesh.
 
 ## Relaying: one node's MQTT for another node's command (lou-20)
 
@@ -569,6 +607,10 @@ counter are not involved. This is the plane's second sanctioned transmit, beside
   day, and of those that leave the region home (the default scope, or any flood from a relay
   with no region home) two an hour. One forward waits at a time. Fixed. A request that could
   not be sent spends nothing. The budgets are kept in RAM: a restart opens a burst.
+- **One at a time.** From the moment a request is sent until the target's answer, or 120 s,
+  the relay holds that one forward. A forward that arrives meanwhile is answered `busy` and is
+  not sent. The node also holds one arriving message at a time: one that arrives before the
+  node has taken up the one before it is dropped, unanswered. Send one and wait for its result.
 - **The way back.** When a flooded answer reaches the relay, it sends the target the path that
   answer took, direct along the path the answer taught (MeshCore's reciprocal path; counted in
   the airtime budget). The target then answers direct commands along it instead of flooding.

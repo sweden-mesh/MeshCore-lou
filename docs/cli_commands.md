@@ -87,6 +87,8 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 **Usage:**
 - `start ota`
 
+> **lou fork:** on ESP32, `start ota` answers only the serial console and the local console; a remote admin gets `Err - serial only: it opens the board to anyone in Wi-Fi/BLE range`. The same holds for the Wi-Fi setup access point (`start webconfig ap`) on an image that has it. nRF52 is unchanged: a remote admin still starts BLE DFU with `start ota`.
+
 ---
 
 ### Erase/Factory Reset
@@ -383,6 +385,8 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 **Note:** Command reply echoes the updated password for confirmation.
 
 **Note:** Any node using this password will be added to the admin ACL list.
+
+> **lou fork:** every password login is throttled. A sender that gives a wrong password 5 times is not answered for 10 minutes.
 
 ---
 
