@@ -1,5 +1,5 @@
-# Every combination of the fork's features, for every board of both bases (TODO 22a ruling
-# 16): ar, rc and arrc x the Observer repeaters from fork/observer and x the curated core
+# The fork's images for every board of both bases (TODO 22a ruling 16): the one full image,
+# arrc, x the Observer repeaters from fork/observer, and ar, rc and arrc x the curated core
 # boards from fork/core (scripts/boards-core.txt). The host suites per combination first.
 # One job per Observer image, one per core board with its combinations built in turn
 # (scripts/ci-plan.sh), to stay under GitHub's 256 jobs in a matrix.
@@ -22,7 +22,7 @@ on:
         default: fork/core
       revision:
         description: "the revision, lou-<nn>"
-        default: lou-14
+        default: lou-21
       release_pubkey:
         description: "the release key's public half (64 hex), baked into every image"
         default: 38A263C44AF0E60E766AEF4A2D985ECE2FC16FFC533BF453A37FF4CF15A9325C
