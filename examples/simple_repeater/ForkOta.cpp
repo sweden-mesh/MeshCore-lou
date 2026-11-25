@@ -6,6 +6,7 @@
 
 #ifdef WITH_MQTT_BRIDGE
 
+#include <helpers/ForkArrival.h>
 #include <helpers/ForkText.h>
 #include <helpers/OtaChannel.h>
 
@@ -53,6 +54,55 @@ void Fork::otaBegin() {
     n = readSettings(_mesh._fs, OTA_LEGACY_SETTINGS_FILE, buf, sizeof(buf));
     otaAutoDecodeLegacy(buf, n, &_ota_auto, &_ota_check_hours);
   }
+}
+
+#ifdef ESP_PLATFORM
+static bool previousImageToken(char* out, size_t out_size);
+#endif
+
+// The board has no Fork to ask; this is the filesystem its call below writes the marker to.
+static FILESYSTEM* arrival_fs = NULL;
+
+// Called by the board when an update is written and verified, just before it restarts into
+// it (ESP32Board.cpp, through a weak reference: an image without this file has no such
+// call). The marker tells the new image which features this one had (ForkArrival.h).
+extern "C" void forkOtaAccepted(const char* version) {
+  if (arrival_fs == NULL || !forkArrivalMarkerWanted(FORK_FEATURE_TOKEN, version)) return;
+  File file = openWrite(arrival_fs, FORK_ARRIVAL_FILE);
+  if (file) {
+    file.write((const uint8_t *)FORK_FEATURE_TOKEN, strlen(FORK_FEATURE_TOKEN));
+    file.close();
+  }
+}
+
+// The marker when there is one, else the old image itself on the first start after an
+// update. The marker goes last, after the settings are saved, so a start cut short tries
+// again; an image that finds its own features in it (a rollback) switches nothing.
+void Fork::settleArrival() {
+  arrival_fs = _mesh._fs;
+  char from[FORK_ARRIVAL_TOKEN_MAX] = {0};
+  size_t n = 0;
+  const bool marked = _mesh._fs->exists(FORK_ARRIVAL_FILE);
+  if (marked) {
+    n = forkArrivalTokenLen((const uint8_t *)from, readSettings(_mesh._fs, FORK_ARRIVAL_FILE,
+                                                               (uint8_t *)from, sizeof(from) - 1));
+  }
+#ifdef ESP_PLATFORM
+  if (!marked && previousImageToken(from, sizeof(from))) n = strlen(from);
+#endif
+  const ForkArrival arrival = forkArrivalFrom(FORK_FEATURE_TOKEN, from, n);
+#ifdef WITH_AUTO_REPLY
+  if (arrival.auto_reply_off) _auto_reply.switchOff();
+#endif
+#ifdef WITH_MQTT_COMMAND
+  if (arrival.mqtt_command_off) _mqtt_control.switchOff();
+#endif
+  if (arrival.auto_reply_off || arrival.mqtt_command_off) {
+    from[n] = 0;
+    Serial.printf("OTA: this node came from an %s image:%s%s starts switched off\n", from,
+                  arrival.auto_reply_off ? " auto-reply" : "", arrival.mqtt_command_off ? " remote command" : "");
+  }
+  if (marked) _mesh._fs->remove(FORK_ARRIVAL_FILE);
 }
 
 void Fork::otaSave() {
@@ -118,9 +168,47 @@ void Fork::otaLoop() {
 
 #ifdef ESP_PLATFORM
 #include <esp_ota_ops.h>
+#include <esp_image_format.h>
 // The Arduino core would mark the image valid at boot; verifyRollbackLater() says
 // we will do it ourselves, once the image has shown it works.
 extern "C" bool verifyRollbackLater() { return true; }
+
+// The features of the image this node ran before, read out of that image: only on the
+// first start after an update (the running image is still pending), when the other slot
+// holds it whole. Bounded by the image's own length, since what lies past it can be the
+// tail of an older and longer image. A node from lou-20 has nothing else to go by.
+static bool previousImageToken(char* out, size_t out_size) {
+#if defined(OTA_VARIANT)
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (running == NULL || esp_ota_get_state_partition(running, &state) != ESP_OK ||
+      state != ESP_OTA_IMG_PENDING_VERIFY) return false;
+  const esp_partition_t* old = esp_ota_get_next_update_partition(NULL);
+  if (old == NULL || old == running) return false;
+  const esp_partition_pos_t pos = { old->address, old->size };
+  esp_image_metadata_t meta;
+  if (esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &pos, &meta) != ESP_OK) return false;
+  // On the heap for this one pass: the loop task's stack is 8 kB on most boards.
+  struct Work { ForkVariantScan scan; uint8_t chunk[1024]; };
+  Work* w = (Work *)malloc(sizeof(Work));
+  if (w == NULL) return false;
+  bool found = false;
+  if (forkVariantScanBegin(&w->scan, OTA_VARIANT, FORK_FEATURE_TOKEN)) {
+    for (uint32_t off = 0; off < meta.image_len && !found;) {
+      size_t n = meta.image_len - off;
+      if (n > sizeof(w->chunk)) n = sizeof(w->chunk);
+      if (esp_partition_read(old, off, w->chunk, n) != ESP_OK) break;
+      found = forkVariantScanFeed(&w->scan, w->chunk, n, out, out_size);
+      off += n;
+    }
+  }
+  free(w);
+  return found;
+#else
+  (void)out; (void)out_size;
+  return false;
+#endif
+}
 
 // Rollback (ar-11): a freshly flashed image is pending until it proves itself, and
 // only then is it marked valid; until then a reboot (watchdog, power) returns to the

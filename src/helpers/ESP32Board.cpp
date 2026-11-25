@@ -339,6 +339,10 @@ bool ESP32Board::otaFromManifest(const char* manifest_base, const char* current_
   return args.result;
 }
 
+// The fork's note of what this image was, for the image it is about to become
+// (examples/simple_repeater/ForkOta.cpp). Weak: only the repeater defines it.
+extern "C" void forkOtaAccepted(const char* version) __attribute__((weak));
+
 bool ESP32Board::otaFromManifestImpl(const char* manifest_base, const char* current_ver, bool dry_run, char reply[]) {
 #if !defined(OTA_MANIFEST_BASE) || !defined(OTA_VARIANT)
   strcpy(reply, "ERR: OTA not configured (build via build.sh)");
@@ -623,6 +627,7 @@ bool ESP32Board::otaFromManifestImpl(const char* manifest_base, const char* curr
     Serial.print("OTA: FAILED - "); Serial.println(reply);
     return false;
   }
+  if (forkOtaAccepted) forkOtaAccepted(avail_version);
   Serial.println("OTA: verified and written, rebooting...");
   snprintf(reply, 160, "OK: %s written and verified, rebooting", avail_disp);
   delay(200);

@@ -50,6 +50,9 @@ class Fork {
 
   void otaBegin();
   void otaSave();
+  // After the features have read their settings: a feature the image before this one did
+  // not have is switched off, once (helpers/ForkArrival.h).
+  void settleArrival();
   bool handleOtaCommand(char* command, char* reply);
   void otaLoop();
   void autoOtaTick();
