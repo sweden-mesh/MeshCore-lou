@@ -49,28 +49,16 @@ static void applyEffectiveOrigin(const NodePrefs* np, const MQTTPrefs* obs, char
   StrHelper::stripSurroundingQuotes(dest, dest_size);
 }
 
-// A never-set clock, remembered across a soft reset. ESP32RTCClock::begin() restores the
-// clock after one, so a node that ran ten minutes on the power-on placeholder comes back
-// ten minutes past it with its uptime at zero, and the placeholder alone would call that
-// a set clock. A power cycle scrambles these, and the magic then fails.
-static RTC_NOINIT_ATTR uint32_t s_never_set_clock_time;
-static RTC_NOINIT_ATTR uint32_t s_never_set_clock_magic;
-static const uint32_t kNeverSetClockMagic = 0x4E53434BUL;
-
 static_assert(MQTTConnectionPolicy::kPowerOnClockEpoch == RTC_TIME_MIN,
               "kPowerOnClockEpoch must be what ESP32RTCClock::begin() seeds the clock with");
 
-uint32_t MQTTBridge::neverSetClockBaseline() {
-  if (s_never_set_clock_magic == kNeverSetClockMagic &&
-      s_never_set_clock_time > MQTTConnectionPolicy::kPowerOnClockEpoch) {
-    return s_never_set_clock_time;
-  }
-  return MQTTConnectionPolicy::kPowerOnClockEpoch;
-}
-
-static void rememberNeverSetClock(uint32_t system_time) {
-  s_never_set_clock_time = system_time;
-  s_never_set_clock_magic = kNeverSetClockMagic;
+// ESP32RTCClock::begin() restores the clock after a soft reset, so a node that ran ten
+// minutes on the power-on placeholder comes back ten minutes past it, and the placeholder
+// alone would call that a set clock. The board's mark and its backup of the clock say it.
+static uint32_t neverSetClockBaseline() {
+  return MQTTConnectionPolicy::neverSetClockBaseline(_rtc_backup_unset == RTC_UNSET_MAGIC,
+                                                     _rtc_backup_magic == RTC_BACKUP_MAGIC,
+                                                     _rtc_backup_time);
 }
 
 static const char* const kNtpBuiltinFallbacks[] = {
@@ -1598,18 +1586,10 @@ void MQTTBridge::mqttTaskLoop() {
     // the NTP retry goes on, from its short interval again.
     if (_manual_clock_set) {
       _manual_clock_set = false;
-      s_never_set_clock_magic = 0;
       ntp_retries = 0;
       _clock_trust = MQTTConnectionPolicy::clockTrustAfterManualSet(_clock_trust);
       MQTT_DEBUG_PRINTLN("Clock set by hand: %lu", (unsigned long)time(nullptr));
       if (_slots_setup_done) refreshTokensAfterClockChange();
-    }
-
-    // A soft reset restores the clock to the second, and a never-set clock is told from a
-    // set one by the last reading kept of it (clockNeverSet's margin). The retries that
-    // keep that reading come up to 15 minutes apart, so it is kept here between them.
-    if (s_never_set_clock_magic == kNeverSetClockMagic) {
-      s_never_set_clock_time = (uint32_t)time(nullptr);
     }
 
     // Process a CLI-requested forced NTP sync (queued from Core 1). Running it here
@@ -4939,10 +4919,9 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
     // reads the chip. Asking libc alone would reject a board that knows exactly what time
     // it is; taking the placeholder for a clock would mint logins nine months old.
     const unsigned long rtc_time = _rtc ? (unsigned long)_rtc->getCurrentTime() : 0;
-    const uint32_t uptime_secs = (uint32_t)(esp_timer_get_time() / 1000000LL);
     fallback_source = MQTTConnectionPolicy::chooseFallbackClock(
         primary_only, (uint32_t)system_time, (uint32_t)rtc_time, (uint32_t)kMinValidEpoch,
-        neverSetClockBaseline(), uptime_secs);
+        neverSetClockBaseline(), 0);
     if (fallback_source != MQTTConnectionPolicy::ClockSource::None) {
       const bool from_rtc = (fallback_source == MQTTConnectionPolicy::ClockSource::Rtc);
       epochTime = from_rtc ? rtc_time : system_time;
@@ -4950,8 +4929,6 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
       MQTT_DEBUG_PRINTLN("No NTP server answered; continuing on the existing %s: %lu",
           from_rtc ? "RTC" : "system clock", epochTime);
     } else if (!primary_only) {
-      // Still the placeholder counting up: keep the reading for the next boot.
-      rememberNeverSetClock((uint32_t)system_time);
       MQTT_DEBUG_PRINTLN("No NTP server answered and the clock was never set: %lu", system_time);
     }
   }
@@ -4990,7 +4967,7 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
       _rtc->setCurrentTime(epochTime);
     }
 
-    s_never_set_clock_magic = 0;  // the clock is somebody's now
+    _rtc_backup_unset = 0;  // the clock is somebody's now
 
     // Slots already minted from a clock only if it was usable before this sync.
     const bool had_clock = MQTTConnectionPolicy::jwtClockAvailable(_clock_trust);

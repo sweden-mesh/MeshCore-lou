@@ -455,6 +455,33 @@ TEST(ClockNeverSet, NoBaselineJudgesNothing) {
   EXPECT_TRUE(Policy::clockNeverSet(0xFFFFFFFFu, 0xFFFFFFF0u, 0xFFFFFFFFu));
 }
 
+// The board marks the placeholder it seeds and backs the clock up every second; a soft
+// reset keeps both, with or without a network, and setting the clock takes the mark away.
+TEST(ClockNeverSet, TheBoardsMarkCarriesANeverSetClockAcrossASoftReset) {
+  // Power-on: the mark is fresh and the backup holds nothing yet.
+  EXPECT_EQ(kPowerOn, Policy::neverSetClockBaseline(true, false, 0xDEADBEEFu));
+  EXPECT_EQ(kPowerOn, Policy::neverSetClockBaseline(true, true, kPowerOn));
+  EXPECT_EQ(kPowerOn, Policy::neverSetClockBaseline(true, true, 1715770351u));
+  // Ten minutes on the placeholder, a soft reset, twenty seconds up: the backup has
+  // followed the clock, and the reading is still nobody's.
+  const uint32_t reading = kPowerOn + 600 + 20;
+  const uint32_t baseline = Policy::neverSetClockBaseline(true, true, reading - 1);
+  EXPECT_EQ(reading - 1, baseline);
+  EXPECT_TRUE(Policy::clockNeverSet(reading, baseline, 0));
+  // A clock chip on the same board reads a time somebody set.
+  EXPECT_FALSE(Policy::clockNeverSet(kPlausibleNow, baseline, 0));
+  // Once the clock is set the mark is gone, and no reading is a placeholder: not the
+  // backup's own, and not one a minute past the power-on value.
+  EXPECT_EQ(0u, Policy::neverSetClockBaseline(false, true, kPlausibleNow));
+  EXPECT_FALSE(Policy::clockNeverSet(kPlausibleNow, Policy::neverSetClockBaseline(false, true, kPlausibleNow), 0));
+  EXPECT_FALSE(Policy::clockNeverSet(kPowerOn + 60, Policy::neverSetClockBaseline(false, true, kPowerOn + 60), 0));
+  EXPECT_EQ(Policy::ClockSource::None,
+            Policy::chooseFallbackClock(false, reading, 0, kFloor, baseline, 0));
+  EXPECT_EQ(Policy::ClockSource::System,
+            Policy::chooseFallbackClock(false, kPlausibleNow, 0, kFloor,
+                                        Policy::neverSetClockBaseline(false, true, kPlausibleNow), 0));
+}
+
 TEST(FallbackClock, PrefersTheSystemClockWhenItIsUsable) {
   // A clock SNTP set recently outranks an RTC that may have drifted.
   EXPECT_EQ(ClockSource::System,

@@ -148,13 +148,13 @@ void Fork::loopAlive() {
   if (keys == NULL) return;
 
   const uint32_t clock = _mesh.getRTCClock()->getCurrentTime();
-  const bool clock_set = clock >= MQTTConnectionPolicy::kSyncedClockEpoch;
   const char* version = strstr(FIRMWARE_VERSION, "lou-");
   Mcc3Alive a;
   a.boot = _mqtt_control.boots();
   a.sequence = ++_alive_sequence;
   a.uptime = _mesh._ms->getMillis() / 1000;
-  a.clock = clock_set ? clock : 0;
+  a.clock = mqttCtrlClockReported(clock, clockNeverSet(clock));
+  const bool clock_set = a.clock != 0;
   a.last_counter = _mqtt_control.counter();
   a.interval = minutes * 60UL;
   a.flags = (FORK_UPLINK ? MCC3_ALIVE_UPLINK : 0)
@@ -381,7 +381,7 @@ void Fork::publishMqttControlResult(MqttCtrlResult result, const MqttCtrlOutcome
   _mesh.getRNG()->random(nonce, sizeof(nonce));
   static char sealed[MCC3_MAX_RESULT];   // loop task only; too big for its stack
   size_t n = mcc3BuildResult(keys->cmd, nonce, outcome.counter, (int)result,
-                             now >= MQTTConnectionPolicy::kSyncedClockEpoch ? now : 0,
+                             mqttCtrlClockReported(now, clockNeverSet(now)),
                              outcome.command, reply, sealed, sizeof(sealed));
   if (n > 0) _mesh.bridge->publishControlResult(topic, sealed, n, MQTTCTRL_RESULT_QOS);
 }
@@ -429,17 +429,14 @@ void Fork::formatSensors(char* reply) {
 }
 
 // Whether `now`, a reading of the node's clock, is an ESP32's power-on placeholder counting
-// up: the rule the time sync judges its fallback clock by. Other boards start in 2024, which
-// mqttCtrlClockUnset sees without help.
+// up: the rule the time sync judges its fallback clock by, on the board's own mark, which
+// needs no network to be kept. Other boards start in 2024, which mqttCtrlClockUnset sees
+// without help.
 bool Fork::clockNeverSet(uint32_t now) const {
 #ifdef ESP_PLATFORM
-  const uint32_t uptime_secs = (uint32_t)(esp_timer_get_time() / 1000000LL);
-#ifdef WITH_MQTT_BRIDGE
-  const uint32_t baseline = MQTTBridge::neverSetClockBaseline();
-#else
-  const uint32_t baseline = MQTTConnectionPolicy::kPowerOnClockEpoch;
-#endif
-  return MQTTConnectionPolicy::clockNeverSet(now, baseline, uptime_secs);
+  const uint32_t baseline = MQTTConnectionPolicy::neverSetClockBaseline(
+      _rtc_backup_unset == RTC_UNSET_MAGIC, _rtc_backup_magic == RTC_BACKUP_MAGIC, _rtc_backup_time);
+  return MQTTConnectionPolicy::clockNeverSet(now, baseline, 0);
 #else
   return false;
 #endif
@@ -766,7 +763,7 @@ void Fork::answerMeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   uint8_t nonce[MCC3_NONCE_LEN];
   _mesh.getRNG()->random(nonce, sizeof(nonce));
   size_t n = mcc3MeshBuildResponse(_mqtt_control.mcc3Keys()->cmd, nonce, tag, counter, (int)result,
-                                   now >= MQTTConnectionPolicy::kSyncedClockEpoch ? now : 0, reply, room, data);
+                                   mqttCtrlClockReported(now, clockNeverSet(now)), reply, room, data);
   if (n == 0) return;
 
   mesh::Packet* out = path_return

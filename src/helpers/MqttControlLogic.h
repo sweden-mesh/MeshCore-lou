@@ -1033,6 +1033,12 @@ static inline bool mqttCtrlClockUnset(uint32_t now, bool clock_never_set) {
   return clock_never_set || now < MQTTConnectionPolicy::kSyncedClockEpoch;
 }
 
+// The clock a node reports in its alive message, its results and its answers: 0 for a
+// clock nobody set, so that the owner's tool does not take a placeholder for the time.
+static inline uint32_t mqttCtrlClockReported(uint32_t now, bool clock_never_set) {
+  return mqttCtrlClockUnset(now, clock_never_set) ? 0 : now;
+}
+
 // A node cut off from Wi-Fi may have lost NTP, and a clock nobody set makes every expiry
 // meaningless. Then the counter alone stops a replay, as it does anyway (operator ruling
 // 2026-11-16).

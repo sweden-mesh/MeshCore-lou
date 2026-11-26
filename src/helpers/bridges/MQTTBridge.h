@@ -842,10 +842,6 @@ public:
    *  call this; the bridge task then lets the JWT slots run on that clock and re-issues
    *  tokens minted before the step. */
   void noteManualClockSet() { _manual_clock_set = true; }
-  /** What MQTTConnectionPolicy::clockNeverSet() measures a reading of the clock against:
-   *  the power-on placeholder, or a later reading of a never-set clock that a soft reset
-   *  carried over. */
-  static uint32_t neverSetClockBaseline();
   /** Probe every configured NTP server (custom primary + built-in fallbacks) for
    *  connectivity and report each server's reported time WITHOUT touching the system
    *  clock. Marshals the probe onto the MQTT task (Core 0), then formats on the caller's

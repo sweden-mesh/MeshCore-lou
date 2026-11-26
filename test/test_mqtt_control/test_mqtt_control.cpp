@@ -1944,6 +1944,11 @@ TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   EXPECT_FALSE(mqttCtrlClockUnset(power_on, false));
   EXPECT_TRUE(mqttCtrlClockUnset(MQTTConnectionPolicy::kSyncedClockEpoch - 1, false));
   EXPECT_FALSE(mqttCtrlClockUnset(MQTTConnectionPolicy::kSyncedClockEpoch, false));
+  // What the node reports as its clock follows the same rule: 0 until somebody set it.
+  EXPECT_EQ(0u, mqttCtrlClockReported(unset, false));
+  EXPECT_EQ(0u, mqttCtrlClockReported(power_on + 3600, true));
+  EXPECT_EQ(power_on + 3600, mqttCtrlClockReported(power_on + 3600, false));
+  EXPECT_EQ(1795000000u, mqttCtrlClockReported(1795000000u, false));
   // MQTT still refuses: its expiry window does not move.
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlCheckExpiry(unset, 1795000000));
   // A set clock is held to the same window as MQTT.

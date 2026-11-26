@@ -343,6 +343,16 @@ static inline bool clockNeverSet(uint32_t clock_time, uint32_t baseline, uint32_
   return (uint64_t)clock_time <= latest_unset;
 }
 
+// The baseline clockNeverSet() takes on an ESP32. `marked_unset` is the mark the board
+// leaves beside its backup of the clock when it seeds the placeholder and takes away when
+// the clock is set; a soft reset keeps both. `kept` is that backup, the clock's last
+// reading, so the uptime that goes with this baseline is 0. A clock that was set has no
+// baseline, and no reading of it is a placeholder.
+static inline uint32_t neverSetClockBaseline(bool marked_unset, bool kept_valid, uint32_t kept) {
+  if (!marked_unset) return 0;
+  return kept_valid && kept > kPowerOnClockEpoch ? kept : kPowerOnClockEpoch;
+}
+
 // System first: a clock SNTP set recently outranks an RTC that may have drifted.
 // The RTC matters on a cold boot, where ESP32RTCClock::begin() seeds libc with the
 // power-on placeholder (kPowerOnClockEpoch) while a detected chip already holds real time.

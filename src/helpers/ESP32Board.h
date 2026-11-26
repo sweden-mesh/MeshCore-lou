@@ -212,7 +212,11 @@ public:
 // the same two words of RTC memory.
 extern uint32_t _rtc_backup_time;
 extern uint32_t _rtc_backup_magic;
+// RTC_UNSET_MAGIC while the clock is the RTC_TIME_MIN seed counting up, which the backup
+// carries across a soft reset like any other time.
+extern uint32_t _rtc_backup_unset;
 #define RTC_BACKUP_MAGIC  0xAA55CC33
+#define RTC_UNSET_MAGIC   0x4E53434B
 #define RTC_TIME_MIN      1772323200  // 1 Mar 2026
 
 class ESP32RTCClock : public mesh::RTCClock {
@@ -230,6 +234,7 @@ public:
       tv.tv_sec = _rtc_backup_time;
     } else {
       tv.tv_sec = RTC_TIME_MIN;
+      _rtc_backup_unset = RTC_UNSET_MAGIC;
     }
     tv.tv_usec = 0;
     settimeofday(&tv, NULL);
@@ -246,6 +251,7 @@ public:
     settimeofday(&tv, NULL);
     _rtc_backup_time = time;
     _rtc_backup_magic = RTC_BACKUP_MAGIC;
+    _rtc_backup_unset = 0;
   }
   void tick() override {
     time_t now;
