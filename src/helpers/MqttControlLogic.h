@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <strings.h>
 
+#include "ForkText.h"                 // forkParseOnOff
 #include "MQTTConnectionPolicy.h"     // kSyncedClockEpoch, the mesh road's unset clock
 #include "MQTTObserverValidation.h"   // mqttOwnerKeyValid
 #include "MQTTPacketFilter.h"         // kAllPacketTypes, what the plane's slot carries
@@ -356,6 +357,22 @@ static inline void mqttCtrlApplySlotPlan(const MqttCtrlSlotPlan* plan, char* pre
   snprintf(server, server_size, "%s", plan->server);
   snprintf(audience, audience_size, "%s", plan->audience);
   *filter = plan->filter;
+}
+
+// What `set cmd on|off` answers, and whether it was either. On an Observer image
+// `set cmd on [<host>]` has planned its slot before this is asked, and the usage names the
+// host. An image without MQTT has no broker to name: its usage leaves the host out, and a
+// host after `on` is answered as not used instead of with a bare OK.
+static inline bool mqttCtrlSetAnswer(const char* arg, bool uplink, bool* on, const char** answer) {
+  if (!forkParseOnOff(arg, on)) {
+    *answer = uplink ? "Err - use: set cmd on [<broker host>]|off" : "Err - use: set cmd on|off";
+    return false;
+  }
+  while (*arg == ' ') arg++;
+  arg += *on ? 2 : 3;
+  while (*arg == ' ' || *arg == '\r' || *arg == '\n') arg++;
+  *answer = !uplink && *on && *arg ? "OK - mesh only: this image has no MQTT, the host is not used" : "OK";
+  return true;
 }
 
 // The brokers that carry the plane and refuse mcc/ topics to a password login: the preset's
@@ -1031,6 +1048,12 @@ static inline bool mqttCtrlMeshCommandAllowed(const char* command, size_t len, b
 // tell from a set clock (MQTTConnectionPolicy::clockNeverSet, the rule the time sync uses).
 static inline bool mqttCtrlClockUnset(uint32_t now, bool clock_never_set) {
   return clock_never_set || now < MQTTConnectionPolicy::kSyncedClockEpoch;
+}
+
+// The clock a node reports in its alive message, its results and its answers: 0 for a
+// clock nobody set, so that the owner's tool does not take a placeholder for the time.
+static inline uint32_t mqttCtrlClockReported(uint32_t now, bool clock_never_set) {
+  return mqttCtrlClockUnset(now, clock_never_set) ? 0 : now;
 }
 
 // A node cut off from Wi-Fi may have lost NTP, and a clock nobody set makes every expiry

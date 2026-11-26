@@ -88,7 +88,7 @@ void Fork::publishRelayResult(const uint8_t* rid, Mcc3ForwardResult& result) {
   char topic[MQTTCTRL_MAX_TOPIC + 1];
   if (keys == NULL || !mcc3ResultTopic(rid, topic, sizeof(topic))) return;
   const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
-  result.clock = now >= MQTTConnectionPolicy::kSyncedClockEpoch ? now : 0;
+  result.clock = mqttCtrlClockReported(now, clockNeverSet(now));
   uint8_t nonce[MCC3_NONCE_LEN];
   _mesh.getRNG()->random(nonce, sizeof(nonce));
   static char sealed[MCC3_FWD_RES_B64 + 1];   // loop task only

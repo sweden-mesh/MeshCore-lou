@@ -389,13 +389,12 @@ bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,
 
   if (memcmp(command, "set cmd ", 8) == 0) {
     bool on = false;
-    if (!forkParseOnOff(&command[8], &on)) {
-      strcpy(reply, "Err - use: set cmd on [<broker host>]|off");
-      return true;
+    const char* answer;
+    if (mqttCtrlSetAnswer(&command[8], FORK_UPLINK, &on, &answer)) {
+      _enabled = on;
+      save();
     }
-    _enabled = on;
-    save();
-    strcpy(reply, "OK");
+    strcpy(reply, answer);
     return true;
   }
 

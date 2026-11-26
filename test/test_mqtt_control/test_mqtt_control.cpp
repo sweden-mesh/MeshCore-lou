@@ -1944,6 +1944,11 @@ TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   EXPECT_FALSE(mqttCtrlClockUnset(power_on, false));
   EXPECT_TRUE(mqttCtrlClockUnset(MQTTConnectionPolicy::kSyncedClockEpoch - 1, false));
   EXPECT_FALSE(mqttCtrlClockUnset(MQTTConnectionPolicy::kSyncedClockEpoch, false));
+  // What the node reports as its clock follows the same rule: 0 until somebody set it.
+  EXPECT_EQ(0u, mqttCtrlClockReported(unset, false));
+  EXPECT_EQ(0u, mqttCtrlClockReported(power_on + 3600, true));
+  EXPECT_EQ(power_on + 3600, mqttCtrlClockReported(power_on + 3600, false));
+  EXPECT_EQ(1795000000u, mqttCtrlClockReported(1795000000u, false));
   // MQTT still refuses: its expiry window does not move.
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlCheckExpiry(unset, 1795000000));
   // A set clock is held to the same window as MQTT.
@@ -1957,6 +1962,33 @@ TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&h.env, 4, power_on + 3600, true, true, false));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, power_on + 3600, true, true, true));
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, power_on + 3600, true, true, true));
+}
+
+TEST(MeshOnly, SetCmdNamesNoBrokerOnAnImageWithoutMqtt) {
+  bool on = false;
+  const char* answer = NULL;
+  EXPECT_TRUE(mqttCtrlSetAnswer("on", false, &on, &answer));
+  EXPECT_TRUE(on);
+  EXPECT_STREQ("OK", answer);
+  EXPECT_TRUE(mqttCtrlSetAnswer("on\r\n", false, &on, &answer));
+  EXPECT_STREQ("OK", answer);
+  EXPECT_TRUE(mqttCtrlSetAnswer("off", false, &on, &answer));
+  EXPECT_FALSE(on);
+  EXPECT_STREQ("OK", answer);
+  // The plane goes on, and the host that has nowhere to go is said to be unused.
+  EXPECT_TRUE(mqttCtrlSetAnswer("on mqtt.meshcore-vgr.se", false, &on, &answer));
+  EXPECT_TRUE(on);
+  EXPECT_STREQ("OK - mesh only: this image has no MQTT, the host is not used", answer);
+  EXPECT_TRUE(mqttCtrlSetAnswer("off mqtt.meshcore-vgr.se", false, &on, &answer));
+  EXPECT_STREQ("OK", answer);
+  EXPECT_FALSE(mqttCtrlSetAnswer("maybe", false, &on, &answer));
+  EXPECT_STREQ("Err - use: set cmd on|off", answer);
+  EXPECT_EQ(NULL, strstr(answer, "broker"));
+  // An Observer image keeps its usage, and a host never reaches this answer there.
+  EXPECT_FALSE(mqttCtrlSetAnswer("maybe", true, &on, &answer));
+  EXPECT_STREQ("Err - use: set cmd on [<broker host>]|off", answer);
+  EXPECT_TRUE(mqttCtrlSetAnswer("on", true, &on, &answer));
+  EXPECT_STREQ("OK", answer);
 }
 
 TEST(MeshRoad, AutoOpensFifteenMinutesAfterTheSlotWentDown) {

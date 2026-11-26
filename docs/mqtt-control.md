@@ -543,8 +543,8 @@ The checks after the signature are the plane's, with these differences:
   default, and an ESP32 that lost power at 1 March 2026, counting up from there. Until that
   clock is set (by a time server, by hand or by `time <epoch>`, below) the expiry is not
   checked and the counter alone stops a replay. An ESP32 that restarts without losing power
-  keeps its clock, and one that never had network may then read the kept value as a set
-  clock: the expiry is judged against it, and `time <epoch>` is the way out.
+  keeps its clock, and with it whether anybody set it, with or without a network. Such a
+  node reports its clock as 0 in its alive message, its results and its answers.
 - **A flooded request is answered 15 to 30 s later**, at random, once its copies have died
   down around the node: an answer sent at once goes out while the repeaters around are still
   repeating the request, and is lost (measured at Gisebo, 2026-11-23). A request that came
@@ -603,6 +603,8 @@ above holds, with these differences:
 
 - **No topic and no region.** A request signs the node's key and the road, so a node with no
   MQTT and no `mqtt.iata` needs neither. `get cmd` says `mesh only`.
+- **`set cmd on|off` and no host.** There is no broker to name: `set cmd on <host>` switches
+  the plane on and answers `OK - mesh only: this image has no MQTT, the host is not used`.
 - **The road is always open** while `set cmd on`: there is no MQTT to wait for, so
   `cmd.mesh` does not exist there, and a mode carried over in `/mqttcontrol` from an
   Observer image is ignored.
