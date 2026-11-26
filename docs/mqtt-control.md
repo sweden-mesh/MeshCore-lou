@@ -603,6 +603,8 @@ above holds, with these differences:
 
 - **No topic and no region.** A request signs the node's key and the road, so a node with no
   MQTT and no `mqtt.iata` needs neither. `get cmd` says `mesh only`.
+- **`set cmd on|off` and no host.** There is no broker to name: `set cmd on <host>` switches
+  the plane on and answers `OK - mesh only: this image has no MQTT, the host is not used`.
 - **The road is always open** while `set cmd on`: there is no MQTT to wait for, so
   `cmd.mesh` does not exist there, and a mode carried over in `/mqttcontrol` from an
   Observer image is ignored.
