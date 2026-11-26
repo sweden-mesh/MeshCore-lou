@@ -182,7 +182,7 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
       result = MQTTCTRL_ERR_BAD_VERSION;
       break;
     }
-    result = execute(env, false, now, runner, reply, out);
+    result = execute(env, false, now, false, runner, reply, out);
   } while (false);
 
   mqttCtrlQueuePop(&_queue);
@@ -199,7 +199,8 @@ MqttCtrlResult MqttControl::takeForward(Mcc3Forward* out) {
 
 // Everything after the key has vouched for a command, on either road.
 MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, bool mesh,
-                                    uint32_t now, MqttCommandRunner* runner, char* reply,
+                                    uint32_t now, bool clock_never_set,
+                                    MqttCommandRunner* runner, char* reply,
                                     MqttCtrlOutcome* out) {
   // Past this line the sender held the command key, so the outcome is safe to
   // publish however it turns out -- and the counter and command it signed are
@@ -212,7 +213,8 @@ MqttCtrlResult MqttControl::execute(const MqttCtrlEnvelope& env, bool mesh,
     out->command[n] = 0;
   }
 
-  MqttCtrlResult result = mesh ? mqttCtrlAuthoriseMesh(&env, _counter, now, FORK_AUTO_REPLY, FORK_UPLINK)
+  MqttCtrlResult result = mesh ? mqttCtrlAuthoriseMesh(&env, _counter, now, FORK_AUTO_REPLY, FORK_UPLINK,
+                                                       clock_never_set)
                                : mqttCtrlAuthorise(&env, _counter, now, FORK_AUTO_REPLY);
   if (result != MQTTCTRL_OK) return result;
 
@@ -275,8 +277,9 @@ void MqttControl::rekeyTakeOver() {
   save();
 }
 
-MqttCtrlResult MqttControl::meshCommand(const Mcc3Command& cmd, uint32_t now, bool open,
-                                        MqttCommandRunner* runner, char* reply, bool* answer) {
+MqttCtrlResult MqttControl::meshCommand(const Mcc3Command& cmd, uint32_t now, bool clock_never_set,
+                                        bool open, MqttCommandRunner* runner, char* reply,
+                                        bool* answer) {
   reply[0] = 0;
   *answer = false;
   if (_mesh_answered_any && !mqttCtrlCounterAccepted(_mesh_answered, cmd.counter)) return MQTTCTRL_ERR_REPLAY;
@@ -291,7 +294,7 @@ MqttCtrlResult MqttControl::meshCommand(const Mcc3Command& cmd, uint32_t now, bo
   env.expiry = cmd.expiry;
   env.command = cmd.command;
   env.command_len = cmd.command_len;
-  return execute(env, true, now, runner, reply, NULL);
+  return execute(env, true, now, clock_never_set, runner, reply, NULL);
 }
 
 bool MqttControl::handleCommand(MqttCtrlKeyCaller caller, const char* password,

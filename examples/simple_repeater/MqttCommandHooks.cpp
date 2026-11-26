@@ -421,6 +421,23 @@ void Fork::formatSensors(char* reply) {
                       _mesh.telemetry.getBuffer(), _mesh.telemetry.getSize());
 }
 
+// Whether `now`, a reading of the node's clock, is an ESP32's power-on placeholder counting
+// up: the rule the time sync judges its fallback clock by. Other boards start in 2024, which
+// mqttCtrlClockUnset sees without help.
+bool Fork::clockNeverSet(uint32_t now) const {
+#ifdef ESP_PLATFORM
+  const uint32_t uptime_secs = (uint32_t)(esp_timer_get_time() / 1000000LL);
+#ifdef WITH_MQTT_BRIDGE
+  const uint32_t baseline = MQTTBridge::neverSetClockBaseline();
+#else
+  const uint32_t baseline = MQTTConnectionPolicy::kPowerOnClockEpoch;
+#endif
+  return MQTTConnectionPolicy::clockNeverSet(now, baseline, uptime_secs);
+#else
+  return false;
+#endif
+}
+
 void Fork::debugLine(const char* fmt, ...) {
   if (!_ctrl_debug) return;
   char line[120];
@@ -657,8 +674,8 @@ void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   char reply[MQTTCTRL_MAX_REPLY];
   bool answer = false;
   const bool open = mqttCtrlMeshRoadOpen(FORK_UPLINK, _mqtt_control.meshMode(), _mesh_down_since, millis());
-  result = _mqtt_control.meshCommand(cmd, _mesh.getRTCClock()->getCurrentTime(), open, &_control_link,
-                                     reply, &answer);
+  const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
+  result = _mqtt_control.meshCommand(cmd, now, clockNeverSet(now), open, &_control_link, reply, &answer);
   if (result == MQTTCTRL_OK) _mesh_ok++;
   else _mesh_refused++;
   MESH_DEBUG_PRINTLN("MqttControl: mcc3 mesh result %d, reply '%s'", (uint32_t)result, reply);

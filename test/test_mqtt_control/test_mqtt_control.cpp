@@ -1928,6 +1928,17 @@ TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   const uint32_t unset = 1715770351 + 3600;           // the firmware's 2024 default, an hour up
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(unset, 1795000000));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(0, 1));
+  // An ESP32 after a power cycle counts up from 1 March 2026, past every threshold: the
+  // caller says that clock was never set, and the same reading of a set clock is judged.
+  const uint32_t power_on = MQTTConnectionPolicy::kPowerOnClockEpoch;
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(power_on, 1795000000, true));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(power_on + 3600, 1, true));
+  EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlMeshCheckExpiry(power_on + 3600, 1795000000, false));
+  EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlMeshCheckExpiry(power_on + 3600, power_on, false));
+  EXPECT_TRUE(mqttCtrlClockUnset(power_on, true));
+  EXPECT_FALSE(mqttCtrlClockUnset(power_on, false));
+  EXPECT_TRUE(mqttCtrlClockUnset(MQTTConnectionPolicy::kSyncedClockEpoch - 1, false));
+  EXPECT_FALSE(mqttCtrlClockUnset(MQTTConnectionPolicy::kSyncedClockEpoch, false));
   // MQTT still refuses: its expiry window does not move.
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlCheckExpiry(unset, 1795000000));
   // A set clock is held to the same window as MQTT.
@@ -1938,6 +1949,9 @@ TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   Cmd h(5, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, unset, true));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, unset, true));
+  EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&h.env, 4, power_on + 3600, true, true, false));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, power_on + 3600, true, true, true));
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, power_on + 3600, true, true, true));
 }
 
 TEST(MeshRoad, AutoOpensFifteenMinutesAfterTheSlotWentDown) {
@@ -2532,6 +2546,11 @@ TEST(MeshOnly, CounterExpiryAndDenyListAreUnchanged) {
   Cmd h(5, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, unset, true, false));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, unset, true, false));
+  // The same on an ESP32 that lost power: its clock reads 2026 and was never set.
+  const uint32_t power_on = MQTTConnectionPolicy::kPowerOnClockEpoch + 60;
+  EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&h.env, 4, power_on, true, false, false));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, power_on, true, false, true));
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, power_on, true, false, true));
   EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthoriseMesh(&h.env, 4, 1795000001, true, false));
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&h.env, 4, 1795000000 - MQTTCTRL_MAX_FUTURE_SECS - 1,
                                                        true, false));

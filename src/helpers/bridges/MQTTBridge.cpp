@@ -60,7 +60,7 @@ static const uint32_t kNeverSetClockMagic = 0x4E53434BUL;
 static_assert(MQTTConnectionPolicy::kPowerOnClockEpoch == RTC_TIME_MIN,
               "kPowerOnClockEpoch must be what ESP32RTCClock::begin() seeds the clock with");
 
-static uint32_t neverSetClockBaseline() {
+uint32_t MQTTBridge::neverSetClockBaseline() {
   if (s_never_set_clock_magic == kNeverSetClockMagic &&
       s_never_set_clock_time > MQTTConnectionPolicy::kPowerOnClockEpoch) {
     return s_never_set_clock_time;

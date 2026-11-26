@@ -536,9 +536,11 @@ The checks after the signature are the plane's, with these differences:
   back on its network and its broker; `reboot` applies them. Everything else the deny list
   holds stays denied, and the command still runs with a non-zero `sender_timestamp`.
 - **An unset clock.** A board that does not seed its clock starts at the firmware's 2024
-  default. Then the expiry is not checked and the counter alone stops a replay. An ESP32
-  that lost power starts at 1 March 2026 and counts up from there: its clock is behind, the
-  expiry is judged against it, and `time <epoch>` (below) is the way out.
+  default, and an ESP32 that lost power at 1 March 2026, counting up from there. Until that
+  clock is set (by a time server, by hand or by `time <epoch>`, below) the expiry is not
+  checked and the counter alone stops a replay. An ESP32 that restarts without losing power
+  keeps its clock, and one that never had network may then read the kept value as a set
+  clock: the expiry is judged against it, and `time <epoch>` is the way out.
 - **A flooded request is answered 15 to 30 s later**, at random, once its copies have died
   down around the node: an answer sent at once goes out while the repeaters around are still
   repeating the request, and is lost (measured at Gisebo, 2026-11-23). A request that came

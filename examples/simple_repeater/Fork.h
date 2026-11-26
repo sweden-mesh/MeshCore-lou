@@ -101,6 +101,7 @@ class Fork {
   // `set cmd.debug on` is in force. Never a key, a signature or more of a command than
   // its outcome.
   void debugLine(const char* fmt, ...);
+  bool clockNeverSet(uint32_t now) const;
   void formatNodeStats(char* reply);
   void formatSensors(char* reply);
 

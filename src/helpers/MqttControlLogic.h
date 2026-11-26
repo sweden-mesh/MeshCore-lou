@@ -1021,14 +1021,20 @@ static inline bool mqttCtrlMeshCommandAllowed(const char* command, size_t len, b
   return mqttCtrlMeshAllowance(command, len) || mqttCtrlCommandAllowed(command, len, auto_reply);
 }
 
-// A node cut off from Wi-Fi may have lost NTP, and a clock still at the 2024 default of a
-// board that does not seed one (VolatileRTCClock, `clock reset`) makes every expiry
+// A clock nobody set: the 2024 default of a board that does not seed one (VolatileRTCClock,
+// `clock reset`), which reads before kSyncedClockEpoch, or an ESP32's power-on placeholder
+// counting up from 1 March 2026, which is past that threshold and which only the caller can
+// tell from a set clock (MQTTConnectionPolicy::clockNeverSet, the rule the time sync uses).
+static inline bool mqttCtrlClockUnset(uint32_t now, bool clock_never_set) {
+  return clock_never_set || now < MQTTConnectionPolicy::kSyncedClockEpoch;
+}
+
+// A node cut off from Wi-Fi may have lost NTP, and a clock nobody set makes every expiry
 // meaningless. Then the counter alone stops a replay, as it does anyway (operator ruling
-// 2026-11-16). An ESP32 after a power cycle starts at 1 March 2026 instead
-// (MQTTConnectionPolicy::kPowerOnClockEpoch), which is past this threshold: there the expiry
-// is judged against that clock, and `time <epoch>` below is the way out.
-static inline MqttCtrlResult mqttCtrlMeshCheckExpiry(uint32_t now, uint32_t expiry) {
-  if (now < MQTTConnectionPolicy::kSyncedClockEpoch) return MQTTCTRL_OK;
+// 2026-11-16).
+static inline MqttCtrlResult mqttCtrlMeshCheckExpiry(uint32_t now, uint32_t expiry,
+                                                     bool clock_never_set = false) {
+  if (mqttCtrlClockUnset(now, clock_never_set)) return MQTTCTRL_OK;
   return mqttCtrlCheckExpiry(now, expiry);
 }
 
@@ -1064,14 +1070,15 @@ static inline MqttCtrlResult mqttCtrlMeshCheckClockStep(uint32_t epoch, uint32_t
 // mqttCtrlAuthorise for the mesh road: the same counter, its own expiry and command rules.
 static inline MqttCtrlResult mqttCtrlAuthoriseMesh(const MqttCtrlEnvelope* env,
                                                    uint32_t last_counter, uint32_t now,
-                                                   bool auto_reply, bool uplink = true) {
+                                                   bool auto_reply, bool uplink = true,
+                                                   bool clock_never_set = false) {
   if (env == NULL) return MQTTCTRL_ERR_EMPTY;
   if (!mqttCtrlCounterAccepted(last_counter, env->counter)) return MQTTCTRL_ERR_REPLAY;
   uint32_t step = 0;
   if (mqttCtrlMeshClockStep(env->command, env->command_len, &step)) {
     return mqttCtrlMeshCheckClockStep(step, env->expiry);
   }
-  MqttCtrlResult expiry = mqttCtrlMeshCheckExpiry(now, env->expiry);
+  MqttCtrlResult expiry = mqttCtrlMeshCheckExpiry(now, env->expiry, clock_never_set);
   if (expiry != MQTTCTRL_OK) return expiry;
   if (!mqttCtrlMeshCommandAllowed(env->command, env->command_len, auto_reply, uplink)) return MQTTCTRL_ERR_NOT_ALLOWED;
   return MQTTCTRL_OK;

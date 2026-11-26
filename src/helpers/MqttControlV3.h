@@ -697,9 +697,10 @@ static inline bool mcc3RouteWide(uint8_t route, bool has_home) {
 }
 
 static inline int mcc3RelayAdmit(Mcc3Relay* r, uint8_t mode, uint32_t now, const Mcc3Forward* f,
-                                 const uint8_t node_key[32], bool has_home) {
+                                 const uint8_t node_key[32], bool has_home,
+                                 bool clock_never_set = false) {
   if (mode != MQTTCTRL_RELAY_OWN) return MCC3_FWD_OFF;
-  if (now < MQTTConnectionPolicy::kSyncedClockEpoch) return MCC3_FWD_CLOCK_UNSET;
+  if (mqttCtrlClockUnset(now, clock_never_set)) return MCC3_FWD_CLOCK_UNSET;
   if (f->expiry < now || f->expiry - now > MCC3_FWD_MAX_AHEAD_SECS) return MCC3_FWD_EXPIRED;
   if (!mqttCtrlCounterAccepted(r->last_counter, f->counter)) return MCC3_FWD_REPLAY;
   r->last_counter = f->counter;
