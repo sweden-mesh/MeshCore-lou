@@ -232,7 +232,7 @@ enum class ClockTrust : uint8_t {
 // What a finished time sync leaves. A server's answer verifies. Without one a usable
 // fallback clock is believed but not verified, and a clock no source vouches for stays
 // what it was. One answer verifies for good: a later sync that reaches no server (the
-// hourly refresh on a flaky link) does not send the node back to asking every 30 s.
+// hourly refresh on a flaky link) does not send the node back to its retry schedule.
 static inline ClockTrust clockTrustAfterSync(ClockTrust before, bool server_answered,
                                              bool fallback_usable) {
   if (server_answered || before == ClockTrust::Verified) return ClockTrust::Verified;
@@ -368,8 +368,8 @@ static inline ClockSource chooseFallbackClock(bool validating_server, uint32_t s
 // Whether a time the sync accepted is written to the clocks. A server's answer is, and a
 // chip's reading is copied into libc. The system clock taken as its own fallback already
 // holds that time: it is written once, when the node first gets a clock, so that a clock
-// chip receives it, and never again. Each write drops the fraction of a second, and at one
-// retry every 30 s that would be a clock losing minutes a day.
+// chip receives it, and never again. Each write drops the fraction of a second, and over
+// the retries that go on until a server answers that would be a clock running slow.
 static inline bool acceptedClockNeedsWriting(bool server_answered, ClockSource fallback,
                                              ClockTrust before) {
   return server_answered || fallback == ClockSource::Rtc || before == ClockTrust::NeverSet;

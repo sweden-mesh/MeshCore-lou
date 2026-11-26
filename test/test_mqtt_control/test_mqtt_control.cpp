@@ -1670,6 +1670,11 @@ TEST(Ping, TheAnswerNamesTheStepThatFailed) {
   EXPECT_STREQ("Err - no pong in 10 s: /cmd is not subscribed or the broker is not answering", out);
   mqttCtrlPingAnswer(MQTTCTRL_PING_OFF, 0, 0, NULL, out, sizeof(out));
   EXPECT_STREQ("Err - the command plane is off: set cmd on", out);
+  // A slot the server refused the plane's topic is told as that, with no ping sent.
+  mqttCtrlPingAnswer(MQTTCTRL_PING_SUB_REFUSED, 3, 0, NULL, out, sizeof(out));
+  EXPECT_STREQ("Err - the server refuses /cmd on slot 3: set cmd on, reboot", out);
+  EXPECT_EQ(5, MQTTCTRL_PING_NO_PONG);
+  EXPECT_EQ(6, MQTTCTRL_PING_SUB_REFUSED);
 }
 
 TEST(Ping, IsAdmittedOverThePlaneExactlyAndIsNoTransmit) {
@@ -1928,6 +1933,17 @@ TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   const uint32_t unset = 1715770351 + 3600;           // the firmware's 2024 default, an hour up
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(unset, 1795000000));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(0, 1));
+  // An ESP32 after a power cycle counts up from 1 March 2026, past every threshold: the
+  // caller says that clock was never set, and the same reading of a set clock is judged.
+  const uint32_t power_on = MQTTConnectionPolicy::kPowerOnClockEpoch;
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(power_on, 1795000000, true));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlMeshCheckExpiry(power_on + 3600, 1, true));
+  EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlMeshCheckExpiry(power_on + 3600, 1795000000, false));
+  EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlMeshCheckExpiry(power_on + 3600, power_on, false));
+  EXPECT_TRUE(mqttCtrlClockUnset(power_on, true));
+  EXPECT_FALSE(mqttCtrlClockUnset(power_on, false));
+  EXPECT_TRUE(mqttCtrlClockUnset(MQTTConnectionPolicy::kSyncedClockEpoch - 1, false));
+  EXPECT_FALSE(mqttCtrlClockUnset(MQTTConnectionPolicy::kSyncedClockEpoch, false));
   // MQTT still refuses: its expiry window does not move.
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlCheckExpiry(unset, 1795000000));
   // A set clock is held to the same window as MQTT.
@@ -1938,6 +1954,9 @@ TEST(MeshRoad, AnUnsetClockLeavesTheCounterAsTheOnlyGuard) {
   Cmd h(5, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, unset, true));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, unset, true));
+  EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&h.env, 4, power_on + 3600, true, true, false));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, power_on + 3600, true, true, true));
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, power_on + 3600, true, true, true));
 }
 
 TEST(MeshRoad, AutoOpensFifteenMinutesAfterTheSlotWentDown) {
@@ -2022,21 +2041,84 @@ TEST(GetCmd, TheLineStaysInsideTheReply) {
 }
 
 TEST(MeshRoad, ASlotTheServerRefusesIsDown) {
-  EXPECT_TRUE(mqttCtrlSlotUp(true, MQTT_SUB_GRANTED));
-  EXPECT_TRUE(mqttCtrlSlotUp(true, MQTT_SUB_PENDING));       // just connected, no SUBACK yet
-  EXPECT_FALSE(mqttCtrlSlotUp(true, MQTT_SUB_REFUSED));
-  EXPECT_FALSE(mqttCtrlSlotUp(false, MQTT_SUB_PENDING));
-  EXPECT_FALSE(mqttCtrlSlotUp(false, MQTT_SUB_GRANTED));
-  EXPECT_FALSE(mqttCtrlSlotUp(false, MQTT_SUB_REFUSED));
+  // What the broker said, and what it said before: a refusal stays until a grant.
+  EXPECT_FALSE(mqttCtrlSlotRefused(false, MQTT_SUB_GRANTED));
+  EXPECT_FALSE(mqttCtrlSlotRefused(false, MQTT_SUB_PENDING));   // just connected, no SUBACK yet
+  EXPECT_TRUE(mqttCtrlSlotRefused(false, MQTT_SUB_REFUSED));
+  EXPECT_TRUE(mqttCtrlSlotRefused(true, MQTT_SUB_REFUSED));
+  EXPECT_TRUE(mqttCtrlSlotRefused(true, MQTT_SUB_PENDING));     // refused, and connecting again
+  EXPECT_FALSE(mqttCtrlSlotRefused(true, MQTT_SUB_GRANTED));
+  EXPECT_TRUE(mqttCtrlSlotUp(true, false));
+  EXPECT_FALSE(mqttCtrlSlotUp(true, true));
+  EXPECT_FALSE(mqttCtrlSlotUp(false, false));
+  EXPECT_FALSE(mqttCtrlSlotUp(false, true));
+}
+
+// The slot as Fork::loopMqttControl samples it: the bridge's connection and SUBACK state in,
+// the kept refusal and the time the slot went down carried from pass to pass.
+struct SlotWatch {
+  bool refused = false;
+  uint32_t since = 0;
+  void pass(bool connected, uint8_t sub_state, uint32_t now) {
+    refused = mqttCtrlSlotRefused(refused, sub_state);
+    since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(connected, refused), since, now);
+  }
+  bool open(uint32_t now) const { return mqttCtrlMeshOpen(MQTTCTRL_MESH_AUTO, since, now); }
+};
+
+TEST(MeshRoad, ARefusedSlotThatKeepsReconnectingStillOpensTheRoad) {
+  SlotWatch w;
+  uint32_t now = 5000;
+  w.pass(true, MQTT_SUB_PENDING, now);
+  EXPECT_EQ(0u, w.since);
+  now += 200;
+  w.pass(true, MQTT_SUB_REFUSED, now);
+  const uint32_t refused_at = now;
+  EXPECT_EQ(refused_at, w.since);
+  // Dropped and back every two minutes, refused each time: disconnected, connected with
+  // no answer yet, refused. None of it starts the count again.
+  const uint32_t opens_at = refused_at + MQTTCTRL_MESH_AUTO_AFTER_MS;
+  while (now + 120000 < opens_at + 300000) {
+    now += 100000;
+    w.pass(false, MQTT_SUB_PENDING, now);
+    now += 19000;
+    w.pass(true, MQTT_SUB_PENDING, now);
+    EXPECT_TRUE(w.refused);
+    EXPECT_EQ(refused_at, w.since) << "a connect not yet answered counted as up at " << now;
+    EXPECT_EQ(now >= opens_at, w.open(now)) << now;
+    now += 1000;
+    w.pass(true, MQTT_SUB_REFUSED, now);
+    EXPECT_EQ(refused_at, w.since);
+  }
+  EXPECT_FALSE(w.open(opens_at - 1));
+  EXPECT_TRUE(w.open(opens_at));
+  EXPECT_TRUE(w.open(now));
+  char out[MQTTCTRL_MAX_REPLY];
+  mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, w.since, now, w.refused, out, sizeof(out));
+  EXPECT_STREQ("> auto, open: the server refuses /cmd 18 min", out);
+  // The server grants the topic on the next connect: the slot is up and the road closes.
+  now += 100000;
+  w.pass(false, MQTT_SUB_PENDING, now);
+  w.pass(true, MQTT_SUB_PENDING, now + 500);
+  EXPECT_TRUE(w.open(now + 500));
+  w.pass(true, MQTT_SUB_GRANTED, now + 900);
+  EXPECT_FALSE(w.refused);
+  EXPECT_EQ(0u, w.since);
+  EXPECT_FALSE(w.open(now + 900));
+  // ... and a slot that was never refused counts as up while its connect is unanswered.
+  w.pass(false, MQTT_SUB_PENDING, now + 2000);
+  EXPECT_NE(0u, w.since);
+  w.pass(true, MQTT_SUB_PENDING, now + 3000);
+  EXPECT_EQ(0u, w.since);
 }
 
 TEST(MeshRoad, ARefusedSlotOpensTheRoadAfterTheUsualWait) {
   // connected the whole time: pending for a moment, then mcc/cmd refused, and it stays so
   uint32_t since = 0, now = 5000;
-  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, MQTT_SUB_PENDING), since, now);
+  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, mqttCtrlSlotRefused(false, MQTT_SUB_PENDING)), since, now);
   EXPECT_EQ(0u, since);
   now += 200;
-  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, MQTT_SUB_REFUSED), since, now);
+  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, mqttCtrlSlotRefused(false, MQTT_SUB_REFUSED)), since, now);
   EXPECT_EQ(5200u, since);
   EXPECT_FALSE(mqttCtrlMeshOpen(MQTTCTRL_MESH_AUTO, since, now + MQTTCTRL_MESH_AUTO_AFTER_MS - 1));
   EXPECT_TRUE(mqttCtrlMeshOpen(MQTTCTRL_MESH_AUTO, since, now + MQTTCTRL_MESH_AUTO_AFTER_MS));
@@ -2047,7 +2129,7 @@ TEST(MeshRoad, ARefusedSlotOpensTheRoadAfterTheUsualWait) {
   mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, since, since + 17 * 60000, true, out, sizeof(out));
   EXPECT_STREQ("> auto, open: the server refuses /cmd 17 min", out);
   // the slot granted again closes it
-  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, MQTT_SUB_GRANTED), since, now);
+  since = mqttCtrlMeshDownSince(mqttCtrlSlotUp(true, mqttCtrlSlotRefused(true, MQTT_SUB_GRANTED)), since, now);
   EXPECT_EQ(0u, since);
   mqttCtrlMeshDescribe(MQTTCTRL_MESH_AUTO, since, now, false, out, sizeof(out));
   EXPECT_STREQ("> auto, closed: MQTT up", out);
@@ -2532,6 +2614,11 @@ TEST(MeshOnly, CounterExpiryAndDenyListAreUnchanged) {
   Cmd h(5, 1795000000, "get name");
   EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, unset, true, false));
   EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, unset, true, false));
+  // The same on an ESP32 that lost power: its clock reads 2026 and was never set.
+  const uint32_t power_on = MQTTConnectionPolicy::kPowerOnClockEpoch + 60;
+  EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&h.env, 4, power_on, true, false, false));
+  EXPECT_EQ(MQTTCTRL_OK, mqttCtrlAuthoriseMesh(&h.env, 4, power_on, true, false, true));
+  EXPECT_EQ(MQTTCTRL_ERR_REPLAY, mqttCtrlAuthoriseMesh(&h.env, 5, power_on, true, false, true));
   EXPECT_EQ(MQTTCTRL_ERR_EXPIRED, mqttCtrlAuthoriseMesh(&h.env, 4, 1795000001, true, false));
   EXPECT_EQ(MQTTCTRL_ERR_FUTURE, mqttCtrlAuthoriseMesh(&h.env, 4, 1795000000 - MQTTCTRL_MAX_FUTURE_SECS - 1,
                                                        true, false));

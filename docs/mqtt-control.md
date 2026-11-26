@@ -136,9 +136,10 @@ What changes for a node that comes from lou-20 or older:
 - **`refused: clock?` in `get mqtt.status`.** A slot that signs in with a token was refused by
   its broker while no NTP server has confirmed the node's clock. A token made from a wrong
   clock is expired on arrival. The node asks for a time sync by itself after such a refusal,
-  and the sync is tried again every 30 s until a server answers. If it stays: check that the
-  network lets NTP through, or set the clock on the console with `time <epoch>`; the tokens
-  are then made again at once. `no clock` means the clock was never set (the board started at
+  and the sync is tried again until a server answers: after 30 s, 1 min and 5 min, then
+  every 15 min, and from 30 s again when the network comes back or the clock is set by
+  hand. If it stays: check that the network lets NTP through, or set the clock on the
+  console with `time <epoch>`; the tokens are then made again at once. `no clock` means the clock was never set (the board started at
   its power-on date) and the slot waits for one; the cure is the same.
   `get mqttN.diag` says `clock not verified: run time <epoch> or check NTP` or
   `clock not set: run time <epoch> or check NTP`.
@@ -286,7 +287,8 @@ drops it before anything else looks at it.
 whether the slot is connected, how it signs in (from lou-21: `jwt`, as the `mccontrol` preset
 and a slot `set cmd on <host>` wrote do, or `password`), what the broker said about the subscriptions since it
 connected (`subscribed`, `not subscribed` while no answer has come, and from lou-21 `refused`
-when it refused one of the plane's topics, which a later topic it grants does not undo), how
+when it refused one of the plane's topics, which stays across a reconnect until the broker
+grants them), how
 long ago the command key last vouched for a command, and how the last ping
 ended: `pong in N ms`, `no pong in 10 s`, `publish refused`, `waiting` or `-` (no ping since boot).
 From lou-18 a command refused before the key vouched for it -- no command key, the wrong one,
@@ -315,13 +317,15 @@ OK - ping sent, read 'get cmd' for the pong
 Err - the command plane is off: set cmd on
 Err - slot 2 not connected
 Err - publish refused
+Err - the server refuses /cmd on slot 2: set cmd on, reboot
 Err - a ping is already waiting: read 'get cmd'
 ```
 
 The command broker answers `pong|<same nonce>` on the node's own `mcc/cmd/{NODE}`; `get cmd`
 shows the round trip, or `no pong in 10 s` -- the `/cmd` subscription, or a broker that does
 not answer pings. The echo has to be the broker's: it shows that the broker is judging this
-node's topics.
+node's topics. From lou-21 a node the server has refused the plane's topic (`/cmd refused`)
+sends no ping, since no pong can reach it, and says so.
 
 A pong is not a command. It is recognised before anything is opened, so it costs a string
 compare, never an Ed25519 verify; it is never executed, answered, logged or counted towards
@@ -536,9 +540,11 @@ The checks after the signature are the plane's, with these differences:
   back on its network and its broker; `reboot` applies them. Everything else the deny list
   holds stays denied, and the command still runs with a non-zero `sender_timestamp`.
 - **An unset clock.** A board that does not seed its clock starts at the firmware's 2024
-  default. Then the expiry is not checked and the counter alone stops a replay. An ESP32
-  that lost power starts at 1 March 2026 and counts up from there: its clock is behind, the
-  expiry is judged against it, and `time <epoch>` (below) is the way out.
+  default, and an ESP32 that lost power at 1 March 2026, counting up from there. Until that
+  clock is set (by a time server, by hand or by `time <epoch>`, below) the expiry is not
+  checked and the counter alone stops a replay. An ESP32 that restarts without losing power
+  keeps its clock, and one that never had network may then read the kept value as a set
+  clock: the expiry is judged against it, and `time <epoch>` is the way out.
 - **A flooded request is answered 15 to 30 s later**, at random, once its copies have died
   down around the node: an answer sent at once goes out while the repeaters around are still
   repeating the request, and is lost (measured at Gisebo, 2026-11-23). A request that came
@@ -572,7 +578,9 @@ reads `/cmd refused`) counts as down as well: a node whose login the command ser
 accepts hears no command over MQTT, so after the same 15 minutes it can be reached, and mended,
 over the air. `get cmd.mesh` then reads `> auto, open: the server refuses /cmd 17 min` where it
 would read `MQTT down 17 min`. The moment between a connect and the broker's answer is not
-counted as down.
+counted as down, unless the server refused the node the last time: a refusal is kept until the
+server grants the topic, so a refused slot that drops and reconnects every few minutes still
+opens the road 15 minutes after the first refusal.
 
 **A node answers over the mesh on an airtime budget of its own:** 5 % of 15 minutes, then 1 %
 (9 s) of the next 15, then a burst again. A request that arrives when the budget is used up

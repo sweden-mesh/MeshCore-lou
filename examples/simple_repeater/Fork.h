@@ -101,6 +101,7 @@ class Fork {
   // `set cmd.debug on` is in force. Never a key, a signature or more of a command than
   // its outcome.
   void debugLine(const char* fmt, ...);
+  bool clockNeverSet(uint32_t now) const;
   void formatNodeStats(char* reply);
   void formatSensors(char* reply);
 
@@ -136,6 +137,7 @@ class Fork {
   uint8_t _ctrl_last_unverified = 0;           // ... and the last one's MqttCtrlResult
   uint32_t _ctrl_dropped_seen = 0;             // arrivals the full queue dropped, as last put on a debug line
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
+  bool _ctrl_refused = false;                 // the server refused the plane's topic and has not granted it since
   // The relay (MqttRelayHooks.cpp): one forward at a time waits for its target's answer,
   // and the target is a peer of this node only while it does.
   Mcc3Relay _relay;

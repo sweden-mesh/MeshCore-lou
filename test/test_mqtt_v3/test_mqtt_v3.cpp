@@ -1045,17 +1045,18 @@ struct RelayBench {
   uint32_t air_ms = 1700;
 
   // As Fork::relayForward: open, admit, and count a send that went out.
-  int take(const std::string& payload, uint32_t now, bool pool_empty = false) {
+  int take(const std::string& payload, uint32_t now, bool pool_empty = false,
+           bool clock_never_set = false) {
     Mcc3Forward f;
     if (mcc3OpenForward(&node, payload.data(), payload.size(), &f) != MQTTCTRL_OK) return -2;
-    int status = mcc3RelayAdmit(&relay, mode, now, &f, NODE.pub, has_home);
+    int status = mcc3RelayAdmit(&relay, mode, now, &f, NODE.pub, has_home, clock_never_set);
     if (status != MCC3_FWD_SEND) return status;
     if (pool_empty) return MCC3_FWD_SEND_FAILED;
     mcc3RelaySent(&relay, now, f.route, has_home, air_ms);
     return MCC3_FWD_SEND;
   }
-  int take(const Mcc3Forward& f, uint32_t now, bool pool_empty = false) {
-    return take(sealForwardRaw(owner, f), now, pool_empty);
+  int take(const Mcc3Forward& f, uint32_t now, bool pool_empty = false, bool clock_never_set = false) {
+    return take(sealForwardRaw(owner, f), now, pool_empty, clock_never_set);
   }
 };
 
@@ -1107,6 +1108,11 @@ TEST(Mcc3Relay, OffAndAnUnsetClockRefuseBeforeTheCounterIsTaken) {
   EXPECT_EQ(MCC3_FWD_CLOCK_UNSET, b.take(f, 0));
   f.expiry = MQTTConnectionPolicy::kSyncedClockEpoch - 1 + 60;
   EXPECT_EQ(MCC3_FWD_CLOCK_UNSET, b.take(f, MQTTConnectionPolicy::kSyncedClockEpoch - 1));
+  // An ESP32 after a power cycle reads 1 March 2026 and up: no clock either, when the
+  // caller says it was never set, though the forward's expiry would pass against it.
+  const uint32_t power_on = MQTTConnectionPolicy::kPowerOnClockEpoch + 60;
+  f.expiry = power_on + 60;
+  EXPECT_EQ(MCC3_FWD_CLOCK_UNSET, b.take(f, power_on, false, true));
   EXPECT_EQ(0u, b.relay.last_counter);
   EXPECT_FALSE(b.relay.waiting);
   EXPECT_EQ(MCC3_FWD_SEND, b.take(forwardTo(TARGET, 9, 0), RELAY_NOW));

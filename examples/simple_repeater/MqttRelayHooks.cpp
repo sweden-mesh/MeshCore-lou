@@ -23,7 +23,8 @@ void Fork::relayForward() {
   const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
   const RegionEntry* home = _mesh.region_map.getHomeRegion();
   const bool has_home = home != NULL && !home->isWildcard();
-  int status = mcc3RelayAdmit(&_relay, _mqtt_control.relayMode(), now, &fwd, _mesh.self_id.pub_key, has_home);
+  int status = mcc3RelayAdmit(&_relay, _mqtt_control.relayMode(), now, &fwd, _mesh.self_id.pub_key, has_home,
+                              clockNeverSet(now));
   if (status == MCC3_FWD_SEND) {
     uint32_t air_ms = 0;
     if (sendRelayRequest(fwd, &air_ms)) {

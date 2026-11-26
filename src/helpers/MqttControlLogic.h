@@ -431,6 +431,7 @@ enum MqttCtrlPingStep {
   MQTTCTRL_PING_NOT_CONNECTED,
   MQTTCTRL_PING_PUBLISH_REFUSED,
   MQTTCTRL_PING_NO_PONG,
+  MQTTCTRL_PING_SUB_REFUSED,       // the server refused the plane's topic: no pong can come
 };
 
 // The ping never blocks the loop: it is armed, published, and settled later by
@@ -523,6 +524,9 @@ static inline void mqttCtrlPingAnswer(MqttCtrlPingStep step, int slot, uint32_t 
       break;
     case MQTTCTRL_PING_PUBLISH_REFUSED:
       snprintf(out, out_size, "Err - publish refused");
+      break;
+    case MQTTCTRL_PING_SUB_REFUSED:
+      snprintf(out, out_size, "Err - the server refuses /cmd on slot %d: set cmd on, reboot", slot);
       break;
     default:
       snprintf(out, out_size, "Err - no pong in %d s: /cmd is not subscribed or the broker "
@@ -1021,14 +1025,20 @@ static inline bool mqttCtrlMeshCommandAllowed(const char* command, size_t len, b
   return mqttCtrlMeshAllowance(command, len) || mqttCtrlCommandAllowed(command, len, auto_reply);
 }
 
-// A node cut off from Wi-Fi may have lost NTP, and a clock still at the 2024 default of a
-// board that does not seed one (VolatileRTCClock, `clock reset`) makes every expiry
+// A clock nobody set: the 2024 default of a board that does not seed one (VolatileRTCClock,
+// `clock reset`), which reads before kSyncedClockEpoch, or an ESP32's power-on placeholder
+// counting up from 1 March 2026, which is past that threshold and which only the caller can
+// tell from a set clock (MQTTConnectionPolicy::clockNeverSet, the rule the time sync uses).
+static inline bool mqttCtrlClockUnset(uint32_t now, bool clock_never_set) {
+  return clock_never_set || now < MQTTConnectionPolicy::kSyncedClockEpoch;
+}
+
+// A node cut off from Wi-Fi may have lost NTP, and a clock nobody set makes every expiry
 // meaningless. Then the counter alone stops a replay, as it does anyway (operator ruling
-// 2026-11-16). An ESP32 after a power cycle starts at 1 March 2026 instead
-// (MQTTConnectionPolicy::kPowerOnClockEpoch), which is past this threshold: there the expiry
-// is judged against that clock, and `time <epoch>` below is the way out.
-static inline MqttCtrlResult mqttCtrlMeshCheckExpiry(uint32_t now, uint32_t expiry) {
-  if (now < MQTTConnectionPolicy::kSyncedClockEpoch) return MQTTCTRL_OK;
+// 2026-11-16).
+static inline MqttCtrlResult mqttCtrlMeshCheckExpiry(uint32_t now, uint32_t expiry,
+                                                     bool clock_never_set = false) {
+  if (mqttCtrlClockUnset(now, clock_never_set)) return MQTTCTRL_OK;
   return mqttCtrlCheckExpiry(now, expiry);
 }
 
@@ -1064,14 +1074,15 @@ static inline MqttCtrlResult mqttCtrlMeshCheckClockStep(uint32_t epoch, uint32_t
 // mqttCtrlAuthorise for the mesh road: the same counter, its own expiry and command rules.
 static inline MqttCtrlResult mqttCtrlAuthoriseMesh(const MqttCtrlEnvelope* env,
                                                    uint32_t last_counter, uint32_t now,
-                                                   bool auto_reply, bool uplink = true) {
+                                                   bool auto_reply, bool uplink = true,
+                                                   bool clock_never_set = false) {
   if (env == NULL) return MQTTCTRL_ERR_EMPTY;
   if (!mqttCtrlCounterAccepted(last_counter, env->counter)) return MQTTCTRL_ERR_REPLAY;
   uint32_t step = 0;
   if (mqttCtrlMeshClockStep(env->command, env->command_len, &step)) {
     return mqttCtrlMeshCheckClockStep(step, env->expiry);
   }
-  MqttCtrlResult expiry = mqttCtrlMeshCheckExpiry(now, env->expiry);
+  MqttCtrlResult expiry = mqttCtrlMeshCheckExpiry(now, env->expiry, clock_never_set);
   if (expiry != MQTTCTRL_OK) return expiry;
   if (!mqttCtrlMeshCommandAllowed(env->command, env->command_len, auto_reply, uplink)) return MQTTCTRL_ERR_NOT_ALLOWED;
   return MQTTCTRL_OK;
@@ -1099,12 +1110,23 @@ static inline bool mqttCtrlMeshParseMode(const char* text, uint8_t* out) {
   return false;
 }
 
+// Whether the server refuses the plane's topics, given what it said since the slot last
+// connected and whether it refused before. A refusal outlives the connection it came on:
+// every connect starts with no answer yet, and a refused slot that reconnects more often
+// than the mesh road's wait would otherwise count as up each time and never open the road.
+// Only a grant ends it.
+static inline bool mqttCtrlSlotRefused(bool refused, uint8_t sub_state) {
+  if (sub_state == MQTT_SUB_GRANTED) return false;
+  return refused || sub_state == MQTT_SUB_REFUSED;
+}
+
 // Whether the command slot can carry a command: connected, and the broker has not refused
-// the plane's topics. A login the server takes and then refuses mcc/ to is a slot that is
-// down for the plane, and has to open the mesh road like any other outage. Before the
-// broker has answered the slot counts as up: every connect passes through that moment.
-static inline bool mqttCtrlSlotUp(bool connected, uint8_t sub_state) {
-  return connected && sub_state != MQTT_SUB_REFUSED;
+// the plane's topics (mqttCtrlSlotRefused). A login the server takes and then refuses mcc/
+// to is a slot that is down for the plane, and has to open the mesh road like any other
+// outage. Before the broker has answered, a slot it did not refuse the last time counts as
+// up: every connect passes through that moment.
+static inline bool mqttCtrlSlotUp(bool connected, bool refused) {
+  return connected && !refused;
 }
 
 // When the command slot went down, in millis(), or 0 while it is up. Called every loop.
@@ -1132,7 +1154,7 @@ static inline bool mqttCtrlMeshRoadOpen(bool uplink, uint8_t mode, uint32_t down
 }
 
 // `get cmd.mesh`: the mode and whether the road is open now, and why not. 'refused' is a
-// slot that is connected and counts as down because the server refuses the plane's topic.
+// slot that counts as down because the server refuses the plane's topic (mqttCtrlSlotRefused).
 static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint32_t now_ms,
                                         bool refused, char* out, size_t out_size) {
   if (out == NULL || out_size == 0) return;

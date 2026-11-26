@@ -189,6 +189,10 @@ void Fork::pingMqttControl(char* reply) {
     mqttCtrlPingAnswer(MQTTCTRL_PING_NOT_CONNECTED, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
     return;
   }
+  if (_ctrl_refused) {
+    mqttCtrlPingAnswer(MQTTCTRL_PING_SUB_REFUSED, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
+    return;
+  }
 
   uint8_t raw[MQTTCTRL_PING_NONCE_LEN / 2];
   _mesh.getRNG()->random(raw, sizeof(raw));
@@ -262,7 +266,8 @@ void Fork::describeMqttControl(char* reply) {
   }
   mqttCtrlDescribeSlot(_mqtt_control.isEnabled(), _mqtt_control.counter(), slot,
                        _mesh.bridge->controlSlotConnected(), _mesh.bridge->controlSlotUsesJwt(),
-                       _mesh.bridge->controlSlotUrl(), _mesh.bridge->controlSubState(), age, ping,
+                       _mesh.bridge->controlSlotUrl(),
+                       _ctrl_refused ? MQTT_SUB_REFUSED : _mesh.bridge->controlSubState(), age, ping,
                        reply, MQTTCTRL_MAX_REPLY);
   size_t used = strlen(reply);
   mqttCtrlMeshNote(_mqtt_control.meshMode(), _mesh_ok, _mesh_refused, &reply[used],
@@ -281,8 +286,10 @@ void Fork::loopMqttControl() {
   refreshMcc3Keys();
   refreshRekeyKeys();
   if (_mqtt_control.rekeyJustDone()) debugLine("rekey: the new key signed a command and is the key now");
-  const bool up = _mesh.bridge != NULL && mqttCtrlSlotUp(_mesh.bridge->controlSlotConnected(),
-                                                         _mesh.bridge->controlSubState());
+  if (_mesh.bridge != NULL) {
+    _ctrl_refused = mqttCtrlSlotRefused(_ctrl_refused, _mesh.bridge->controlSubState());
+  }
+  const bool up = _mesh.bridge != NULL && mqttCtrlSlotUp(_mesh.bridge->controlSlotConnected(), _ctrl_refused);
   _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
   if (_mesh.bridge != NULL) loopAlive();
   loopRelay();
@@ -421,6 +428,23 @@ void Fork::formatSensors(char* reply) {
                       _mesh.telemetry.getBuffer(), _mesh.telemetry.getSize());
 }
 
+// Whether `now`, a reading of the node's clock, is an ESP32's power-on placeholder counting
+// up: the rule the time sync judges its fallback clock by. Other boards start in 2024, which
+// mqttCtrlClockUnset sees without help.
+bool Fork::clockNeverSet(uint32_t now) const {
+#ifdef ESP_PLATFORM
+  const uint32_t uptime_secs = (uint32_t)(esp_timer_get_time() / 1000000LL);
+#ifdef WITH_MQTT_BRIDGE
+  const uint32_t baseline = MQTTBridge::neverSetClockBaseline();
+#else
+  const uint32_t baseline = MQTTConnectionPolicy::kPowerOnClockEpoch;
+#endif
+  return MQTTConnectionPolicy::clockNeverSet(now, baseline, uptime_secs);
+#else
+  return false;
+#endif
+}
+
 void Fork::debugLine(const char* fmt, ...) {
   if (!_ctrl_debug) return;
   char line[120];
@@ -550,9 +574,7 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
     return true;
   }
   if (strcmp(command, "get cmd.mesh") == 0) {
-    const bool refused = _mesh.bridge != NULL && _mesh.bridge->controlSlotConnected()
-                         && _mesh.bridge->controlSubState() == MQTT_SUB_REFUSED;
-    mqttCtrlMeshDescribe(_mqtt_control.meshMode(), _mesh_down_since, millis(), refused, reply,
+    mqttCtrlMeshDescribe(_mqtt_control.meshMode(), _mesh_down_since, millis(), _ctrl_refused, reply,
                          MQTTCTRL_MAX_REPLY);
     return true;
   }
@@ -657,8 +679,8 @@ void Fork::onMcc3MeshCommand(mesh::Packet* packet, const uint8_t* secret, const 
   char reply[MQTTCTRL_MAX_REPLY];
   bool answer = false;
   const bool open = mqttCtrlMeshRoadOpen(FORK_UPLINK, _mqtt_control.meshMode(), _mesh_down_since, millis());
-  result = _mqtt_control.meshCommand(cmd, _mesh.getRTCClock()->getCurrentTime(), open, &_control_link,
-                                     reply, &answer);
+  const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
+  result = _mqtt_control.meshCommand(cmd, now, clockNeverSet(now), open, &_control_link, reply, &answer);
   if (result == MQTTCTRL_OK) _mesh_ok++;
   else _mesh_refused++;
   MESH_DEBUG_PRINTLN("MqttControl: mcc3 mesh result %d, reply '%s'", (uint32_t)result, reply);

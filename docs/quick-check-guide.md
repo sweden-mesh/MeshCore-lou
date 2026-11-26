@@ -498,13 +498,14 @@ The fields to check:
 |---|---|---|
 | `slot <slot> ...` | `connected` | `not connected`: WiFi, clock, the slot (symptom table) |
 | the login (lou-21) | `jwt` | `password (run set cmd on)`: the slot signs in to the command server with a password and is refused the plane's topics: `set cmd on`, `reboot`; plain `password`: a custom slot on another broker, right if that broker is meant to carry the plane |
-| `/cmd ...` | `subscribed` | `not subscribed`: the broker has not answered the subscription yet; `refused` (lou-21): it refused one of the plane's topics, so the slot's login is not one the command server serves (`set cmd on`) |
+| `/cmd ...` | `subscribed` | `not subscribed`: the broker has not answered the subscription yet; `refused` (lou-21): it refused one of the plane's topics, so the slot's login is not one the command server serves (`set cmd on`); it reads so until the broker grants them, across reconnects |
 | `last command ...` | `none yet` until a signed command arrives | |
 | `unverified <n> (last ...)` | absent | lou-18: commands arrived but were refused unanswered; `sig-invalid`: `get cmd.pubkey` is not the sender's key; `no-owner-key`: set it |
 | `ping ...` | `pong in <ms> ms` | `waiting`: read again in a few seconds; `no pong in 10 s`: /cmd subscription, or the broker does not answer pings; `publish refused` |
 
 If the ping cannot go out, `cmd ping` says so at once:
 `Err - slot <slot> not connected`, `Err - publish refused`,
+`Err - the server refuses /cmd on slot <slot>: set cmd on, reboot` (lou-21),
 `Err - the command plane is off: set cmd on`, or
 `Err - a ping is already waiting: read 'get cmd'`.
 
@@ -584,9 +585,9 @@ The `ver` reply must not carry `(unsigned)` or `BAD SIGNATURE`. A signed answer 
 | `get wifi.status` shows `no_ssid` / `connect_failed` | `set wifi.ssid` / `set wifi.pwd` again, `reboot` |
 | `get cmd` shows `no slot` | step 8 not done, or `set cmd.slot 0` was the last command: do 8b step 3 |
 | `get cmd` shows `not connected` | the plane's slot in `get mqtt.status`; WiFi; clock |
-| `get mqtt.status` shows `(refused: clock?)` (lou-21) | the broker refused the slot's token and no NTP server has confirmed the clock. `get mqttN.diag` says `clock not verified: run time <epoch> or check NTP`. The node retries the time sync every 30 s; if it stays, `get mqtt.ntp`, the network's NTP, or `time <epoch>` on the console |
+| `get mqtt.status` shows `(refused: clock?)` (lou-21) | the broker refused the slot's token and no NTP server has confirmed the clock. `get mqttN.diag` says `clock not verified: run time <epoch> or check NTP`. The node retries the time sync after 30 s, 1 min and 5 min, then every 15 min; if it stays, `get mqtt.ntp`, the network's NTP, or `time <epoch>` on the console |
 | `get mqtt.status` shows `(no clock)` (lou-21) | the clock was never set, and a token slot waits for one: the same cure |
 | `get cmd` shows `/cmd not subscribed` | the broker has not answered the subscription yet: read again after a minute |
 | `get cmd` shows `/cmd refused` (lou-21) | the command server refused the plane's topic to this login: `set cmd on`, `reboot` |
-| `get cmd` shows `/cmd subscribed` and `ping no pong in 10 s` | send `cmd ping` again after a minute; if it stays, the broker side needs a look; the node is configured right |
+| `get cmd` shows `/cmd subscribed` and `ping no pong in 10 s` | send `cmd ping` again after a minute. If it stays on lou-21, the broker side needs a look: the server granted the node its topic. On lou-20 and older `subscribed` can hide a refused topic, and the node may be on the password login the command server no longer serves: `set cmd on`, `reboot` |
 | mccontrol gets no answer later | `cmd ping` on the node first; then check `get cmd.pubkey` is your key |
