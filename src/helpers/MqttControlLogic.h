@@ -431,6 +431,7 @@ enum MqttCtrlPingStep {
   MQTTCTRL_PING_NOT_CONNECTED,
   MQTTCTRL_PING_PUBLISH_REFUSED,
   MQTTCTRL_PING_NO_PONG,
+  MQTTCTRL_PING_SUB_REFUSED,       // the server refused the plane's topic: no pong can come
 };
 
 // The ping never blocks the loop: it is armed, published, and settled later by
@@ -523,6 +524,9 @@ static inline void mqttCtrlPingAnswer(MqttCtrlPingStep step, int slot, uint32_t 
       break;
     case MQTTCTRL_PING_PUBLISH_REFUSED:
       snprintf(out, out_size, "Err - publish refused");
+      break;
+    case MQTTCTRL_PING_SUB_REFUSED:
+      snprintf(out, out_size, "Err - the server refuses /cmd on slot %d: set cmd on, reboot", slot);
       break;
     default:
       snprintf(out, out_size, "Err - no pong in %d s: /cmd is not subscribed or the broker "
@@ -1106,12 +1110,23 @@ static inline bool mqttCtrlMeshParseMode(const char* text, uint8_t* out) {
   return false;
 }
 
+// Whether the server refuses the plane's topics, given what it said since the slot last
+// connected and whether it refused before. A refusal outlives the connection it came on:
+// every connect starts with no answer yet, and a refused slot that reconnects more often
+// than the mesh road's wait would otherwise count as up each time and never open the road.
+// Only a grant ends it.
+static inline bool mqttCtrlSlotRefused(bool refused, uint8_t sub_state) {
+  if (sub_state == MQTT_SUB_GRANTED) return false;
+  return refused || sub_state == MQTT_SUB_REFUSED;
+}
+
 // Whether the command slot can carry a command: connected, and the broker has not refused
-// the plane's topics. A login the server takes and then refuses mcc/ to is a slot that is
-// down for the plane, and has to open the mesh road like any other outage. Before the
-// broker has answered the slot counts as up: every connect passes through that moment.
-static inline bool mqttCtrlSlotUp(bool connected, uint8_t sub_state) {
-  return connected && sub_state != MQTT_SUB_REFUSED;
+// the plane's topics (mqttCtrlSlotRefused). A login the server takes and then refuses mcc/
+// to is a slot that is down for the plane, and has to open the mesh road like any other
+// outage. Before the broker has answered, a slot it did not refuse the last time counts as
+// up: every connect passes through that moment.
+static inline bool mqttCtrlSlotUp(bool connected, bool refused) {
+  return connected && !refused;
 }
 
 // When the command slot went down, in millis(), or 0 while it is up. Called every loop.
@@ -1139,7 +1154,7 @@ static inline bool mqttCtrlMeshRoadOpen(bool uplink, uint8_t mode, uint32_t down
 }
 
 // `get cmd.mesh`: the mode and whether the road is open now, and why not. 'refused' is a
-// slot that is connected and counts as down because the server refuses the plane's topic.
+// slot that counts as down because the server refuses the plane's topic (mqttCtrlSlotRefused).
 static inline void mqttCtrlMeshDescribe(uint8_t mode, uint32_t down_since, uint32_t now_ms,
                                         bool refused, char* out, size_t out_size) {
   if (out == NULL || out_size == 0) return;

@@ -287,7 +287,8 @@ drops it before anything else looks at it.
 whether the slot is connected, how it signs in (from lou-21: `jwt`, as the `mccontrol` preset
 and a slot `set cmd on <host>` wrote do, or `password`), what the broker said about the subscriptions since it
 connected (`subscribed`, `not subscribed` while no answer has come, and from lou-21 `refused`
-when it refused one of the plane's topics, which a later topic it grants does not undo), how
+when it refused one of the plane's topics, which stays across a reconnect until the broker
+grants them), how
 long ago the command key last vouched for a command, and how the last ping
 ended: `pong in N ms`, `no pong in 10 s`, `publish refused`, `waiting` or `-` (no ping since boot).
 From lou-18 a command refused before the key vouched for it -- no command key, the wrong one,
@@ -316,13 +317,15 @@ OK - ping sent, read 'get cmd' for the pong
 Err - the command plane is off: set cmd on
 Err - slot 2 not connected
 Err - publish refused
+Err - the server refuses /cmd on slot 2: set cmd on, reboot
 Err - a ping is already waiting: read 'get cmd'
 ```
 
 The command broker answers `pong|<same nonce>` on the node's own `mcc/cmd/{NODE}`; `get cmd`
 shows the round trip, or `no pong in 10 s` -- the `/cmd` subscription, or a broker that does
 not answer pings. The echo has to be the broker's: it shows that the broker is judging this
-node's topics.
+node's topics. From lou-21 a node the server has refused the plane's topic (`/cmd refused`)
+sends no ping, since no pong can reach it, and says so.
 
 A pong is not a command. It is recognised before anything is opened, so it costs a string
 compare, never an Ed25519 verify; it is never executed, answered, logged or counted towards
@@ -575,7 +578,9 @@ reads `/cmd refused`) counts as down as well: a node whose login the command ser
 accepts hears no command over MQTT, so after the same 15 minutes it can be reached, and mended,
 over the air. `get cmd.mesh` then reads `> auto, open: the server refuses /cmd 17 min` where it
 would read `MQTT down 17 min`. The moment between a connect and the broker's answer is not
-counted as down.
+counted as down, unless the server refused the node the last time: a refusal is kept until the
+server grants the topic, so a refused slot that drops and reconnects every few minutes still
+opens the road 15 minutes after the first refusal.
 
 **A node answers over the mesh on an airtime budget of its own:** 5 % of 15 minutes, then 1 %
 (9 s) of the next 15, then a burst again. A request that arrives when the budget is used up

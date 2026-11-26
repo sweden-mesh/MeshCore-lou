@@ -189,6 +189,10 @@ void Fork::pingMqttControl(char* reply) {
     mqttCtrlPingAnswer(MQTTCTRL_PING_NOT_CONNECTED, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
     return;
   }
+  if (_ctrl_refused) {
+    mqttCtrlPingAnswer(MQTTCTRL_PING_SUB_REFUSED, slot, 0, NULL, reply, MQTTCTRL_MAX_REPLY);
+    return;
+  }
 
   uint8_t raw[MQTTCTRL_PING_NONCE_LEN / 2];
   _mesh.getRNG()->random(raw, sizeof(raw));
@@ -262,7 +266,8 @@ void Fork::describeMqttControl(char* reply) {
   }
   mqttCtrlDescribeSlot(_mqtt_control.isEnabled(), _mqtt_control.counter(), slot,
                        _mesh.bridge->controlSlotConnected(), _mesh.bridge->controlSlotUsesJwt(),
-                       _mesh.bridge->controlSlotUrl(), _mesh.bridge->controlSubState(), age, ping,
+                       _mesh.bridge->controlSlotUrl(),
+                       _ctrl_refused ? MQTT_SUB_REFUSED : _mesh.bridge->controlSubState(), age, ping,
                        reply, MQTTCTRL_MAX_REPLY);
   size_t used = strlen(reply);
   mqttCtrlMeshNote(_mqtt_control.meshMode(), _mesh_ok, _mesh_refused, &reply[used],
@@ -281,8 +286,10 @@ void Fork::loopMqttControl() {
   refreshMcc3Keys();
   refreshRekeyKeys();
   if (_mqtt_control.rekeyJustDone()) debugLine("rekey: the new key signed a command and is the key now");
-  const bool up = _mesh.bridge != NULL && mqttCtrlSlotUp(_mesh.bridge->controlSlotConnected(),
-                                                         _mesh.bridge->controlSubState());
+  if (_mesh.bridge != NULL) {
+    _ctrl_refused = mqttCtrlSlotRefused(_ctrl_refused, _mesh.bridge->controlSubState());
+  }
+  const bool up = _mesh.bridge != NULL && mqttCtrlSlotUp(_mesh.bridge->controlSlotConnected(), _ctrl_refused);
   _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
   if (_mesh.bridge != NULL) loopAlive();
   loopRelay();
@@ -567,9 +574,7 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
     return true;
   }
   if (strcmp(command, "get cmd.mesh") == 0) {
-    const bool refused = _mesh.bridge != NULL && _mesh.bridge->controlSlotConnected()
-                         && _mesh.bridge->controlSubState() == MQTT_SUB_REFUSED;
-    mqttCtrlMeshDescribe(_mqtt_control.meshMode(), _mesh_down_since, millis(), refused, reply,
+    mqttCtrlMeshDescribe(_mqtt_control.meshMode(), _mesh_down_since, millis(), _ctrl_refused, reply,
                          MQTTCTRL_MAX_REPLY);
     return true;
   }
