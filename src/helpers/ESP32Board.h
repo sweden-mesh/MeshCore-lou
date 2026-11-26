@@ -208,8 +208,10 @@ public:
   }
 };
 
-static RTC_NOINIT_ATTR uint32_t _rtc_backup_time;
-static RTC_NOINIT_ATTR uint32_t _rtc_backup_magic;
+// Defined once, in ESP32Board.cpp: every file that includes this header reads and writes
+// the same two words of RTC memory.
+extern uint32_t _rtc_backup_time;
+extern uint32_t _rtc_backup_magic;
 #define RTC_BACKUP_MAGIC  0xAA55CC33
 #define RTC_TIME_MIN      1772323200  // 1 Mar 2026
 
