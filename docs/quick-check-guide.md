@@ -584,7 +584,7 @@ The `ver` reply must not carry `(unsigned)` or `BAD SIGNATURE`. A signed answer 
 | `get wifi.status` shows `no_ssid` / `connect_failed` | `set wifi.ssid` / `set wifi.pwd` again, `reboot` |
 | `get cmd` shows `no slot` | step 8 not done, or `set cmd.slot 0` was the last command: do 8b step 3 |
 | `get cmd` shows `not connected` | the plane's slot in `get mqtt.status`; WiFi; clock |
-| `get mqtt.status` shows `(refused: clock?)` (lou-21) | the broker refused the slot's token and no NTP server has confirmed the clock. `get mqttN.diag` says `clock not verified: run time <epoch> or check NTP`. The node retries the time sync every 30 s; if it stays, `get mqtt.ntp`, the network's NTP, or `time <epoch>` on the console |
+| `get mqtt.status` shows `(refused: clock?)` (lou-21) | the broker refused the slot's token and no NTP server has confirmed the clock. `get mqttN.diag` says `clock not verified: run time <epoch> or check NTP`. The node retries the time sync after 30 s, 1 min and 5 min, then every 15 min; if it stays, `get mqtt.ntp`, the network's NTP, or `time <epoch>` on the console |
 | `get mqtt.status` shows `(no clock)` (lou-21) | the clock was never set, and a token slot waits for one: the same cure |
 | `get cmd` shows `/cmd not subscribed` | the broker has not answered the subscription yet: read again after a minute |
 | `get cmd` shows `/cmd refused` (lou-21) | the command server refused the plane's topic to this login: `set cmd on`, `reboot` |

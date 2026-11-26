@@ -188,6 +188,42 @@ TEST(NetworkPolicy, NtpKeepsAskingUntilAServerHasAnswered) {
   EXPECT_FALSE(NetworkPolicy::ntpPendingAfterConnectivitySample(verified, false, false, true));
 }
 
+TEST(NetworkPolicy, TheNtpRetryThinsOutToFifteenMinutes) {
+  EXPECT_EQ(30000u, NetworkPolicy::ntpRetryIntervalMs(0));
+  EXPECT_EQ(60000u, NetworkPolicy::ntpRetryIntervalMs(1));
+  EXPECT_EQ(300000u, NetworkPolicy::ntpRetryIntervalMs(2));
+  EXPECT_EQ(900000u, NetworkPolicy::ntpRetryIntervalMs(3));
+  EXPECT_EQ(900000u, NetworkPolicy::ntpRetryIntervalMs(255));
+
+  // The bridge's loop: a first sync at 0 that reaches no server, then the retries.
+  uint32_t last = 0;
+  uint8_t retries = 0;
+  uint32_t at[6];
+  int n = 0;
+  for (uint32_t now = 0; now <= 3600000u && n < 6; now += 1000) {
+    if (!NetworkPolicy::ntpRetryDue(false, true, now, last, retries)) continue;
+    last = now;
+    retries = NetworkPolicy::ntpRetriesAfterRetry(retries);
+    at[n++] = now / 1000;
+  }
+  ASSERT_EQ(6, n);
+  const uint32_t want[6] = { 30, 90, 390, 1290, 2190, 3090 };
+  for (int i = 0; i < 6; i++) EXPECT_EQ(want[i], at[i]) << i;
+
+  // The count stops at the last step and does not wrap back to the short interval.
+  uint8_t r = 0;
+  for (int i = 0; i < 600; i++) r = NetworkPolicy::ntpRetriesAfterRetry(r);
+  EXPECT_EQ(NetworkPolicy::kNtpRetrySteps, r);
+  // A network that came up or a clock set by hand starts over: the count is 0 again.
+  EXPECT_FALSE(NetworkPolicy::ntpRetryDue(false, true, 4000000u + 29999, 4000000u, 0));
+  EXPECT_TRUE(NetworkPolicy::ntpRetryDue(false, true, 4000000u + 30000, 4000000u, 0));
+  EXPECT_FALSE(NetworkPolicy::ntpRetryDue(false, true, 4000000u + 899999, 4000000u, r));
+  EXPECT_TRUE(NetworkPolicy::ntpRetryDue(false, true, 4000000u + 900000, 4000000u, r));
+  // A server's answer or a lost network ends it at any step.
+  EXPECT_FALSE(NetworkPolicy::ntpRetryDue(true, true, 4000000u + 900000, 4000000u, r));
+  EXPECT_FALSE(NetworkPolicy::ntpRetryDue(false, false, 4000000u + 900000, 4000000u, r));
+}
+
 TEST(NetworkPolicy, ARetryOnARunningClockAsksEachServerOnce) {
   EXPECT_EQ(2, NetworkPolicy::ntpRetryAttemptsPerServer(false));
   EXPECT_EQ(1, NetworkPolicy::ntpRetryAttemptsPerServer(true));

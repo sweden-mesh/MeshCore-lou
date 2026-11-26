@@ -276,7 +276,7 @@ private:
   WiFiUDP _ntp_udp;
   unsigned long _last_ntp_sync;
   // The first time sync has finished and slots may be set up. Not "the clock is right":
-  // that is _clock_trust, and only Verified stops the 30 s retry.
+  // that is _clock_trust, and only Verified stops the retry.
   bool _ntp_synced;
   MQTTConnectionPolicy::ClockTrust _clock_trust;
   bool _ntp_sync_pending;  // Flag to trigger NTP sync from loop() instead of event handler

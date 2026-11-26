@@ -136,9 +136,10 @@ What changes for a node that comes from lou-20 or older:
 - **`refused: clock?` in `get mqtt.status`.** A slot that signs in with a token was refused by
   its broker while no NTP server has confirmed the node's clock. A token made from a wrong
   clock is expired on arrival. The node asks for a time sync by itself after such a refusal,
-  and the sync is tried again every 30 s until a server answers. If it stays: check that the
-  network lets NTP through, or set the clock on the console with `time <epoch>`; the tokens
-  are then made again at once. `no clock` means the clock was never set (the board started at
+  and the sync is tried again until a server answers: after 30 s, 1 min and 5 min, then
+  every 15 min, and from 30 s again when the network comes back or the clock is set by
+  hand. If it stays: check that the network lets NTP through, or set the clock on the
+  console with `time <epoch>`; the tokens are then made again at once. `no clock` means the clock was never set (the board started at
   its power-on date) and the slot waits for one; the cure is the same.
   `get mqttN.diag` says `clock not verified: run time <epoch> or check NTP` or
   `clock not set: run time <epoch> or check NTP`.

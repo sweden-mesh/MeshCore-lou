@@ -157,10 +157,28 @@ static constexpr bool ntpPendingAfterConnectivitySample(
   return pending || (!verified && connected && !was_connected);
 }
 
+// The retry thins out while no server answers: 30 s, 1 min, 5 min, then every 15 min.
+// Each retry walks every server on the task that publishes, and a network that has
+// blocked NTP for six minutes is not going to open in the next thirty seconds. `retries`
+// counts the retries made since the network last came up or the clock was set by hand,
+// which are the two events that make an answer likelier and start the schedule again.
+static constexpr uint8_t kNtpRetrySteps = 3;
+static constexpr uint32_t ntpRetryIntervalMs(uint8_t retries) {
+  return retries == 0 ? kNtpRetryMs
+       : retries == 1 ? 60000UL
+       : retries == 2 ? 300000UL
+       : 900000UL;
+}
+
+static constexpr uint8_t ntpRetriesAfterRetry(uint8_t retries) {
+  return retries < kNtpRetrySteps ? (uint8_t)(retries + 1) : kNtpRetrySteps;
+}
+
 static constexpr bool ntpRetryDue(bool verified, bool connected,
-                                  uint32_t now_ms, uint32_t last_attempt_ms) {
+                                  uint32_t now_ms, uint32_t last_attempt_ms,
+                                  uint8_t retries = 0) {
   return !verified && connected &&
-         (uint32_t)(now_ms - last_attempt_ms) >= kNtpRetryMs;
+         (uint32_t)(now_ms - last_attempt_ms) >= ntpRetryIntervalMs(retries);
 }
 
 // A retry while the node already runs on a clock asks each server once: the slots are

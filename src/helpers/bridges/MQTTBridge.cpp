@@ -1445,6 +1445,7 @@ void MQTTBridge::mqttTaskLoop() {
   // initializing from the live value would then defer NTP until its retry.
   bool network_was_connected = false;
   unsigned long last_ntp_attempt = 0;
+  uint8_t ntp_retries = 0;
   unsigned long last_refusal_resync = 0;
   bool refusal_resync_ever = false;
 
@@ -1529,8 +1530,8 @@ void MQTTBridge::mqttTaskLoop() {
 
     handleNetworkConnection(now);
 
-    // Schedule once per link-up edge. Failed syncs are owned by the 30-second
-    // retry below; re-arming here on every loop would make a blocked NTP path
+    // Schedule once per link-up edge. Failed syncs are owned by the retry
+    // below; re-arming here on every loop would make a blocked NTP path
     // run the multi-second sync sequence back-to-back forever.
     const bool network_connected = _network->isConnected();
     _ntp_sync_pending = NetworkPolicy::ntpPendingAfterConnectivitySample(
@@ -1540,15 +1541,18 @@ void MQTTBridge::mqttTaskLoop() {
     if (_ntp_sync_pending && network_connected) {
       _ntp_sync_pending = false;
       last_ntp_attempt = now;
+      ntp_retries = 0;  // a network that just came up may reach a server the last one did not
       syncTimeWithNTP();
     }
 
-    // Retry NTP every 30s until a server has answered. A fallback clock lets the slots
-    // run but does not end the asking: it may be wrong, and only a server can say.
+    // Retry NTP until a server has answered, after 30 s at first and thinning out to every
+    // 15 min (NetworkPolicy::ntpRetryIntervalMs). A fallback clock lets the slots run but
+    // does not end the asking: it may be wrong, and only a server can say.
     if (NetworkPolicy::ntpRetryDue(
             MQTTConnectionPolicy::clockVerified(_clock_trust), network_connected,
-            (uint32_t)now, (uint32_t)last_ntp_attempt)) {
+            (uint32_t)now, (uint32_t)last_ntp_attempt, ntp_retries)) {
       last_ntp_attempt = now;
+      ntp_retries = NetworkPolicy::ntpRetriesAfterRetry(ntp_retries);
       syncTimeWithNTP(/*force=*/false, /*primary_only=*/false,
                       NetworkPolicy::ntpRetryAttemptsPerServer(
                           MQTTConnectionPolicy::jwtClockAvailable(_clock_trust)));
@@ -1591,13 +1595,21 @@ void MQTTBridge::mqttTaskLoop() {
     // The clock was set by hand (`time <epoch>`, `clock sync`), on the loop task. That is
     // a clock somebody set, so the JWT slots need not wait for a server any longer, and
     // tokens minted before the step are made again now. No server has confirmed it, so
-    // the NTP retry goes on.
+    // the NTP retry goes on, from its short interval again.
     if (_manual_clock_set) {
       _manual_clock_set = false;
       s_never_set_clock_magic = 0;
+      ntp_retries = 0;
       _clock_trust = MQTTConnectionPolicy::clockTrustAfterManualSet(_clock_trust);
       MQTT_DEBUG_PRINTLN("Clock set by hand: %lu", (unsigned long)time(nullptr));
       if (_slots_setup_done) refreshTokensAfterClockChange();
+    }
+
+    // A soft reset restores the clock to the second, and a never-set clock is told from a
+    // set one by the last reading kept of it (clockNeverSet's margin). The retries that
+    // keep that reading come up to 15 minutes apart, so it is kept here between them.
+    if (s_never_set_clock_magic == kNeverSetClockMagic) {
+      s_never_set_clock_time = (uint32_t)time(nullptr);
     }
 
     // Process a CLI-requested forced NTP sync (queued from Core 1). Running it here
@@ -4955,7 +4967,7 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
     //
     // The system clock taken as its own fallback already holds this time. It is written
     // once, to hand the time to a clock chip, and not again: each write drops the
-    // fraction of a second, and the retry comes every 30 s until a server answers.
+    // fraction of a second, and the retries go on until a server answers.
     const bool write_clock = MQTTConnectionPolicy::acceptedClockNeedsWriting(
         server_answered, fallback_source, _clock_trust);
     if (write_clock) {
@@ -5019,7 +5031,7 @@ bool MQTTBridge::syncTimeWithNTP(bool force, bool primary_only, int attempts_per
   MQTT_DEBUG_PRINTLN("NTP sync failed");
   if (!primary_only) {
     // No server and no clock. The pass is still over: the slots that need no clock may
-    // start, and the 30 s retry goes on because nothing was verified. Not on the
+    // start, and the retry goes on because nothing was verified. Not on the
     // validation path, which asks about one server and settles nothing else.
     _ntp_synced = true;
     _last_ntp_sync = millis();
