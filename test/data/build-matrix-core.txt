@@ -245,7 +245,7 @@ R1Neo_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<m
 RAK_11310_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_11310_repeater-arrc
 RAK_3112_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_3112_repeater-arrc
 RAK_3401_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_3401_repeater-arrc
-RAK_3x72_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_3x72_repeater-arrc
+RAK_3x72_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1 -DNO_FORK_LADDER=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_3x72_repeater-arrc
 RAK_4631_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_4631_repeater-arrc
 RAK_WisMesh_Tag_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=RAK_WisMesh_Tag_repeater-arrc
 SenseCap_Solar_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=SenseCap_Solar_repeater-arrc
@@ -264,10 +264,10 @@ ThinkNode_M3_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' ver
 ThinkNode_M4_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ThinkNode_M4_repeater-arrc
 ThinkNode_M6_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ThinkNode_M6_repeater-arrc
 ThinkNode_M7_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=ThinkNode_M7_repeater-arrc
-Tiny_Relay_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Tiny_Relay_repeater-arrc
+Tiny_Relay_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1 -DNO_FORK_LADDER=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Tiny_Relay_repeater-arrc
 waveshare_rp2040_lora_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=waveshare_rp2040_lora_repeater-arrc
 Waveshare_S3_LR1121_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=Waveshare_S3_LR1121_repeater-arrc
-wio-e5_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=wio-e5_repeater-arrc
+wio-e5_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1 -DNO_FORK_LADDER=1' version=<mcu>-v1.18.0-lou-14-arrc variant=wio-e5_repeater-arrc
 wio_wm1110_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=wio_wm1110_repeater-arrc
 WioTrackerL1-1W_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=WioTrackerL1-1W_repeater-arrc
 WioTrackerL1_repeater arrc flags='-DWITH_AUTO_REPLY=1 -DWITH_MQTT_COMMAND=1' version=<mcu>-v1.18.0-lou-14-arrc variant=WioTrackerL1_repeater-arrc
