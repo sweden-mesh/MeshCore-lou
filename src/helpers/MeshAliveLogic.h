@@ -10,11 +10,10 @@
 #include <SHA256.h>
 
 #include "MqttControlV3.h"
-#include "SlidingBudget.h"
 
 // The announce (lou-21): a node without Wi-Fi tells its owner that it exists, over the mesh,
-// and an Observer node of the same owner that hears it publishes it to the command server
-// (docs/mqtt-control.md, "Announcing"). An alive message cannot do it: such a node has no MQTT.
+// and any Observer node that hears it hands it to the command server, which keeps the newest
+// of each node for the owner's tool to find (docs/mqtt-control.md, "Announcing"). An alive message cannot do it: such a node has no MQTT.
 //
 // It is an ANON_REQ flooded inside a region, 165 bytes of payload, which every repeater that
 // holds the region forwards without reading:
@@ -32,7 +31,6 @@
 //  101  64   Ed25519 by the node's identity over "mcc3/ann|" | bytes 1..100
 //
 //   K_malive  HKDF-SHA256(S, salt empty, "mcc3/malive/" + KEY)   S and KEY as MqttControlV3.h
-//   K_heard   HKDF-SHA256(S, salt empty, "mcc3/heard/"  + KEY)   the catching node's S and KEY
 //
 // The nonce is a counter, so K_malive seals nothing else and (boot, sequence) never repeats.
 // The signature lets anyone check that the node made the announce, the catching node first of
@@ -269,175 +267,117 @@ static inline void meshAliveSent(MeshAliveClock* c, uint32_t now_ms, uint32_t rn
 
 // ---- the catching node -----------------------------------------------------------------
 //
-// It keeps the announces made for its own command key, the newest of each node, and
-// publishes each sealed to the owner (K_heard) on a slot of its own. It cannot open one, so
-// it cannot tell a real announce from one made by somebody who knows the owner's public
-// key: the table is small, a new node key is admitted four times an hour, and what a forger
-// fills it with the owner's tool drops, since it does not open.
+// Every Observer node on the plane that hears an announce signed by the node it names hands
+// it to the command server, whoever owns the node, and keeps nothing about the node. It is
+// published once, not retained, on `mcc/seen/<the Observer node's key>`:
 //
-// Kept of an announce: everything after the node's key, the tag and the signature with it,
-// so that the owner can check and open what is published.
-#define MALIVE_KEPT            (MALIVE_PAYLOAD - MALIVE_AT_KIND)
-#define MALIVE_TABLE           16
-#define MALIVE_NEW_MAX         4
-#define MALIVE_NEW_WINDOW_SECS 3600
-#define MALIVE_HEARD_LABEL     "mcc3/heard/"
-#define MALIVE_KIND_HEARD      0x48
-// published: kind, nonce (the AAD) | node key, the kept bytes, heard at, SNR, hops of the
-// announce, the same three of the node's last advert | tag
-#define MALIVE_HEARD_PLAIN     (32 + MALIVE_KEPT + 6 + 6)
-#define MALIVE_HEARD_SIZE      (1 + MCC3_NONCE_LEN + MALIVE_HEARD_PLAIN + MCC3_TAG_LEN)
-#define MALIVE_HEARD_B64       MQTTV2_B64_LEN(MALIVE_HEARD_SIZE)
-// One publish at most in this long, whatever is heard: the newest of a slot is what goes.
-#define MALIVE_PUBLISH_GAP_MS  90000UL
+//   base64url( 0x53 | the announce's bytes 1..164 | SNR i8, quarter dB | hops u8 | via u8 )
+//
+// `via` says how it came: a zero-hop state packet, a direct packet along a path, or a flood.
+// The server adds the time it arrived, since the Observer node's clock is not trusted. While
+// the server cannot be reached up to 8 wait in RAM, the oldest giving way, and are lost at a
+// restart; at most one goes every 2 s. A (node key, boot, sequence) forwarded in the last
+// 10 minutes is not forwarded again: the copies of a flood by other paths, and the tries of
+// one report.
+#define MALIVE_KIND_SEEN       0x53
+#define MALIVE_VIA_ZERO_HOP    0
+#define MALIVE_VIA_DIRECT      1
+#define MALIVE_VIA_FLOOD       2
+#define MALIVE_SEEN_SIZE       (1 + MALIVE_PAYLOAD - 1 + 3)
+#define MALIVE_SEEN_B64        MQTTV2_B64_LEN(MALIVE_SEEN_SIZE)
+#define MALIVE_SEEN_QUEUE      8
+#define MALIVE_SEEN_GAP_MS     2000UL
+#define MALIVE_RECENT          8
+#define MALIVE_RECENT_SECS     600
 
-struct MeshAliveEntry {
-  bool used;
-  uint8_t node_key[32];
-  uint8_t kept[MALIVE_KEPT];
-  uint32_t heard_at;        // the catching node's clock, 0 while unset
-  int8_t snr;               // quarter-dB
-  uint8_t hops;
-  uint32_t advert_heard_at; // the node's last advert: 0 for none heard
-  int8_t advert_snr;
-  uint8_t advert_hops;
-  uint32_t order;           // of hearing: the lowest was heard longest ago
-};
-
-struct MeshAliveTable {
-  MeshAliveEntry entry[MALIVE_TABLE];
-  uint32_t heard;                                  // announces kept since boot
-  SlidingBudgetOf<MALIVE_NEW_MAX> admitted;
-  MeshAliveTable() : heard(0), admitted(MALIVE_NEW_MAX, MALIVE_NEW_WINDOW_SECS) {
-    memset(entry, 0, sizeof(entry));
-  }
-};
-
-enum MeshAliveVerdict : uint8_t {
-  MALIVE_NOT_ANNOUNCE = 0,
-  MALIVE_OTHER_OWNER,
-  MALIVE_OLD,            // not newer than the one kept: a copy by another path, or a replay
-  MALIVE_LIMITED,        // a node key new to the table, and four were admitted this hour
-  MALIVE_NEWER,          // replaced its node's entry
-  MALIVE_ADDED,          // a node new to the table, in a free slot or the one heard longest ago
-};
-
-static inline bool meshAliveKept(MeshAliveVerdict v) { return v == MALIVE_NEWER || v == MALIVE_ADDED; }
-
-static inline uint32_t meshAliveEntryBoot(const MeshAliveEntry* e) {
-  return mqttCtrlMeshU32(e->kept + MALIVE_AT_BOOT - MALIVE_AT_KIND);
-}
-static inline uint32_t meshAliveEntrySequence(const MeshAliveEntry* e) {
-  return mqttCtrlMeshU32(e->kept + MALIVE_AT_SEQUENCE - MALIVE_AT_KIND);
+static inline void meshAliveBuildSeen(const uint8_t announce[MALIVE_PAYLOAD], int8_t snr, uint8_t hops,
+                                      uint8_t via, uint8_t out[MALIVE_SEEN_SIZE]) {
+  out[0] = MALIVE_KIND_SEEN;
+  memcpy(out + 1, announce + 1, MALIVE_PAYLOAD - 1);
+  out[MALIVE_PAYLOAD] = (uint8_t)snr;
+  out[MALIVE_PAYLOAD + 1] = hops;
+  out[MALIVE_PAYLOAD + 2] = via;
 }
 
-// A packet's payload as it was heard: `now_secs` is any clock that only moves forward (the
-// uptime), for the hourly limit; `heard_at` is what the owner is told. `slot` is set for an
-// announce that was kept.
-static inline MeshAliveVerdict meshAliveTake(MeshAliveTable* t, const uint8_t command_key[32],
-                                             const uint8_t* payload, size_t len, uint32_t heard_at,
-                                             int8_t snr, uint8_t hops, uint32_t now_secs, int* slot) {
-  if (!meshAliveIsAnnounce(payload, len)) return MALIVE_NOT_ANNOUNCE;
-  if (!meshAliveForOwner(payload, command_key)) return MALIVE_OTHER_OWNER;
-  const uint32_t boot = mqttCtrlMeshU32(payload + MALIVE_AT_BOOT);
-  const uint32_t sequence = mqttCtrlMeshU32(payload + MALIVE_AT_SEQUENCE);
-
-  int at = -1, free_slot = -1, oldest = 0;
-  for (int i = 0; i < MALIVE_TABLE; i++) {
-    const MeshAliveEntry* e = &t->entry[i];
-    if (!e->used) {
-      if (free_slot < 0) free_slot = i;
-    } else if (memcmp(e->node_key, payload + 1, 32) == 0) {
-      at = i;
-    } else if (!t->entry[oldest].used || e->order < t->entry[oldest].order) {
-      oldest = i;
-    }
-  }
-  MeshAliveVerdict verdict = MALIVE_NEWER;
-  if (at >= 0) {
-    const uint32_t kept_boot = meshAliveEntryBoot(&t->entry[at]);
-    if (boot < kept_boot || (boot == kept_boot && sequence <= meshAliveEntrySequence(&t->entry[at]))) {
-      return MALIVE_OLD;
-    }
-  } else {
-    if (!t->admitted.allow(now_secs)) return MALIVE_LIMITED;
-    at = free_slot >= 0 ? free_slot : oldest;
-    verdict = MALIVE_ADDED;
-    memset(&t->entry[at], 0, sizeof(t->entry[at]));
-  }
-  MeshAliveEntry* e = &t->entry[at];
-  e->used = true;
-  memcpy(e->node_key, payload + 1, 32);
-  memcpy(e->kept, payload + MALIVE_AT_KIND, MALIVE_KEPT);
-  e->heard_at = heard_at;
-  e->snr = snr;
-  e->hops = hops;
-  e->order = ++t->heard;
-  if (slot != NULL) *slot = at;
-  return verdict;
+// `mcc/seen/<the Observer node's key>`.
+static inline bool meshAliveSeenTopic(const char* node_hex, char* out, size_t out_size) {
+  return mcc3Topic("seen", node_hex, out, out_size);
 }
 
-// `mcc/heard/<the catching node's key>/<slot>`.
-static inline bool meshAliveHeardTopic(const char* node_hex, int slot, char* out, size_t out_size) {
-  if (slot < 0 || slot >= MALIVE_TABLE) return false;
-  int n = snprintf(out, out_size, "mcc/heard/%s/%d", node_hex, slot);
-  return n > 0 && (size_t)n < out_size;
-}
-
-// What goes retained on an entry's slot, under a fresh random nonce as every sealed publish.
-static inline size_t meshAliveBuildHeard(const uint8_t key[MCC3_KEY_LEN], const uint8_t nonce[MCC3_NONCE_LEN],
-                                         const MeshAliveEntry* e, char* out, size_t out_size) {
-  uint8_t raw[MALIVE_HEARD_SIZE] = {0};
-  raw[0] = MALIVE_KIND_HEARD;
-  memcpy(raw + 1, nonce, MCC3_NONCE_LEN);
-  uint8_t* p = raw + 1 + MCC3_NONCE_LEN;
-  memcpy(p, e->node_key, 32);
-  memcpy(p + 32, e->kept, MALIVE_KEPT);
-  uint8_t* h = p + 32 + MALIVE_KEPT;
-  mqttCtrlMeshPutU32(h, e->heard_at);
-  h[4] = (uint8_t)e->snr;
-  h[5] = e->hops;
-  mqttCtrlMeshPutU32(h + 6, e->advert_heard_at);
-  h[10] = (uint8_t)e->advert_snr;
-  h[11] = e->advert_hops;
-  mcc3Seal(key, nonce, raw, 1 + MCC3_NONCE_LEN, p, MALIVE_HEARD_PLAIN, p);
-  return mqttV2B64Encode(raw, sizeof(raw), out, out_size);
-}
-
-// The owner's side, for the host suite and the vectors: the entry, and the announce as it
-// was on the air, to open with the announcing node's K_malive (meshAliveOpen). False for
-// what is no such publish or does not open under this catching node's K_heard.
-static inline bool meshAliveOpenHeard(const uint8_t key[MCC3_KEY_LEN], const char* payload, size_t len,
-                                      MeshAliveEntry* out, uint8_t announce[MALIVE_PAYLOAD]) {
-  uint8_t raw[MALIVE_HEARD_SIZE];
-  if (mqttV2B64Decode(payload, len, raw, sizeof(raw)) != MALIVE_HEARD_SIZE || raw[0] != MALIVE_KIND_HEARD) {
+// The server's side, for the host suite and the vectors: the announce as it was on the air,
+// and what the Observer node said of it. False for what is not such a message.
+static inline bool meshAliveOpenSeen(const char* payload, size_t len, uint8_t announce[MALIVE_PAYLOAD],
+                                     int8_t* snr, uint8_t* hops, uint8_t* via) {
+  uint8_t raw[MALIVE_SEEN_SIZE];
+  if (payload == NULL || mqttV2B64Decode(payload, len, raw, sizeof(raw)) != MALIVE_SEEN_SIZE
+      || raw[0] != MALIVE_KIND_SEEN || raw[MALIVE_PAYLOAD + 2] > MALIVE_VIA_FLOOD) {
     return false;
   }
-  uint8_t* p = raw + 1 + MCC3_NONCE_LEN;
-  if (!mcc3Open(key, raw + 1, raw, 1 + MCC3_NONCE_LEN, p, MALIVE_HEARD_PLAIN, p)) return false;
-  memset(out, 0, sizeof(*out));
-  out->used = true;
-  memcpy(out->node_key, p, 32);
-  memcpy(out->kept, p + 32, MALIVE_KEPT);
-  const uint8_t* h = p + 32 + MALIVE_KEPT;
-  out->heard_at = mqttCtrlMeshU32(h);
-  out->snr = (int8_t)h[4];
-  out->hops = h[5];
-  out->advert_heard_at = mqttCtrlMeshU32(h + 6);
-  out->advert_snr = (int8_t)h[10];
-  out->advert_hops = h[11];
-  announce[0] = p[0];
-  memcpy(announce + 1, p, 32 + MALIVE_KEPT);
+  announce[0] = raw[1];
+  memcpy(announce + 1, raw + 1, MALIVE_PAYLOAD - 1);
+  *snr = (int8_t)raw[MALIVE_PAYLOAD];
+  *hops = raw[MALIVE_PAYLOAD + 1];
+  *via = raw[MALIVE_PAYLOAD + 2];
   return true;
 }
 
-// The catching node's publishing, one slot at a time: `dirty` has a bit for each slot whose
-// retained message is behind the table. The lowest waiting slot when the gap since the last
-// publish has passed, else -1. millis(), and its wrap.
-static inline int meshAliveNextPublish(uint16_t dirty, bool published_before, uint32_t last_ms,
-                                       uint32_t now_ms) {
-  if (dirty == 0 || (published_before && now_ms - last_ms < MALIVE_PUBLISH_GAP_MS)) return -1;
-  int slot = 0;
-  while (!(dirty & (1u << slot))) slot++;
-  return slot;
+// The announces forwarded in the last ten minutes, by the first 4 bytes of the node's key,
+// boot and sequence: a window, not a table of nodes. `now_secs` is any clock that only moves
+// forward (the uptime).
+struct MeshAliveRecent {
+  uint8_t key[MALIVE_RECENT][4];
+  uint32_t boot[MALIVE_RECENT], sequence[MALIVE_RECENT], at[MALIVE_RECENT];
+  uint8_t used, next;
+};
+
+// True, and remembered, for an announce not forwarded in the window.
+static inline bool meshAliveRecentFresh(MeshAliveRecent* r, const uint8_t* announce, uint32_t now_secs) {
+  const uint32_t boot = mqttCtrlMeshU32(announce + MALIVE_AT_BOOT);
+  const uint32_t sequence = mqttCtrlMeshU32(announce + MALIVE_AT_SEQUENCE);
+  for (uint8_t i = 0; i < r->used; i++) {
+    if (memcmp(r->key[i], announce + 1, 4) == 0 && r->boot[i] == boot && r->sequence[i] == sequence
+        && now_secs - r->at[i] < MALIVE_RECENT_SECS) {
+      return false;
+    }
+  }
+  const uint8_t i = r->next;
+  memcpy(r->key[i], announce + 1, 4);
+  r->boot[i] = boot;
+  r->sequence[i] = sequence;
+  r->at[i] = now_secs;
+  r->next = (uint8_t)((i + 1) % MALIVE_RECENT);
+  if (r->used < MALIVE_RECENT) r->used++;
+  return true;
+}
+
+// What waits for the server, oldest first; a full queue drops its oldest.
+struct MeshAliveSeenQueue {
+  uint8_t item[MALIVE_SEEN_QUEUE][MALIVE_SEEN_SIZE];
+  uint8_t head, count;
+  uint32_t dropped;
+};
+
+static inline void meshAliveSeenPush(MeshAliveSeenQueue* q, const uint8_t item[MALIVE_SEEN_SIZE]) {
+  if (q->count == MALIVE_SEEN_QUEUE) {
+    q->head = (uint8_t)((q->head + 1) % MALIVE_SEEN_QUEUE);
+    q->count--;
+    q->dropped++;
+  }
+  memcpy(q->item[(q->head + q->count) % MALIVE_SEEN_QUEUE], item, MALIVE_SEEN_SIZE);
+  q->count++;
+}
+
+static inline const uint8_t* meshAliveSeenFront(const MeshAliveSeenQueue* q) {
+  return q->count == 0 ? NULL : q->item[q->head];
+}
+
+static inline void meshAliveSeenPop(MeshAliveSeenQueue* q) {
+  if (q->count == 0) return;
+  q->head = (uint8_t)((q->head + 1) % MALIVE_SEEN_QUEUE);
+  q->count--;
+}
+
+// Whether the next may go: the first at once, then one in 2 s. millis(), and its wrap.
+static inline bool meshAliveSeenDue(bool published_before, uint32_t last_ms, uint32_t now_ms) {
+  return !published_before || now_ms - last_ms >= MALIVE_SEEN_GAP_MS;
 }

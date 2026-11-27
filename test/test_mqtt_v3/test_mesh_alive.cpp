@@ -1,6 +1,5 @@
 // Host tests for the announce (src/helpers/MeshAliveLogic.h, lou-21): what a node without
-// Wi-Fi floods to its owner, and the table and the publish of the Observer node that catches
-// it. Part of the test_mqtt_v3 suite (env:native_v2, the real rweather/Crypto and MeshCore's
+// Wi-Fi floods to its owner, and what an Observer node that hears it hands the command server. Part of the test_mqtt_v3 suite (env:native_v2, the real rweather/Crypto and MeshCore's
 // ed25519), whose main() runs these too. The vectors are test/data/malive-vectors.json, made
 // by scripts/malive-vectors.py in Python and turned into malive_vectors.h: every one is
 // rebuilt here byte for byte.
@@ -93,13 +92,7 @@ std::vector<uint8_t> announceOf(uint8_t node, uint32_t boot, uint32_t sequence, 
   return out;
 }
 
-// The made-up node's key, as the table keeps it.
-uint8_t keyByteOf(uint8_t node) { return announceOf(node, 1, 1)[1]; }
 
-MeshAliveVerdict take(MeshAliveTable* t, const std::vector<uint8_t>& p, uint32_t now_secs, int* slot = NULL,
-                      uint32_t heard_at = 1795000000, int8_t snr = 0, uint8_t hops = 0) {
-  return meshAliveTake(t, OWNER.pub, p.data(), p.size(), heard_at, snr, hops, now_secs, slot);
-}
 
 }  // namespace
 
@@ -115,8 +108,6 @@ TEST(MeshAlive, KeysOfBothSidesAreTheVectors) {
   EXPECT_EQ(hex(derive(NODE, OWNER.pub, MALIVE_LABEL, NODE.pub).data(), 32), MALIVE_K_MALIVE_NODE);
   EXPECT_EQ(hex(derive(OWNER, NODE.pub, MALIVE_LABEL, NODE.pub).data(), 32), MALIVE_K_MALIVE_NODE);
   EXPECT_EQ(hex(derive(CATCHER, OWNER.pub, MALIVE_LABEL, CATCHER.pub).data(), 32), MALIVE_K_MALIVE_CATCHER);
-  EXPECT_EQ(hex(derive(CATCHER, OWNER.pub, MALIVE_HEARD_LABEL, CATCHER.pub).data(), 32), MALIVE_K_HEARD_CATCHER);
-  EXPECT_EQ(hex(derive(OWNER, CATCHER.pub, MALIVE_HEARD_LABEL, CATCHER.pub).data(), 32), MALIVE_K_HEARD_CATCHER);
 }
 
 // A key of its own: not one of the four mcc3 derives for the same node and owner.
@@ -127,7 +118,6 @@ TEST(MeshAlive, TheKeyIsNoneOfMcc3s) {
   mcc3DeriveKeys(shared, MALIVE_PUB_NODE, &k);
   std::vector<uint8_t> malive = unhex(MALIVE_K_MALIVE_NODE);
   for (const uint8_t* other : { k.cmd, k.mesh, k.alive, k.fwd }) EXPECT_NE(0, memcmp(malive.data(), other, 32));
-  EXPECT_NE(std::string(MALIVE_K_MALIVE_CATCHER), MALIVE_K_HEARD_CATCHER);
 }
 
 TEST(MeshAlive, EveryAnnounceIsRebuiltByteForByte) {
@@ -324,213 +314,111 @@ TEST(MeshAlive, ThenEvery23HoursATenthEitherWay) {
   EXPECT_FALSE(meshAliveDue(&c, c.due_ms + 1));
 }
 
-// ---- the catching node -------------------------------------------------------------------
+// ---- the Observer node that hears it ---------------------------------------------------
 
-TEST(MeshAliveTable, KeepsTheNewestOfANode) {
-  MeshAliveTable t;
-  int slot = -1;
-  EXPECT_EQ(take(&t, announceOf(1, 5, 1), 0, &slot, 111, -8, 3), MALIVE_ADDED);
-  EXPECT_EQ(slot, 0);
-  EXPECT_TRUE(t.entry[0].used);
-  EXPECT_EQ(t.entry[0].heard_at, 111u);
-  EXPECT_EQ(t.entry[0].snr, -8);
-  EXPECT_EQ(t.entry[0].hops, 3);
-  EXPECT_EQ(t.entry[0].advert_heard_at, 0u);
-  EXPECT_EQ(hex(t.entry[0].kept, MALIVE_KEPT), hex(announceOf(1, 5, 1).data() + 33, MALIVE_KEPT));
-
-  // The same again, by another path or replayed, and anything older: dropped, nothing moves.
-  slot = -1;
-  EXPECT_EQ(take(&t, announceOf(1, 5, 1), 0, &slot, 222, 4, 1), MALIVE_OLD);
-  EXPECT_EQ(slot, -1);
-  EXPECT_EQ(t.entry[0].heard_at, 111u);
-  EXPECT_EQ(take(&t, announceOf(1, 4, 99), 0), MALIVE_OLD);
-  EXPECT_EQ(meshAliveEntryBoot(&t.entry[0]), 5u);
-  EXPECT_EQ(meshAliveEntrySequence(&t.entry[0]), 1u);
-
-  // A later sequence, then a later boot whose sequence starts again.
-  EXPECT_EQ(take(&t, announceOf(1, 5, 2), 0, &slot, 333, 4, 1), MALIVE_NEWER);
-  EXPECT_EQ(slot, 0);
-  EXPECT_EQ(t.entry[0].heard_at, 333u);
-  EXPECT_EQ(t.entry[0].snr, 4);
-  EXPECT_EQ(t.entry[0].hops, 1);
-  EXPECT_EQ(take(&t, announceOf(1, 6, 1), 0, &slot), MALIVE_NEWER);
-  EXPECT_EQ(meshAliveEntryBoot(&t.entry[0]), 6u);
-  EXPECT_EQ(take(&t, announceOf(1, 5, 3), 0), MALIVE_OLD);
-  EXPECT_FALSE(t.entry[1].used);
-  EXPECT_TRUE(meshAliveKept(MALIVE_NEWER));
-  EXPECT_TRUE(meshAliveKept(MALIVE_ADDED));
-  EXPECT_FALSE(meshAliveKept(MALIVE_OLD));
-  EXPECT_FALSE(meshAliveKept(MALIVE_LIMITED));
-}
-
-TEST(MeshAliveTable, KeepsOnlyItsOwnOwners) {
-  MeshAliveTable t;
-  int slot = -1;
-  EXPECT_EQ(take(&t, announceOf(1, 5, 1, CATCHER.pub), 0, &slot), MALIVE_OTHER_OWNER);
-  std::vector<uint8_t> p = announceOf(1, 5, 1);
-  p[MALIVE_AT_KIND] = 0x4E;
-  EXPECT_EQ(take(&t, p, 0, &slot), MALIVE_NOT_ANNOUNCE);
-  p = announceOf(1, 5, 1);
-  p.push_back(0);
-  EXPECT_EQ(take(&t, p, 0, &slot), MALIVE_NOT_ANNOUNCE);
-  p.resize(100);
-  EXPECT_EQ(take(&t, p, 0, &slot), MALIVE_NOT_ANNOUNCE);
-  EXPECT_EQ(slot, -1);
-  for (const MeshAliveEntry& e : t.entry) EXPECT_FALSE(e.used);
-  // None of them counted against the hour's four.
-  for (uint8_t n = 1; n <= 4; n++) EXPECT_EQ(take(&t, announceOf(n, 1, 1), 0), MALIVE_ADDED);
-}
-
-TEST(MeshAliveTable, AdmitsFourNewNodesAnHour) {
-  MeshAliveTable t;
-  for (uint8_t n = 1; n <= 4; n++) EXPECT_EQ(take(&t, announceOf(n, 1, 1), 100 + n), MALIVE_ADDED);
-  int slot = -1;
-  EXPECT_EQ(take(&t, announceOf(5, 1, 1), 200, &slot), MALIVE_LIMITED);
-  EXPECT_EQ(slot, -1);
-  EXPECT_FALSE(t.entry[4].used);
-  // A node already in the table is not new: its next announce is kept whatever the hour holds.
-  EXPECT_EQ(take(&t, announceOf(2, 1, 2), 200), MALIVE_NEWER);
-  // An hour after the first was admitted there is room for one, and for no more.
-  EXPECT_EQ(take(&t, announceOf(5, 1, 1), 100 + 1 + 3599), MALIVE_LIMITED);
-  EXPECT_EQ(take(&t, announceOf(5, 1, 1), 100 + 1 + 3600, &slot), MALIVE_ADDED);
-  EXPECT_EQ(slot, 4);
-  EXPECT_EQ(take(&t, announceOf(6, 1, 1), 100 + 1 + 3600), MALIVE_LIMITED);
-}
-
-TEST(MeshAliveTable, AFullTableDropsTheNodeHeardLongestAgo) {
-  MeshAliveTable t;
-  uint32_t now = 0;
-  for (uint8_t n = 1; n <= MALIVE_TABLE; n++) {
-    int slot = -1;
-    EXPECT_EQ(take(&t, announceOf(n, 1, 1), now, &slot), MALIVE_ADDED);
-    EXPECT_EQ(slot, n - 1);
-    now += 900;
-  }
-  // Node 1 is heard again, so node 2 is now the one heard longest ago.
-  EXPECT_EQ(take(&t, announceOf(1, 1, 2), now), MALIVE_NEWER);
-  t.entry[1].advert_heard_at = 1795000000;
-  int slot = -1;
-  EXPECT_EQ(take(&t, announceOf(100, 1, 1), now, &slot), MALIVE_ADDED);
-  EXPECT_EQ(slot, 1);
-  EXPECT_EQ(t.entry[1].node_key[0], keyByteOf(100));
-  EXPECT_EQ(t.entry[0].node_key[0], keyByteOf(1));
-  // Nothing of the entry that left stays behind in its slot.
-  EXPECT_EQ(meshAliveEntrySequence(&t.entry[1]), 1u);
-  EXPECT_EQ(t.entry[1].advert_heard_at, 0u);
-  now += 900;
-  EXPECT_EQ(take(&t, announceOf(101, 1, 1), now, &slot), MALIVE_ADDED);
-  EXPECT_EQ(slot, 2);
-  // The node that left is new again when it comes back.
-  now += 900;
-  EXPECT_EQ(take(&t, announceOf(2, 1, 1), now, &slot), MALIVE_ADDED);
-  EXPECT_EQ(slot, 3);
-  int used = 0;
-  for (const MeshAliveEntry& e : t.entry) used += e.used;
-  EXPECT_EQ(used, MALIVE_TABLE);
-}
-
-TEST(MeshAliveHeard, EveryPublishIsRebuiltByteForByteAndOpened) {
-  std::vector<uint8_t> key = derive(CATCHER, OWNER.pub, MALIVE_HEARD_LABEL, CATCHER.pub);
-  ASSERT_GE(sizeof(MALIVE_HEARD) / sizeof(MALIVE_HEARD[0]), 2u);
-  for (const MAliveVecHeard& v : MALIVE_HEARD) {
+TEST(MeshAliveSeen, EveryForwardIsRebuiltByteForByteAndRead) {
+  ASSERT_GE(sizeof(MALIVE_SEEN) / sizeof(MALIVE_SEEN[0]), 3u);
+  for (const MAliveVecSeen& v : MALIVE_SEEN) {
     SCOPED_TRACE(v.name);
     const MAliveVecAnnounce* heard = NULL;
     for (const MAliveVecAnnounce& a : MALIVE_ANNOUNCES) if (strcmp(a.name, v.announce) == 0) heard = &a;
     ASSERT_NE(heard, nullptr);
     std::vector<uint8_t> on_air = unhex(heard->payload);
 
-    // As the catching node does: the announce into its table, the entry onto its slot.
-    MeshAliveTable t;
-    int slot = -1;
-    ASSERT_EQ(take(&t, on_air, 0, &slot, v.heard_at, (int8_t)v.snr, v.hops), MALIVE_ADDED);
-    MeshAliveEntry* e = &t.entry[slot];
-    e->advert_heard_at = v.advert_heard_at;
-    e->advert_snr = (int8_t)v.advert_snr;
-    e->advert_hops = v.advert_hops;
-    char out[MALIVE_HEARD_B64 + 1];
-    std::vector<uint8_t> nonce = unhex(v.nonce);
-    size_t n = meshAliveBuildHeard(key.data(), nonce.data(), e, out, sizeof(out));
+    uint8_t item[MALIVE_SEEN_SIZE];
+    meshAliveBuildSeen(on_air.data(), (int8_t)v.snr, v.hops, v.via, item);
+    char out[MALIVE_SEEN_B64 + 1];
+    size_t n = mqttV2B64Encode(item, sizeof(item), out, sizeof(out));
     EXPECT_EQ(std::string(out, n), v.payload);
-    EXPECT_EQ(n, (size_t)MALIVE_HEARD_B64);
-    EXPECT_EQ(v.bytes, (size_t)MALIVE_HEARD_SIZE);
-
+    EXPECT_EQ(v.bytes, (size_t)MALIVE_SEEN_SIZE);
     char topic[MQTTCTRL_MAX_TOPIC + 1];
-    ASSERT_TRUE(meshAliveHeardTopic(hex(CATCHER.pub, 32).c_str(), v.slot, topic, sizeof(topic)));
+    ASSERT_TRUE(meshAliveSeenTopic(hex(CATCHER.pub, 32).c_str(), topic, sizeof(topic)));
     EXPECT_STREQ(topic, v.topic);
 
-    // As the owner does: the entry with K_heard, then the announce inside with K_malive.
-    std::vector<uint8_t> owner_key = derive(OWNER, CATCHER.pub, MALIVE_HEARD_LABEL, CATCHER.pub);
-    MeshAliveEntry got;
+    // As the server does: the announce as it was on the air, checked by the key it names.
     uint8_t announce[MALIVE_PAYLOAD];
-    ASSERT_TRUE(meshAliveOpenHeard(owner_key.data(), v.payload, strlen(v.payload), &got, announce));
-    EXPECT_EQ(hex(got.node_key, 32), v.node_key);
-    EXPECT_EQ(got.heard_at, v.heard_at);
-    EXPECT_EQ(got.snr, v.snr);
-    EXPECT_EQ(got.hops, v.hops);
-    EXPECT_EQ(got.advert_heard_at, v.advert_heard_at);
-    EXPECT_EQ(got.advert_snr, v.advert_snr);
-    EXPECT_EQ(got.advert_hops, v.advert_hops);
+    int8_t snr;
+    uint8_t hops, via;
+    ASSERT_TRUE(meshAliveOpenSeen(v.payload, strlen(v.payload), announce, &snr, &hops, &via));
     EXPECT_EQ(hex(announce, sizeof(announce)), heard->payload);
-    const Ident& node = identOf(*heard);
-    std::vector<uint8_t> malive = derive(OWNER, node.pub, MALIVE_LABEL, node.pub);
-    MeshAliveOpened o;
-    ASSERT_TRUE(open(malive.data(), announce, sizeof(announce), &o));
-    EXPECT_STREQ(o.name, heard->opened_name);
-    EXPECT_EQ(o.battery_mv, heard->battery_mv);
+    EXPECT_EQ(snr, v.snr);
+    EXPECT_EQ(hops, v.hops);
+    EXPECT_EQ(via, v.via);
+    EXPECT_TRUE(meshAliveSignatureOk(announce, verifyNamed, (void*)(announce + 1)));
   }
 }
 
-TEST(MeshAliveHeard, OnlyTheOwnerOpensIt) {
-  const MAliveVecHeard& v = MALIVE_HEARD[0];
-  std::vector<uint8_t> key = unhex(MALIVE_K_HEARD_CATCHER);
-  MeshAliveEntry got;
+TEST(MeshAliveSeen, TheSizes) {
+  EXPECT_EQ(MALIVE_SEEN_SIZE, 168);
+  EXPECT_EQ((int)MALIVE_SEEN_B64, 224);
   uint8_t announce[MALIVE_PAYLOAD];
-  ASSERT_TRUE(meshAliveOpenHeard(key.data(), v.payload, strlen(v.payload), &got, announce));
+  int8_t snr;
+  uint8_t hops, via;
+  const char* good = MALIVE_SEEN[0].payload;
+  EXPECT_FALSE(meshAliveOpenSeen(good, strlen(good) - 4, announce, &snr, &hops, &via));
+  EXPECT_FALSE(meshAliveOpenSeen(NULL, 0, announce, &snr, &hops, &via));
+  uint8_t raw[MALIVE_SEEN_SIZE];
+  ASSERT_EQ(mqttV2B64Decode(good, strlen(good), raw, sizeof(raw)), (size_t)MALIVE_SEEN_SIZE);
+  EXPECT_EQ(raw[0], 0x53);
+  char text[MALIVE_SEEN_B64 + 1];
+  raw[0] = 0x48;
+  EXPECT_FALSE(meshAliveOpenSeen(text, mqttV2B64Encode(raw, sizeof(raw), text, sizeof(text)), announce, &snr, &hops, &via));
+  raw[0] = 0x53;
+  raw[MALIVE_SEEN_SIZE - 1] = 3;
+  EXPECT_FALSE(meshAliveOpenSeen(text, mqttV2B64Encode(raw, sizeof(raw), text, sizeof(text)), announce, &snr, &hops, &via));
+}
 
-  // Not the key the catching node's own announce would be sealed under, nor its alive key.
-  std::vector<uint8_t> other = unhex(MALIVE_K_MALIVE_CATCHER);
-  EXPECT_FALSE(meshAliveOpenHeard(other.data(), v.payload, strlen(v.payload), &got, announce));
+// A window, not a table of nodes: the same report is forwarded once in ten minutes, a newer
+// one at once.
+TEST(MeshAliveSeen, AnAnnounceGoesOnceInTenMinutes) {
+  MeshAliveRecent r = {};
+  std::vector<uint8_t> a = announceOf(1, 5, 1);
+  EXPECT_TRUE(meshAliveRecentFresh(&r, a.data(), 100));
+  EXPECT_FALSE(meshAliveRecentFresh(&r, a.data(), 100));
+  EXPECT_FALSE(meshAliveRecentFresh(&r, a.data(), 100 + 599));
+  EXPECT_TRUE(meshAliveRecentFresh(&r, announceOf(1, 5, 2).data(), 200));
+  EXPECT_TRUE(meshAliveRecentFresh(&r, announceOf(1, 6, 1).data(), 200));
+  EXPECT_TRUE(meshAliveRecentFresh(&r, announceOf(2, 5, 1).data(), 200));
+  EXPECT_TRUE(meshAliveRecentFresh(&r, a.data(), 100 + 600));
+  EXPECT_FALSE(meshAliveRecentFresh(&r, a.data(), 100 + 601));
 
-  uint8_t raw[MALIVE_HEARD_SIZE];
-  ASSERT_EQ(mqttV2B64Decode(v.payload, strlen(v.payload), raw, sizeof(raw)), (size_t)MALIVE_HEARD_SIZE);
-  EXPECT_EQ(raw[0], 0x48);
-  for (size_t at = 0; at < sizeof(raw); at++) {
-    uint8_t bad[MALIVE_HEARD_SIZE];
-    memcpy(bad, raw, sizeof(raw));
-    bad[at] ^= 0x80;
-    char text[MALIVE_HEARD_B64 + 1];
-    size_t n = mqttV2B64Encode(bad, sizeof(bad), text, sizeof(text));
-    EXPECT_FALSE(meshAliveOpenHeard(key.data(), text, n, &got, announce)) << "byte " << at;
+  // Eight are remembered; a ninth pushes out the oldest.
+  MeshAliveRecent w = {};
+  for (uint8_t n = 1; n <= MALIVE_RECENT; n++) EXPECT_TRUE(meshAliveRecentFresh(&w, announceOf(n, 1, 1).data(), 0));
+  for (uint8_t n = 1; n <= MALIVE_RECENT; n++) EXPECT_FALSE(meshAliveRecentFresh(&w, announceOf(n, 1, 1).data(), 1));
+  EXPECT_TRUE(meshAliveRecentFresh(&w, announceOf(9, 1, 1).data(), 2));
+  EXPECT_TRUE(meshAliveRecentFresh(&w, announceOf(1, 1, 1).data(), 3));
+  EXPECT_FALSE(meshAliveRecentFresh(&w, announceOf(3, 1, 1).data(), 4));
+}
+
+TEST(MeshAliveSeen, EightWaitTheOldestGivesWay) {
+  MeshAliveSeenQueue q = {};
+  EXPECT_EQ(meshAliveSeenFront(&q), nullptr);
+  meshAliveSeenPop(&q);
+  uint8_t item[MALIVE_SEEN_SIZE];
+  for (uint8_t n = 1; n <= MALIVE_SEEN_QUEUE + 2; n++) {
+    memset(item, n, sizeof(item));
+    meshAliveSeenPush(&q, item);
   }
-  EXPECT_FALSE(meshAliveOpenHeard(key.data(), v.payload, strlen(v.payload) - 4, &got, announce));
+  EXPECT_EQ(q.count, MALIVE_SEEN_QUEUE);
+  EXPECT_EQ(q.dropped, 2u);
+  for (uint8_t n = 3; n <= MALIVE_SEEN_QUEUE + 2; n++) {
+    ASSERT_NE(meshAliveSeenFront(&q), nullptr);
+    EXPECT_EQ(meshAliveSeenFront(&q)[0], n);
+    EXPECT_EQ(meshAliveSeenFront(&q)[MALIVE_SEEN_SIZE - 1], n);
+    meshAliveSeenPop(&q);
+  }
+  EXPECT_EQ(meshAliveSeenFront(&q), nullptr);
+  // About 1.4 KB in RAM, the window beside it.
+  EXPECT_LE(sizeof(MeshAliveSeenQueue) + sizeof(MeshAliveRecent), 1500u);
 }
 
-TEST(MeshAliveHeard, TheSizesAndTheSlots) {
-  EXPECT_EQ(MALIVE_KEPT, 132);
-  EXPECT_EQ(MALIVE_HEARD_PLAIN, 176);
-  EXPECT_EQ(MALIVE_HEARD_SIZE, 205);
-  EXPECT_EQ((int)MALIVE_HEARD_B64, 274);
-  EXPECT_EQ(MALIVE_TABLE, 16);
-
-  char topic[MQTTCTRL_MAX_TOPIC + 1];
-  EXPECT_TRUE(meshAliveHeardTopic(MALIVE_PUB_CATCHER, 0, topic, sizeof(topic)));
-  EXPECT_TRUE(meshAliveHeardTopic(MALIVE_PUB_CATCHER, 15, topic, sizeof(topic)));
-  EXPECT_FALSE(meshAliveHeardTopic(MALIVE_PUB_CATCHER, 16, topic, sizeof(topic)));
-  EXPECT_FALSE(meshAliveHeardTopic(MALIVE_PUB_CATCHER, -1, topic, sizeof(topic)));
-  char small[40];
-  EXPECT_FALSE(meshAliveHeardTopic(MALIVE_PUB_CATCHER, 0, small, sizeof(small)));
-}
-
-TEST(MeshAliveHeard, OnePublishAtATime) {
-  EXPECT_EQ(meshAliveNextPublish(0, false, 0, 1000), -1);
-  EXPECT_EQ(meshAliveNextPublish(0x0001, false, 0, 1000), 0);         // the first goes at once
-  EXPECT_EQ(meshAliveNextPublish(0x8010, false, 0, 1000), 4);         // the lowest slot first
-  EXPECT_EQ(meshAliveNextPublish(0x8000, false, 0, 1000), 15);
-  EXPECT_EQ(meshAliveNextPublish(0x0002, true, 1000, 1000 + MALIVE_PUBLISH_GAP_MS - 1), -1);
-  EXPECT_EQ(meshAliveNextPublish(0x0002, true, 1000, 1000 + MALIVE_PUBLISH_GAP_MS), 1);
-  // Across the wrap of millis().
-  EXPECT_EQ(meshAliveNextPublish(0x0002, true, 0xFFFFFF00u, 0x100), -1);
-  EXPECT_EQ(meshAliveNextPublish(0x0002, true, 0xFFFFFF00u, MALIVE_PUBLISH_GAP_MS - 0x100), 1);
-  // At most 40 an hour, under the command server's 60.
-  EXPECT_LE(3600000UL / MALIVE_PUBLISH_GAP_MS, 40UL);
+TEST(MeshAliveSeen, OnePublishInTwoSeconds) {
+  EXPECT_TRUE(meshAliveSeenDue(false, 0, 0));
+  EXPECT_FALSE(meshAliveSeenDue(true, 1000, 1000 + MALIVE_SEEN_GAP_MS - 1));
+  EXPECT_TRUE(meshAliveSeenDue(true, 1000, 1000 + MALIVE_SEEN_GAP_MS));
+  EXPECT_FALSE(meshAliveSeenDue(true, 0xFFFFFF00u, 0x100));
+  EXPECT_TRUE(meshAliveSeenDue(true, 0xFFFFFF00u, MALIVE_SEEN_GAP_MS - 0x100));
+  // At most 1800 an hour; the server takes 120 of one key, the queue holds the rest a while.
+  EXPECT_EQ(MALIVE_SEEN_GAP_MS, 2000UL);
 }

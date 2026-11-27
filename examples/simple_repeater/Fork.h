@@ -167,15 +167,15 @@ class Fork {
     unsigned long since;                     // millis() the request went out
   } _relay_wait;
 
-  // The announces heard for this node's owner (MeshAliveHooks.cpp), in RAM, and the slots
-  // whose retained message is behind the table.
-  MeshAliveTable _heard;
-  uint16_t _heard_dirty = 0;
-  bool _heard_published = false;
-  uint32_t _heard_published_ms = 0;
-  char _heard_key_for[PUB_KEY_SIZE * 2 + 1] = {0};
+  // The announces heard, on their way to the command server (MeshAliveHooks.cpp): nothing
+  // about a node is kept, only what waits to be published and what went in ten minutes.
+  MeshAliveSeenQueue _seen = {};
+  MeshAliveRecent _seen_recent = {};
+  bool _seen_published = false;
+  uint32_t _seen_published_ms = 0;
 
-  void loopHeard();
+  bool takeAnnounce(const uint8_t* announce, int8_t snr, uint8_t hops, uint8_t via);
+  void loopSeen();
   void relayForward();
   bool sendRelayRequest(const Mcc3Forward& fwd, uint32_t* air_ms);
   bool isRelayPeer(const uint8_t* hash);
