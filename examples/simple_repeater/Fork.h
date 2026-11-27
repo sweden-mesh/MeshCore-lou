@@ -15,7 +15,7 @@
     #include <helpers/bridges/MQTTBridge.h>
   #endif
   #include "MqttControl.h"
-  #include <helpers/MeshAliveLogic.h>
+  #include <helpers/MeshReportLogic.h>
   // An image without Wi-Fi announces itself to its owner over the mesh (MeshAliveHooks.cpp).
   // NO_FORK_ANNOUNCE leaves it out of a board whose flash it does not fit.
   #if !defined(WITH_MQTT_BRIDGE) && !defined(NO_FORK_ANNOUNCE)
@@ -174,8 +174,12 @@ class Fork {
   bool _seen_published = false;
   uint32_t _seen_published_ms = 0;
 
+  // The acks this node owes nodes that reported to it (MeshReportLogic.h, "who acks").
+  MreportAcks _acks = {};
+
   bool takeAnnounce(const uint8_t* announce, int8_t snr, uint8_t hops, uint8_t via);
   void loopSeen();
+  void loopAcks();
   void relayForward();
   bool sendRelayRequest(const Mcc3Forward& fwd, uint32_t* air_ms);
   bool isRelayPeer(const uint8_t* hash);
@@ -260,10 +264,14 @@ public:
 #endif
 
   // Every packet heard, before Mesh reads it (Mesh::onRecvPacket). Nothing is taken from it.
+  // And a zero-hop control packet, before upstream's discovery reads it: true when it was a
+  // report's or its ack, which upstream would ignore anyway.
 #if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
   void onRecvPacket(const mesh::Packet* pkt);
+  bool onControlData(mesh::Packet* pkt);
 #else
   void onRecvPacket(const mesh::Packet*) { }
+  bool onControlData(mesh::Packet*) { return false; }
 #endif
 
   // An anonymous request, before upstream reads it as a login or a query. Returns true

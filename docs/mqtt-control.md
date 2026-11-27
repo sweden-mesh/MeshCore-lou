@@ -767,9 +767,32 @@ node's key}`; the owner's tool finds its nodes there by the owner tag.
 - `set cmd.debug on` prints `mcc: seen: an announce of 4FD099CC, 7.1, 2 hop(s), via 2, 1 waiting`
   and `mcc: seen: 4FD099CC published`.
 
-The pieces are `src/helpers/MeshAliveLogic.h` and `test/test_mqtt_v3/test_mesh_alive.cpp`; the
-vectors both tools share are `test/data/malive-vectors.json`, made by
-`scripts/malive-vectors.py`.
+### Reporting to an Observer node nearby: zero-hop, acknowledged (lou-21)
+
+A node within direct range of a lou-21 Observer node reports without a flood. Two new
+sub-types of MeshCore's `PAYLOAD_TYPE_CONTROL` packet, with the top bit set, which makes them
+zero-hop only: no repeater forwards one, and upstream reads only `0x80` and `0x90`.
+
+| packet | bytes | layout |
+|---|---|---|
+| state `0xA0` | 167 | `0xA0`, the Observer node it names (the first 2 bytes of its key; `00 00` for none), the announce's bytes 1 to 164 |
+| ack `0xB0` | 41 | `0xB0`, the reporting node's key (first 4 bytes), the report id (4), the Observer node's whole key (32) |
+
+The **report id** is the first 4 bytes of the announce's signature: the same for every try of
+one report. Acks are not signed; a forged one makes a node skip its fallback once.
+
+**Who acks.** Every Observer `rc` or `arrc` image with `set cmd on` that hears a state packet
+checks the announce's signature and hands it to the command server as it does a flood (`via` 0).
+The Observer node it names acks 100 to 300 ms later. Any other waits 3 s and acks only if it heard
+no ack for that report; with nobody named, each waits 0.5 to 3 s at random and steps back when it
+hears another's ack first. An ack goes zero-hop, is counted with the node's answers over the
+mesh, and is not sent at all when that budget has no room. `set cmd.debug on` prints
+`mcc: report: 4FD099CC acked, 620 ms on the air`.
+
+The pieces are `src/helpers/MeshAliveLogic.h`, `src/helpers/MeshReportLogic.h` and their suites
+in `test/test_mqtt_v3/`; the vectors the tools and the server share are
+`test/data/malive-vectors.json`, made by `scripts/malive-vectors.py`, the packets between nodes
+among them.
 
 - A lou-20 Observer node forwards nothing, and a lou-20 node without Wi-Fi never announces: it
   is added by its key, as before.

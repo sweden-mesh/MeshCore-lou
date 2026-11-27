@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The announce's vectors (src/helpers/MeshAliveLogic.h, lou-21), made here and shared with the tools.
+"""The announce's vectors (src/helpers/MeshAliveLogic.h and MeshReportLogic.h, lou-21), made here and
+shared with the tools.
 
     python3 scripts/malive-vectors.py            write test/data/malive-vectors.json and
                                                  test/test_mqtt_v3/malive_vectors.h
@@ -163,6 +164,28 @@ def generate():
         seen_entry("S3 direct along a path, another node", announces[3], {"snr": -80, "hops": 0, "via": 1}),
     ]
 
+    # Reporting (src/helpers/MeshReportLogic.h): A1 between the node and the catching node.
+    a1_raw = bytes.fromhex(announces[0]["payload"])
+    report_id = a1_raw[1 + SIGNED:1 + SIGNED + 4]
+    node_pub, catcher_pub = pub["node"], pub["catcher"]
+
+    def packet(name, kind, raw, named=False, path_len=0, path=b""):
+        return {"name": name, "kind": kind, "announce": announces[0]["name"], "named": named,
+                "path_len": path_len, "path": up(path), "bytes": len(raw), "payload": up(raw)}
+
+    path2 = bytes([0x11, 0x22])
+    packets = [
+        packet("P1 a state packet naming the catching node", "state",
+               bytes([0xA0]) + catcher_pub[:2] + a1_raw[1:], named=True),
+        packet("P2 a state packet naming nobody", "state", bytes([0xA0, 0, 0]) + a1_raw[1:]),
+        packet("P3 the ack", "ack", bytes([0xB0]) + node_pub[:4] + report_id + catcher_pub),
+        packet("P4 the announce along a path of two", "direct",
+               a1_raw + catcher_pub[:2] + bytes([2]) + path2, path_len=2, path=path2),
+        packet("P5 the path ack for a path of two", "path-ack",
+               node_pub[:1] + catcher_pub + bytes([0x4B]) + report_id + bytes([2]) + path2.ljust(16, b"\0"),
+               path_len=2, path=path2),
+    ]
+
     def flipped(hexed, at):
         raw = bytearray(bytes.fromhex(hexed))
         raw[at] ^= 0x01
@@ -206,6 +229,8 @@ def generate():
             "kind_seen": KIND_SEEN, "seen_bytes": PAYLOAD + 3, "seen_base64url_chars": len(b64(bytes(PAYLOAD + 3))),
             "via": {"zero_hop": 0, "direct": 1, "flood": 2}, "seen_queue": 8, "seen_gap_seconds": 2,
             "seen_again_after_seconds": 600,
+            "state_bytes": 167, "ack_bytes": 41, "path_ack_bytes": 55, "kind_path_ack": 0x4B,
+            "control_state": 0xA0, "control_ack": 0xB0, "report_id": "the signature's first 4 bytes",
             "interval_seconds": 82800, "interval_spread_seconds": 8280,
         },
         "keys": {
@@ -218,6 +243,7 @@ def generate():
         },
         "announces": announces,
         "seen": seen_entries,
+        "packets": packets,
         "refusals": refusals,
     }
 
@@ -252,6 +278,8 @@ def render(d):
         "const char* signature; const char* payload; };",
         "struct MAliveVecSeen { const char* name; const char* announce; const char* topic; int snr; "
         "uint8_t hops; uint8_t via; size_t bytes; const char* payload; };",
+        "struct MAliveVecPacket { const char* name; const char* kind; bool named; uint8_t path_len; "
+        "const char* path; size_t bytes; const char* payload; };",
         "struct MAliveVecRefusal { const char* name; const char* input; const char* outcome; };",
         "",
     ]
@@ -277,6 +305,12 @@ def render(d):
         o = v["opened"]
         lines.append(row(c_str(v["name"]), c_str(v["announce"]), c_str(v["topic"]), str(o["snr"]), str(o["hops"]),
                          str(o["via"]), str(v["bytes"]), c_str(v["payload"])))
+    lines.append("};")
+
+    lines.append("static const MAliveVecPacket MALIVE_PACKETS[] = {")
+    for v in d["packets"]:
+        lines.append(row(c_str(v["name"]), c_str(v["kind"]), "true" if v["named"] else "false", str(v["path_len"]),
+                         c_str(v["path"]), str(v["bytes"]), c_str(v["payload"])))
     lines.append("};")
 
     lines.append("static const MAliveVecRefusal MALIVE_REFUSALS[] = {")
