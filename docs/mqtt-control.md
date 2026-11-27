@@ -643,10 +643,27 @@ and its owner.
 A forward runs nothing on the relay. It never reaches the CLI, so the deny list and the command
 counter are not involved. This is the plane's second sanctioned transmit, beside `trigger`.
 
-- **The switch.** `set relay off|own`, `get relay`. The default is `own`: the relay
-  serves the holder of its own command key and nobody else. A node without a command key never
-  relays. The owner may switch it over the plane; it is not under `cmd`, so the deny list
-  admits it. Observer `rc` and `arrc` images only.
+- **The switch.** `set relay any|own|off`, `get relay`. From lou-21 the default is `any`: the
+  relay serves its owner, and anybody who seals a guest forward to it (below), within caps that
+  keep the owner's half of the budget. `own` serves the holder of its own command key and
+  nobody else, as lou-20 did. A node without a command key relays only guests. The owner may
+  switch it over the plane; it is not under `cmd`, so the deny list admits it. Observer `rc`
+  and `arrc` images only. `/mqttcontrol` version 8 keeps the mode and the guests' cap; a
+  version 7 file's `own` was the default then, so it reads as `any`, and an owner who wants
+  `own` sets it again.
+- **Guests (lou-21).** A guest forward is kind `0x47` (`G`): the guest's own command public key
+  (32) in the clear, a nonce (12), then the forward's fields sealed under `K_gfwd` =
+  HKDF-SHA256(X25519(relay identity, guest key), info `mcc3/gfwd/` + the relay's key), with
+  the kind, the key and the nonce as associated data: 309 bytes, 412 characters. Only the holder
+  of the guest key can make one or read its result, a forward result sealed under the same key.
+  The caps are in RAM, new each day at midnight UTC and at a restart: each guest key at most
+  `set relay.guest <n>` floods a day (0 to 100, default 10; `get relay.guest`); all guests
+  together at most half the day's floods (50 of 100) and only while less than half the
+  quarter's airtime is spent; each target at most 10 floods a day from guests, whoever sends
+  them. A direct send counts against the airtime alone. Keys and targets are counted in rings of
+  the last 16 by their first 4 bytes, so a key pushed out starts at 0 again; the guests' half
+  bounds what that buys. Each guest key has its own counter there. A guest forward never takes
+  the last of the 4 arrival places.
 - **The budget.** The relay's requests have the same airtime budget as a node's answers: a
   burst of 15 minutes at 5 % (45 s on the air, about 26 requests), then 15 minutes at 1 %
   (9 s), then a burst again. A flood also costs every repeater that hears it, so floods keep
@@ -656,7 +673,8 @@ counter are not involved. This is the plane's second sanctioned transmit, beside
   not be sent spends nothing. The budgets are kept in RAM: a restart opens a burst.
 - **One at a time.** From the moment a request is sent until the target's answer, or 120 s,
   the relay holds that one forward. A forward that arrives meanwhile is answered `busy` and is
-  not sent. The node holds four arriving messages (commands and forwards alike) and takes
+  not sent, except an owner's forward while a guest's is held: that one waits, and goes when
+  the guest's is over, if its expiry and the budget still allow. The node holds four arriving messages (commands and forwards alike) and takes
   them up in the order they came, one a pass of its main loop, so a stranger's message on the
   node's topic does not push the owner's out. lou-20 and older held one. A fifth that arrives
   while four wait is dropped, unanswered, and counted: `set cmd.debug on` prints
@@ -675,17 +693,22 @@ counter are not involved. This is the plane's second sanctioned transmit, beside
   counter then refuses it.
 - **The result** says what happened: `answered` with the target's response, `no-answer` (sent,
   nothing came back; the target may still have run the command), or why nothing was sent:
-  `off`, `expired`, `replay`, `bad-body`, `busy`, `rate-limited`, `clock-unset`, `send-failed`.
+  `off`, `expired`, `replay`, `bad-body`, `busy`, `rate-limited`, `clock-unset`, `send-failed`,
+  and from lou-21 for a guest `guest-cap` (10, its key's floods are spent), `guests-full` (11,
+  the guests' half of the floods or the airtime is spent) and `target-cap` (12). A guest is
+  answered `off` when the relay is not `any`.
   A body that is not a whole `0xC2` request is a `bad-body`, an old-scheme (`0xC1`) request
   among them.
   With an answer come its SNR at the relay and, when the answer returned a path, that path,
   which mccontrol can send direct along next time.
-- `get relay` answers `> own, forwarded 3, answered 2, refused 1, burst, 39.9 s airtime
-  left, floods today 1 of 100`, the counts since boot, or `> off`. Bit 4 of the alive message's flags says the
-  node relays.
+- `get relay` answers `> any, forwarded 3, answered 2, refused 1, burst, 39.9 s airtime
+  left, floods today 1 of 100, guests: 3 keys, 7 floods today`, the counts since boot (the
+  guests' of the day), `> own, ...` without the guests, or `> off`. Bit 4 of the alive
+  message's flags says the node relays (`own` or `any`). `set cmd.debug on` prints
+  `mcc: relay: guest 6C28FD05, forward 3, request 7, sent flood, 1712 ms on the air`.
 
-Anything that is not a forward of the owner's is dropped in silence and counted in
-`get cmd` as unverified, as a command is.
+Anything that is not a forward of the owner's, or a guest forward that opens, is dropped in
+silence and counted in `get cmd` as unverified, as a command is.
 
 **The zero-hop flag** is for the target, on every image from lou-20. Flags bit `0x02` in a `0xC2`
 request, inside the signature, says: answer with one transmission and no path. The target then

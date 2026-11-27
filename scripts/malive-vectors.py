@@ -186,6 +186,33 @@ def generate():
                path_len=2, path=path2),
     ]
 
+    # A guest's forward (lou-21, MqttControlV3.h): the stranger other_owner relays through the
+    # catching node to the node, sealed under K_gfwd; the body is a 0xC2 request the relay
+    # never opens, so any 132 bytes that start so stand in for it.
+    s_guest = shared(bytes.fromhex(seeds["other_owner"]), pub["catcher"])
+    assert s_guest == shared(bytes.fromhex(seeds["catcher"]), pub["other_owner"])
+    k_gfwd = derive(s_guest, "mcc3/gfwd/", pub["catcher"])
+    body = bytes([0xC2]) + bytes(range(1, 132))
+    fwd_fields = {"counter": 3, "expiry": 1795000300, "rid": "000102030405060708090A0B0C0D0E0F",
+                  "target": up(pub["node"]), "route": 1, "path_len": 0, "path": "", "body": up(body)}
+    plain = struct.pack("<II", 3, 1795000300) + bytes(range(16)) + pub["node"] + bytes([1, 0]) + bytes(57)
+    plain += bytes([len(body)]) + body
+    gnonce = bytes(range(0x70, 0x7C))
+    ghead = bytes([0x47]) + pub["other_owner"] + gnonce
+    graw = ghead + seal(k_gfwd, gnonce, ghead, plain)
+    rnonce = bytes(range(0x80, 0x8C))
+    rplain = struct.pack("<IBIBbB", 3, 10, 1795000010, 0, -128, 0xFF) + bytes(64) + bytes([0])
+    rplain = rplain.ljust(256, b"\0")
+    rhead = bytes([0x66]) + rnonce
+    rraw = rhead + seal(k_gfwd, rnonce, rhead, rplain)
+    guest_forwards = [{
+        "name": "G1 a stranger's flood in the relay's region home through the catching node to the node",
+        "relay": "catcher", "guest": "other_owner", "k_gfwd": up(k_gfwd), "fields": fwd_fields,
+        "nonce": up(gnonce), "bytes": len(graw), "payload": b64(graw),
+        "result": {"status": 10, "status_name": "guest-cap", "clock": 1795000010, "nonce": up(rnonce),
+                   "bytes": len(rraw), "payload": b64(rraw)},
+    }]
+
     def flipped(hexed, at):
         raw = bytearray(bytes.fromhex(hexed))
         raw[at] ^= 0x01
@@ -244,6 +271,7 @@ def generate():
         "announces": announces,
         "seen": seen_entries,
         "packets": packets,
+        "guest_forwards": guest_forwards,
         "refusals": refusals,
     }
 
@@ -280,6 +308,8 @@ def render(d):
         "uint8_t hops; uint8_t via; size_t bytes; const char* payload; };",
         "struct MAliveVecPacket { const char* name; const char* kind; bool named; uint8_t path_len; "
         "const char* path; size_t bytes; const char* payload; };",
+        "struct MAliveVecGuest { const char* name; const char* k_gfwd; uint32_t counter, expiry; const char* body; "
+        "const char* nonce; size_t bytes; const char* payload; const char* result_nonce; const char* result; };",
         "struct MAliveVecRefusal { const char* name; const char* input; const char* outcome; };",
         "",
     ]
@@ -311,6 +341,14 @@ def render(d):
     for v in d["packets"]:
         lines.append(row(c_str(v["name"]), c_str(v["kind"]), "true" if v["named"] else "false", str(v["path_len"]),
                          c_str(v["path"]), str(v["bytes"]), c_str(v["payload"])))
+    lines.append("};")
+
+    lines.append("static const MAliveVecGuest MALIVE_GUESTS[] = {")
+    for v in d["guest_forwards"]:
+        f = v["fields"]
+        lines.append(row(c_str(v["name"]), c_str(v["k_gfwd"]), "%uu" % f["counter"], "%uu" % f["expiry"],
+                         c_str(f["body"]), c_str(v["nonce"]), str(v["bytes"]), c_str(v["payload"]),
+                         c_str(v["result"]["nonce"]), c_str(v["result"]["payload"])))
     lines.append("};")
 
     lines.append("static const MAliveVecRefusal MALIVE_REFUSALS[] = {")

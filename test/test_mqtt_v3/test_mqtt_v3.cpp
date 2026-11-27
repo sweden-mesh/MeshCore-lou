@@ -1230,7 +1230,7 @@ TEST(Mcc3Relay, AStatusHasTheNameMccontrolPrints) {
   EXPECT_STREQ("off", mcc3ForwardStatusName(MCC3_FWD_OFF));
   EXPECT_STREQ("rate-limited", mcc3ForwardStatusName(MCC3_FWD_RATE_LIMITED));
   EXPECT_STREQ("send-failed", mcc3ForwardStatusName(MCC3_FWD_SEND_FAILED));
-  EXPECT_STREQ("unknown", mcc3ForwardStatusName(MCC3_FWD_SEND_FAILED + 1));
+  EXPECT_STREQ("unknown", mcc3ForwardStatusName(MCC3_FWD_TARGET_CAP + 1));
   EXPECT_STREQ("unknown", mcc3ForwardStatusName(-1));
 }
 
@@ -1243,13 +1243,15 @@ TEST(Mcc3Relay, EveryStatusHasItsOwnName) {
     { MCC3_FWD_REPLAY, "replay" },             { MCC3_FWD_BAD_BODY, "bad-body" },
     { MCC3_FWD_BUSY, "busy" },                 { MCC3_FWD_RATE_LIMITED, "rate-limited" },
     { MCC3_FWD_CLOCK_UNSET, "clock-unset" },   { MCC3_FWD_SEND_FAILED, "send-failed" },
+    { MCC3_FWD_GUEST_CAP, "guest-cap" },       { MCC3_FWD_GUESTS_FULL, "guests-full" },
+    { MCC3_FWD_TARGET_CAP, "target-cap" },
   };
   int n = 0;
   for (const auto& r : rows) {
     EXPECT_EQ(n++, r.status);
     EXPECT_STREQ(r.name, mcc3ForwardStatusName(r.status));
   }
-  EXPECT_EQ(MCC3_FWD_SEND_FAILED + 1, n);
+  EXPECT_EQ(MCC3_FWD_TARGET_CAP + 1, n);
   // The longest line the relay prints for a refusal fits debugLine's 120 bytes.
   char line[120];
   int len = snprintf(line, sizeof(line), "relay: forward %u, request %u, refused, %s", 4294967295u, 4294967295u,
@@ -1412,6 +1414,239 @@ TEST(Mcc3Relay, EveryBitOfAResultMattersAndOnlyThisRelaysKeyOpensIt) {
   ASSERT_EQ(380u, mcc3BuildResult(node.cmd, nonce, 9, 0, 0, "get name", "> x", res, sizeof(res)));
   EXPECT_EQ(MQTTCTRL_ERR_BAD_FIELDS, mcc3OpenForwardResult(owner.fwd, res, 380, &back));
   EXPECT_EQ("bad-fields", openResult(owner, out).outcome);
+}
+
+// ---- relaying for guests (lou-21, `relay any`) -------------------------------------------
+//
+// NODE is the relay again; the guest is a stranger with a command key of its own.
+
+static const Ident GUEST(MCC3_SEED_OTHER_OWNER);
+static const uint8_t GFWD_NONCE[12] = { 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B };
+
+// K_gfwd from either side: the relay's identity and the guest's key, or the other way round.
+static std::vector<uint8_t> guestKey(const Ident& self, const uint8_t* peer, const uint8_t* relay_key) {
+  uint8_t shared[32];
+  ed25519_key_exchange(shared, peer, self.prv);
+  std::vector<uint8_t> k(32);
+  mcc3DeriveGuestKey(shared, hex(relay_key, 32).c_str(), k.data());
+  return k;
+}
+
+static std::string sealGuest(const Ident& guest, const Mcc3Forward& f) {
+  std::vector<uint8_t> k = guestKey(guest, NODE.pub, NODE.pub);
+  char out[MCC3_GFWD_B64 + 1];
+  size_t n = mcc3BuildGuestForward(k.data(), guest.pub, NODE.pub, GFWD_NONCE, &f, out, sizeof(out));
+  return std::string(out, n);
+}
+
+TEST(Mcc3Guest, AGuestForwardIsSealedToTheGuestsOwnKey) {
+  EXPECT_EQ(0x47, MCC3_KIND_GUEST_FWD);
+  EXPECT_EQ(309, MCC3_GFWD_SIZE);
+  EXPECT_EQ(412, MCC3_GFWD_B64);
+  EXPECT_LE(MCC3_GFWD_B64, MQTTCTRL_MAX_PAYLOAD);
+  std::vector<uint8_t> relay_side = guestKey(NODE, GUEST.pub, NODE.pub);
+  EXPECT_EQ(hex(relay_side.data(), 32), hex(guestKey(GUEST, NODE.pub, NODE.pub).data(), 32));
+  // Not K_fwd of the relay's owner, nor the same for another relay.
+  const Mcc3Keys node = nodeKeys(NODE, OWNER.pub);
+  EXPECT_NE(hex(relay_side.data(), 32), hex(node.fwd, 32));
+  EXPECT_NE(hex(relay_side.data(), 32), hex(guestKey(GUEST, NODE.pub, TARGET.pub).data(), 32));
+
+  const Mcc3Forward f = forwardTo(TARGET, 9, MCC3_ROUTE_FLOOD_HOME);
+  const std::string sealed = sealGuest(GUEST, f);
+  ASSERT_EQ(sealed.size(), (size_t)MCC3_GFWD_B64);
+  EXPECT_EQ(MCC3_KIND_GUEST_FWD, mcc3PayloadKind(sealed.data(), sealed.size()));
+  uint8_t key[32];
+  ASSERT_TRUE(mcc3GuestForwardKey(sealed.data(), sealed.size(), key));
+  EXPECT_EQ(hex(key, 32), hex(GUEST.pub, 32));
+  Mcc3Forward back;
+  ASSERT_EQ(MQTTCTRL_OK, mcc3OpenGuestForward(relay_side.data(), sealed.data(), sealed.size(), &back));
+  EXPECT_EQ(back.counter, 9u);
+  EXPECT_EQ(back.route, MCC3_ROUTE_FLOOD_HOME);
+  EXPECT_EQ(hex(back.target, 32), hex(TARGET.pub, 32));
+  EXPECT_EQ(hex(back.body, MCC3_FWD_BODY), hex(f.body, MCC3_FWD_BODY));
+
+  // An owner's forward is no guest's, and the other way round; nor are other keys.
+  const Mcc3Keys owner = ownerKeys(OWNER, NODE.pub);
+  const std::string owners = sealForward(owner, f);
+  EXPECT_FALSE(mcc3GuestForwardKey(owners.data(), owners.size(), key));
+  EXPECT_EQ(MQTTCTRL_ERR_BAD_FIELDS, mcc3OpenGuestForward(relay_side.data(), owners.data(), owners.size(), &back));
+  EXPECT_EQ(MQTTCTRL_ERR_BAD_FIELDS, mcc3OpenForward(&node, sealed.data(), sealed.size(), &back));
+  EXPECT_EQ(MQTTCTRL_ERR_SIG_INVALID, mcc3OpenGuestForward(node.fwd, sealed.data(), sealed.size(), &back));
+  EXPECT_FALSE(mcc3GuestForwardKey(NULL, 0, key));
+
+  // Every bit is guarded: the guest key in the clear too, since it is in the AAD.
+  std::vector<uint8_t> raw = unb64(sealed.c_str());
+  for (size_t bit = 8; bit < raw.size() * 8; bit += 7) {
+    std::vector<uint8_t> bad = raw;
+    bad[bit / 8] ^= (uint8_t)(1 << (bit % 8));
+    char text[MCC3_GFWD_B64 + 1];
+    size_t n = mqttV2B64Encode(bad.data(), bad.size(), text, sizeof(text));
+    EXPECT_NE(MQTTCTRL_OK, mcc3OpenGuestForward(relay_side.data(), text, n, &back)) << bit;
+  }
+  // Nothing a relay would refuse as bad-body is built.
+  char out[MCC3_GFWD_B64 + 1];
+  Mcc3Forward self = forwardTo(NODE, 9, 0);
+  EXPECT_EQ(0u, mcc3BuildGuestForward(relay_side.data(), GUEST.pub, NODE.pub, GFWD_NONCE, &self, out, sizeof(out)));
+}
+
+TEST(Mcc3Guest, TheNewRefusalsAreAppended) {
+  EXPECT_EQ(10, MCC3_FWD_GUEST_CAP);
+  EXPECT_EQ(11, MCC3_FWD_GUESTS_FULL);
+  EXPECT_EQ(12, MCC3_FWD_TARGET_CAP);
+  EXPECT_STREQ("guest-cap", mcc3ForwardStatusName(MCC3_FWD_GUEST_CAP));
+  EXPECT_STREQ("guests-full", mcc3ForwardStatusName(MCC3_FWD_GUESTS_FULL));
+  EXPECT_STREQ("target-cap", mcc3ForwardStatusName(MCC3_FWD_TARGET_CAP));
+  EXPECT_STREQ("unknown", mcc3ForwardStatusName(13));
+}
+
+// As Fork::relayGuestForward: admit, and count a send that went out.
+struct GuestBench {
+  Mcc3Relay relay;
+  Mcc3Guests guests = {};
+  uint8_t mode = MQTTCTRL_RELAY_ANY;
+  uint8_t per_key = MQTTCTRL_RELAY_GUEST_DEFAULT;
+  uint32_t air_ms = 1700;
+
+  int take(const uint8_t* guest, const Mcc3Forward& f, uint32_t now) {
+    int status = mcc3RelayAdmitGuest(&relay, &guests, mode, per_key, now, &f, guest, NODE.pub, true);
+    if (status != MCC3_FWD_SEND) return status;
+    mcc3RelaySent(&relay, now, f.route, true, air_ms);
+    mcc3GuestSent(&guests, guest, &f);
+    relay.waiting = false;
+    return status;
+  }
+};
+
+static Mcc3Forward guestForward(const Ident& target, uint32_t counter, uint8_t route, uint32_t now) {
+  Mcc3Forward f = forwardTo(target, counter, route);
+  f.expiry = now + 60;
+  return f;
+}
+
+TEST(Mcc3Guest, OnlyWithRelayAnyAndInTheOwnersOrder) {
+  GuestBench b;
+  b.mode = MQTTCTRL_RELAY_OWN;
+  EXPECT_EQ(MCC3_FWD_OFF, b.take(GUEST.pub, guestForward(TARGET, 1, 0, RELAY_NOW), RELAY_NOW));
+  b.mode = MQTTCTRL_RELAY_OFF;
+  EXPECT_EQ(MCC3_FWD_OFF, b.take(GUEST.pub, guestForward(TARGET, 1, 0, RELAY_NOW), RELAY_NOW));
+  b.mode = MQTTCTRL_RELAY_ANY;
+  EXPECT_EQ(MCC3_FWD_CLOCK_UNSET, b.take(GUEST.pub, guestForward(TARGET, 1, 0, 0), 0));
+  Mcc3Forward late = guestForward(TARGET, 1, 0, RELAY_NOW);
+  late.expiry = RELAY_NOW - 1;
+  EXPECT_EQ(MCC3_FWD_EXPIRED, b.take(GUEST.pub, late, RELAY_NOW));
+  EXPECT_EQ(MCC3_FWD_SEND, b.take(GUEST.pub, guestForward(TARGET, 5, 0, RELAY_NOW), RELAY_NOW));
+  // Each guest has a counter of its own, the owner's untouched.
+  EXPECT_EQ(MCC3_FWD_REPLAY, b.take(GUEST.pub, guestForward(TARGET, 5, 0, RELAY_NOW), RELAY_NOW));
+  EXPECT_EQ(MCC3_FWD_SEND, b.take(OWNER.pub, guestForward(TARGET, 1, 0, RELAY_NOW), RELAY_NOW));
+  EXPECT_EQ(0u, b.relay.last_counter);
+  Mcc3Forward bad = guestForward(NODE, 6, 0, RELAY_NOW);
+  EXPECT_EQ(MCC3_FWD_BAD_BODY, b.take(GUEST.pub, bad, RELAY_NOW));
+  EXPECT_EQ(MCC3_FWD_REPLAY, b.take(GUEST.pub, bad, RELAY_NOW));
+  b.relay.waiting = true;
+  EXPECT_EQ(MCC3_FWD_BUSY, b.take(GUEST.pub, guestForward(TARGET, 7, 0, RELAY_NOW), RELAY_NOW));
+  // The owner's own forward is still the owner's: `any` serves the owner too.
+  b.relay.waiting = false;
+  Mcc3Relay r;
+  Mcc3Forward own = guestForward(TARGET, 9, 0, RELAY_NOW);
+  EXPECT_EQ(MCC3_FWD_SEND, mcc3RelayAdmit(&r, MQTTCTRL_RELAY_ANY, RELAY_NOW, &own, NODE.pub, true));
+  EXPECT_EQ(MCC3_FWD_OFF, mcc3RelayAdmit(&r, MQTTCTRL_RELAY_OFF, RELAY_NOW, &own, NODE.pub, true));
+}
+
+TEST(Mcc3Guest, EachKeyTenFloodsADayAndDirectSendsUncounted) {
+  GuestBench b;
+  uint32_t now = RELAY_NOW;
+  for (uint32_t c = 1; c <= 10; c++) {
+    ASSERT_EQ(MCC3_FWD_SEND, b.take(GUEST.pub, guestForward(c % 2 ? TARGET : OWNER, c, 1, now), now)) << c;
+    now += 300;
+  }
+  EXPECT_EQ(MCC3_FWD_GUEST_CAP, b.take(GUEST.pub, guestForward(TARGET, 11, 1, now), now));
+  EXPECT_EQ(MCC3_FWD_SEND, b.take(GUEST.pub, guestForward(TARGET, 12, MCC3_ROUTE_DIRECT, now), now));
+  EXPECT_EQ(10, b.guests.floods);
+  EXPECT_EQ(1, mcc3GuestKeys(&b.guests));
+  // A setting: 0 lets a guest send direct only.
+  b.per_key = 0;
+  EXPECT_EQ(MCC3_FWD_GUEST_CAP, b.take(OWNER.pub, guestForward(TARGET, 1, 1, now), now));
+  EXPECT_EQ(MCC3_FWD_SEND, b.take(OWNER.pub, guestForward(TARGET, 2, 0, now), now));
+  // A new day, midnight UTC: everything starts again.
+  b.per_key = 10;
+  const uint32_t tomorrow = (now / 86400 + 1) * 86400;
+  EXPECT_EQ(MCC3_FWD_SEND, b.take(GUEST.pub, guestForward(TARGET, 13, 1, tomorrow), tomorrow));
+  EXPECT_EQ(1, b.guests.floods);
+}
+
+TEST(Mcc3Guest, TheGuestsTogetherHalfTheFloodsAndEachTargetTen) {
+  GuestBench b;
+  uint32_t now = RELAY_NOW;
+  // Each target 10 floods a day from guests, whoever sends them.
+  for (uint8_t g = 1; g <= 10; g++) {
+    uint8_t key[32];
+    memset(key, g, sizeof(key));
+    ASSERT_EQ(MCC3_FWD_SEND, b.take(key, guestForward(TARGET, 1, 1, now), now)) << (int)g;
+    now += 300;
+  }
+  uint8_t eleventh[32];
+  memset(eleventh, 11, sizeof(eleventh));
+  EXPECT_EQ(MCC3_FWD_TARGET_CAP, b.take(eleventh, guestForward(TARGET, 1, 1, now), now));
+  EXPECT_EQ(MCC3_FWD_SEND, b.take(eleventh, guestForward(TARGET, 2, MCC3_ROUTE_DIRECT, now), now));
+
+  // Half the day's 100: the 51st guest flood is refused, whatever the key.
+  b.guests.floods = MCC3_GUEST_FLOODS;
+  EXPECT_EQ(MCC3_FWD_GUESTS_FULL, b.take(eleventh, guestForward(OWNER, 3, 1, now), now));
+  EXPECT_EQ(50, MCC3_GUEST_FLOODS);
+  // A key pushed out of the ring of 16 starts at 0 again, which the half bounds.
+  b.guests.floods = 0;
+  b.air_ms = 1;
+  for (uint8_t g = 20; g < 20 + MCC3_GUEST_RING; g++) {
+    uint8_t key[32];
+    memset(key, g, sizeof(key));
+    ASSERT_EQ(MCC3_FWD_SEND, b.take(key, guestForward(OWNER, 1, MCC3_ROUTE_DIRECT, now), now));
+  }
+  EXPECT_EQ(MCC3_GUEST_RING, mcc3GuestKeys(&b.guests));
+  uint8_t first[32];
+  memset(first, 1, sizeof(first));
+  EXPECT_EQ(nullptr, mcc3GuestCountOf(b.guests.key, &b.guests.key_next, first, false));
+}
+
+TEST(Mcc3Guest, GuestsHaveTheFirstHalfOfTheAirtime) {
+  GuestBench b;
+  b.air_ms = MQTTCTRL_AIR_BURST_MS / 2 - 1;
+  uint32_t now = RELAY_NOW;
+  EXPECT_EQ(MCC3_FWD_SEND, b.take(GUEST.pub, guestForward(TARGET, 1, 0, now), now));
+  b.air_ms = 1;
+  EXPECT_EQ(MCC3_FWD_SEND, b.take(GUEST.pub, guestForward(TARGET, 2, 0, now), now));
+  // Half of the burst is spent: the guests stop, the owner goes on.
+  EXPECT_EQ(MCC3_FWD_GUESTS_FULL, b.take(GUEST.pub, guestForward(TARGET, 3, 0, now), now));
+  Mcc3Forward own = guestForward(TARGET, 9, 0, now);
+  EXPECT_EQ(MCC3_FWD_SEND, mcc3RelayAdmit(&b.relay, MQTTCTRL_RELAY_ANY, now, &own, NODE.pub, true));
+}
+
+// The owner's forward that came while a guest's was out goes after it, judged again only
+// for what time changes.
+TEST(Mcc3Guest, TheOwnersForwardWaitsBehindAGuests) {
+  Mcc3Relay r;
+  Mcc3Forward f = guestForward(TARGET, 9, 1, RELAY_NOW);
+  r.waiting = true;
+  EXPECT_EQ(MCC3_FWD_BUSY, mcc3RelayResume(&r, RELAY_NOW, &f, true));
+  r.waiting = false;
+  EXPECT_EQ(MCC3_FWD_SEND, mcc3RelayResume(&r, RELAY_NOW + 60, &f, true));
+  EXPECT_EQ(MCC3_FWD_EXPIRED, mcc3RelayResume(&r, RELAY_NOW + 61, &f, true));
+  mcc3RelaySent(&r, RELAY_NOW, 1, true, 1700);
+  r.waiting = false;
+  EXPECT_EQ(MCC3_FWD_RATE_LIMITED, mcc3RelayResume(&r, RELAY_NOW + 10, &f, true));
+}
+
+// The result is a forward result, sealed under K_gfwd: only the guest reads it.
+TEST(Mcc3Guest, OnlyTheGuestOpensTheResult) {
+  std::vector<uint8_t> k = guestKey(NODE, GUEST.pub, NODE.pub);
+  Mcc3ForwardResult r;
+  mcc3ForwardResultInit(&r, 9, MCC3_FWD_GUEST_CAP);
+  char out[MCC3_FWD_RES_B64 + 1];
+  size_t n = mcc3BuildForwardResult(k.data(), GFWD_NONCE, &r, out, sizeof(out));
+  Mcc3ForwardResult back;
+  ASSERT_EQ(MQTTCTRL_OK, mcc3OpenForwardResult(guestKey(GUEST, NODE.pub, NODE.pub).data(), out, n, &back));
+  EXPECT_EQ(MCC3_FWD_GUEST_CAP, back.status);
+  EXPECT_EQ(9u, back.counter);
+  EXPECT_EQ(MQTTCTRL_ERR_SIG_INVALID, mcc3OpenForwardResult(nodeKeys(NODE, OWNER.pub).fwd, out, n, &back));
 }
 
 int main(int argc, char** argv) {

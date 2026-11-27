@@ -422,3 +422,45 @@ TEST(MeshAliveSeen, OnePublishInTwoSeconds) {
   // At most 1800 an hour; the server takes 120 of one key, the queue holds the rest a while.
   EXPECT_EQ(MALIVE_SEEN_GAP_MS, 2000UL);
 }
+
+// ---- a guest's forward (lou-21), in these vectors for the tools of this release ---------
+
+TEST(MeshAliveGuest, TheGuestForwardAndItsResultAreRebuiltByteForByte) {
+  ASSERT_GE(sizeof(MALIVE_GUESTS) / sizeof(MALIVE_GUESTS[0]), 1u);
+  const MAliveVecGuest& v = MALIVE_GUESTS[0];
+  const Ident GUEST(MALIVE_SEED_OTHER_OWNER);
+  uint8_t shared[32], key[32];
+  ed25519_key_exchange(shared, GUEST.pub, CATCHER.prv);
+  mcc3DeriveGuestKey(shared, MALIVE_PUB_CATCHER, key);
+  EXPECT_EQ(hex(key, 32), v.k_gfwd);
+  ed25519_key_exchange(shared, CATCHER.pub, GUEST.prv);
+  mcc3DeriveGuestKey(shared, MALIVE_PUB_CATCHER, key);
+  EXPECT_EQ(hex(key, 32), v.k_gfwd);
+
+  Mcc3Forward f;
+  memset(&f, 0, sizeof(f));
+  f.counter = v.counter;
+  f.expiry = v.expiry;
+  for (int i = 0; i < MCC3_RID_LEN; i++) f.rid[i] = (uint8_t)i;
+  memcpy(f.target, NODE.pub, 32);
+  f.route = MCC3_ROUTE_FLOOD_HOME;
+  std::vector<uint8_t> body = unhex(v.body);
+  f.body_len = (uint8_t)body.size();
+  memcpy(f.body, body.data(), body.size());
+  std::vector<uint8_t> nonce = unhex(v.nonce);
+  char out[MCC3_GFWD_B64 + 1];
+  size_t n = mcc3BuildGuestForward(key, GUEST.pub, CATCHER.pub, nonce.data(), &f, out, sizeof(out));
+  EXPECT_EQ(std::string(out, n), v.payload);
+  EXPECT_EQ(v.bytes, (size_t)MCC3_GFWD_SIZE);
+  Mcc3Forward back;
+  ASSERT_EQ(MQTTCTRL_OK, mcc3OpenGuestForward(key, v.payload, strlen(v.payload), &back));
+  EXPECT_EQ(back.counter, v.counter);
+
+  Mcc3ForwardResult r;
+  mcc3ForwardResultInit(&r, v.counter, MCC3_FWD_GUEST_CAP);
+  r.clock = 1795000010;
+  std::vector<uint8_t> rnonce = unhex(v.result_nonce);
+  char res[MCC3_FWD_RES_B64 + 1];
+  n = mcc3BuildForwardResult(key, rnonce.data(), &r, res, sizeof(res));
+  EXPECT_EQ(std::string(res, n), v.result);
+}

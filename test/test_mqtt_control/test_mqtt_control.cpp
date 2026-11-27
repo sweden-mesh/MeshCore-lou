@@ -2193,31 +2193,54 @@ TEST(Relay, ModesParseAndDescribe) {
   uint8_t m = 9;
   ASSERT_TRUE(mqttCtrlRelayParseMode("off", &m)); EXPECT_EQ(MQTTCTRL_RELAY_OFF, m);
   ASSERT_TRUE(mqttCtrlRelayParseMode("own", &m)); EXPECT_EQ(MQTTCTRL_RELAY_OWN, m);
-  for (const char* bad : { "on", "listed", "anyone", "OWN", "own ", "" }) {
+  ASSERT_TRUE(mqttCtrlRelayParseMode("any", &m)); EXPECT_EQ(MQTTCTRL_RELAY_ANY, m);
+  for (const char* bad : { "on", "listed", "anyone", "OWN", "own ", "ANY", "" }) {
     EXPECT_FALSE(mqttCtrlRelayParseMode(bad, &m)) << bad;
   }
-  EXPECT_EQ(MQTTCTRL_RELAY_OWN, m);
+  EXPECT_EQ(MQTTCTRL_RELAY_ANY, m);
   EXPECT_FALSE(mqttCtrlRelayParseMode(NULL, &m));
   EXPECT_EQ(0, (int)MQTTCTRL_RELAY_OWN);           // a file older than the setting reads as own
+  EXPECT_EQ(2, (int)MQTTCTRL_RELAY_ANY);           // which lou-20 reads as own
 
   char out[MQTTCTRL_MAX_REPLY];
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OFF, 5, 4, 1, MQTTCTRL_AIR_BURST, 1000, 3, out, sizeof(out));
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OFF, 5, 4, 1, MQTTCTRL_AIR_BURST, 1000, 3, 2, 2, out, sizeof(out));
   EXPECT_STREQ("> off", out);
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 0, 0, 0, MQTTCTRL_AIR_IDLE, MQTTCTRL_AIR_BURST_MS, 0, out, sizeof(out));
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 0, 0, 0, MQTTCTRL_AIR_IDLE, MQTTCTRL_AIR_BURST_MS, 0, 0, 0, out, sizeof(out));
   EXPECT_STREQ("> own, forwarded 0, answered 0, refused 0, idle, 45.0 s airtime left, floods today 0 of 100", out);
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 12, 9, 3, MQTTCTRL_AIR_BURST, 24650, 4, out, sizeof(out));
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 12, 9, 3, MQTTCTRL_AIR_BURST, 24650, 4, 3, 7, out, sizeof(out));
   EXPECT_STREQ("> own, forwarded 12, answered 9, refused 3, burst, 24.6 s airtime left, floods today 4 of 100", out);
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 30, 30, 0, MQTTCTRL_AIR_COOL, 0, 100, out, sizeof(out));
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 30, 30, 0, MQTTCTRL_AIR_COOL, 0, 100, 0, 0, out, sizeof(out));
   EXPECT_STREQ("> own, forwarded 30, answered 30, refused 0, cooldown, 0.0 s airtime left, floods today 100 of 100", out);
-  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_OWN, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, MQTTCTRL_AIR_COOL,
-                        0xFFFFFFFFu, 100, out, sizeof(out));
-  EXPECT_LT(strlen(out), (size_t)MQTTCTRL_MAX_REPLY - 1);
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_ANY, 12, 9, 3, MQTTCTRL_AIR_BURST, 24650, 4, 3, 7, out, sizeof(out));
+  EXPECT_STREQ("> any, forwarded 12, answered 9, refused 3, burst, 24.6 s airtime left, floods today 4 of 100, "
+               "guests: 3 keys, 7 floods today", out);
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_ANY, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, MQTTCTRL_AIR_COOL,
+                        0xFFFFFFFFu, 100, 16, 255, out, sizeof(out));
+  EXPECT_LT(strlen(out), (size_t)MQTTCTRL_MAX_REPLY);
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_ANY, 99999, 99999, 99999, MQTTCTRL_AIR_COOL, 45000, 100, 16, 255, out,
+                        sizeof(out));
+  EXPECT_NE(nullptr, strstr(out, "guests: 16 keys, 255 floods today")) << out;
+  char small[20];
+  mqttCtrlRelayDescribe(MQTTCTRL_RELAY_ANY, 1, 1, 1, MQTTCTRL_AIR_COOL, 0, 1, 1, 1, small, sizeof(small));
+  EXPECT_EQ(strlen(small), sizeof(small) - 1);
+}
+
+TEST(Relay, TheGuestsCapIsZeroToAHundred) {
+  uint8_t n = 99;
+  ASSERT_TRUE(mqttCtrlRelayParseGuest("0", &n)); EXPECT_EQ(0, n);
+  ASSERT_TRUE(mqttCtrlRelayParseGuest("100", &n)); EXPECT_EQ(100, n);
+  ASSERT_TRUE(mqttCtrlRelayParseGuest("10", &n)); EXPECT_EQ(10, n);
+  for (const char* bad : { "101", "-1", "", "x", "1 ", "256" }) EXPECT_FALSE(mqttCtrlRelayParseGuest(bad, &n)) << bad;
+  EXPECT_EQ(10, n);
+  EXPECT_FALSE(mqttCtrlRelayParseGuest(NULL, &n));
+  EXPECT_EQ(10, MQTTCTRL_RELAY_GUEST_DEFAULT);
 }
 
 TEST(Relay, TheOwnerSwitchesItOverThePlaneAndNothingUnderMqttCmdOpens) {
   // `relay` is outside `cmd`, so the deny list admits it on both roads, with or
   // without auto-reply, and needs no exception.
-  for (const char* c : { "set relay own", "set relay off", "get relay" }) {
+  for (const char* c : { "set relay own", "set relay off", "set relay any", "get relay", "set relay.guest 5",
+                         "get relay.guest" }) {
     EXPECT_FALSE(mqttCtrlCommandDenied(c, strlen(c))) << c;
     EXPECT_TRUE(mqttCtrlCommandAllowed(c, strlen(c), true)) << c;
     EXPECT_TRUE(mqttCtrlCommandAllowed(c, strlen(c), false)) << c;
@@ -2719,6 +2742,22 @@ TEST(ArrivalsQueue, AFullQueueDropsTheNewestAndCountsIt) {
   EXPECT_EQ(3u, mqttCtrlQueueDropped(&q));
   mqttCtrlQueueReset(&q);
   EXPECT_EQ(0u, mqttCtrlQueueDropped(&q));
+}
+
+// A guest's forward never takes the last place: a stranger cannot fill the queue.
+TEST(ArrivalsQueue, AGuestLeavesTheLastPlaceFree) {
+  static MqttCtrlQueue q;
+  mqttCtrlQueueReset(&q);
+  const uint8_t g[] = "G";
+  for (int i = 0; i < MQTTCTRL_QUEUE_LEN - 1; i++) EXPECT_TRUE(mqttCtrlQueuePush(&q, "mcc/cmd/a", g, 1, 1)) << i;
+  EXPECT_FALSE(mqttCtrlQueuePush(&q, "mcc/cmd/a", g, 1, 1));
+  EXPECT_EQ(1u, mqttCtrlQueueDropped(&q));
+  EXPECT_TRUE(push(&q, "mcc/cmd/a", "owner"));
+  EXPECT_FALSE(push(&q, "mcc/cmd/a", "owner"));
+  EXPECT_EQ(2u, mqttCtrlQueueDropped(&q));
+  mqttCtrlQueuePop(&q);
+  EXPECT_FALSE(mqttCtrlQueuePush(&q, "mcc/cmd/a", g, 1, 1));
+  EXPECT_TRUE(push(&q, "mcc/cmd/a", "owner"));
 }
 
 TEST(ArrivalsQueue, TheCountsWrap) {

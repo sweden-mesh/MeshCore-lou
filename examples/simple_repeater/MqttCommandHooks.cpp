@@ -159,7 +159,7 @@ void Fork::loopAlive() {
   a.interval = minutes * 60UL;
   a.flags = (FORK_UPLINK ? MCC3_ALIVE_UPLINK : 0)
             | (FORK_AUTO_REPLY ? MCC3_ALIVE_AUTO_REPLY : 0) | (clock_set ? MCC3_ALIVE_CLOCK_SET : 0)
-            | (_mqtt_control.relayMode() == MQTTCTRL_RELAY_OWN ? MCC3_ALIVE_RELAY : 0);
+            | (_mqtt_control.relayMode() != MQTTCTRL_RELAY_OFF ? MCC3_ALIVE_RELAY : 0);
   a.mesh = mcc3AliveMeshMode(_mqtt_control.meshMode());
   for (int i = 0; i < 4; i++) a.fingerprint[i] = (uint8_t)mqttCtrlHexByte(key[2 * i], key[2 * i + 1]);
   a.via = _mqtt_control.keyVia();
@@ -310,6 +310,11 @@ void Fork::loopMqttControl() {
     _ctrl_dropped_seen = dropped;
   }
   if (!_mqtt_control.hasPending()) return;
+  // A guest's forward needs no command key of this node's.
+  if (_mqtt_control.guestForwardPending()) {
+    relayGuestForward();
+    return;
+  }
 
   // A staged command is always resolved -- run or discarded -- never left at the
   // front of the queue, and one a pass. Left there by either of these two returns it
@@ -602,10 +607,24 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
   if (memcmp(command, "set relay ", 10) == 0) {
     uint8_t mode;
     if (!mqttCtrlRelayParseMode(&command[10], &mode)) {
-      strcpy(reply, "Err - use: set relay off|own");
+      strcpy(reply, "Err - use: set relay any|own|off");
       return true;
     }
     _mqtt_control.setRelayMode(mode);
+    strcpy(reply, "OK");
+    return true;
+  }
+  if (strcmp(command, "get relay.guest") == 0) {
+    sprintf(reply, "> %d", _mqtt_control.relayGuest());
+    return true;
+  }
+  if (memcmp(command, "set relay.guest ", 16) == 0) {
+    uint8_t floods;
+    if (!mqttCtrlRelayParseGuest(&command[16], &floods)) {
+      strcpy(reply, "Err - use: set relay.guest <0-100>, floods a day for each guest key");
+      return true;
+    }
+    _mqtt_control.setRelayGuest(floods);
     strcpy(reply, "OK");
     return true;
   }

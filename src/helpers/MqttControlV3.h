@@ -24,6 +24,7 @@
 //   K_mesh   HKDF-SHA256(S, salt empty, "mcc3/mesh/"  + KEY)   mesh requests: ChaCha20, no tag
 //   K_alive  HKDF-SHA256(S, salt empty, "mcc3/alive/" + KEY)   alive messages
 //   K_fwd    HKDF-SHA256(S, salt empty, "mcc3/fwd/"   + KEY)   forwards through this node, and their results
+//   K_gfwd   HKDF-SHA256(X25519(node identity, guest key), salt empty, "mcc3/gfwd/" + KEY)   a guest's
 //   signed   "mcc3/sig|" node key, road, flags, counter, expiry, RID (MQTT only), command
 //
 // Both the AEAD and the owner's signature inside it are checked on the node: the broker is
@@ -48,6 +49,7 @@
 #define MCC3_KIND_ALIVE        0x41
 #define MCC3_KIND_FORWARD      0x46
 #define MCC3_KIND_FWD_RESULT   0x66
+#define MCC3_KIND_GUEST_FWD    0x47
 
 // MQTT command: kind, flags, nonce (the AAD) | counter, expiry, RID, signature, command | tag
 #define MCC3_CMD_HEAD          (2 + MCC3_NONCE_LEN)
@@ -458,7 +460,7 @@ struct Mcc3Alive {
 #define MCC3_ALIVE_UPLINK      0x02    // an Observer image (Wi-Fi and MQTT)
 #define MCC3_ALIVE_AUTO_REPLY  0x04
 #define MCC3_ALIVE_CLOCK_SET   0x08
-#define MCC3_ALIVE_RELAY       0x10    // relays for its owner (`relay own`, an Observer image)
+#define MCC3_ALIVE_RELAY       0x10    // relays (`relay own` or `any`, an Observer image)
 
 // The alive message's mesh byte from the plane's own mode numbering (MqttCtrlMeshMode).
 static inline uint8_t mcc3AliveMeshMode(uint8_t mode) {
@@ -506,6 +508,13 @@ static inline size_t mcc3BuildAlive(const uint8_t key[MCC3_KEY_LEN], const uint8
 //            length, path (57), body length, body (132) | tag
 //   result   kind, nonce (the AAD) | counter, status, clock, sent, SNR, path length, path (64),
 //            response length, response (167), zeros to 256 | tag
+//
+// From lou-21 a relay with `relay any` takes a guest forward too (kind 'G'): anybody's, sealed
+// under K_gfwd from this node's identity and the guest's own command key, which it carries in
+// the clear, so only the holder of that key can make one or read its result. The body is a
+// forward's, the result too, sealed under the same key.
+//
+//   guest    kind, guest key, nonce (the AAD) | the forward's fields | tag
 #define MCC3_FWD_HEAD          (2 + MCC3_NONCE_LEN)
 #define MCC3_FWD_PATH          57
 #define MCC3_FWD_BODY          (MCC3_MESH_REQUEST - 4)
@@ -518,6 +527,10 @@ static inline size_t mcc3BuildAlive(const uint8_t key[MCC3_KEY_LEN], const uint8
 #define MCC3_FWD_RES_RESPONSE  167
 #define MCC3_FWD_RES_SIZE      (1 + MCC3_NONCE_LEN + MCC3_FWD_RES_PLAIN + MCC3_TAG_LEN)
 #define MCC3_FWD_RES_B64       MQTTV2_B64_LEN(MCC3_FWD_RES_SIZE)
+#define MCC3_GFWD_HEAD         (1 + 32 + MCC3_NONCE_LEN)
+#define MCC3_GFWD_SIZE         (MCC3_GFWD_HEAD + MCC3_FWD_PLAIN + MCC3_TAG_LEN)
+#define MCC3_GFWD_B64          MQTTV2_B64_LEN(MCC3_GFWD_SIZE)
+#define MCC3_GFWD_LABEL        "mcc3/gfwd/"
 
 #define MCC3_ROUTE_DIRECT        0    // along the path the forward carries; no hops when it is empty
 #define MCC3_ROUTE_FLOOD_HOME    1    // flooded in the relay's region home
@@ -545,11 +558,14 @@ enum Mcc3ForwardStatus {
   MCC3_FWD_RATE_LIMITED,
   MCC3_FWD_CLOCK_UNSET,
   MCC3_FWD_SEND_FAILED,      // no packet could be built or queued
+  MCC3_FWD_GUEST_CAP,        // a guest: this key's floods for the day are spent (`relay.guest`)
+  MCC3_FWD_GUESTS_FULL,      // a guest: the guests' half of the budget is spent
+  MCC3_FWD_TARGET_CAP,       // a guest: that target's floods from guests are spent for the day
 };
 static inline const char* mcc3ForwardStatusName(int status) {
   static const char* const names[] = {
     "answered", "no-answer", "off", "expired", "replay", "bad-body", "busy", "rate-limited",
-    "clock-unset", "send-failed",
+    "clock-unset", "send-failed", "guest-cap", "guests-full", "target-cap",
   };
   if (status < 0 || status >= (int)(sizeof(names) / sizeof(names[0]))) return "unknown";
   return names[status];
@@ -613,6 +629,35 @@ static inline bool mcc3ForwardBodyOk(const Mcc3Forward* f, const uint8_t node_ke
   return memcmp(f->target, node_key, 32) != 0;
 }
 
+// The fields of a forward, an owner's or a guest's, as they are sealed.
+static inline void mcc3ForwardRead(const uint8_t* p, Mcc3Forward* out) {
+  out->counter = mqttCtrlMeshU32(p);
+  out->expiry = mqttCtrlMeshU32(p + 4);
+  memcpy(out->rid, p + 8, MCC3_RID_LEN);
+  p += 8 + MCC3_RID_LEN;
+  memcpy(out->target, p, 32);
+  out->route = p[32];
+  out->path_len = p[33];
+  memcpy(out->path, p + 34, MCC3_FWD_PATH);
+  p += 34 + MCC3_FWD_PATH;
+  out->body_len = p[0];
+  memcpy(out->body, p + 1, MCC3_FWD_BODY);
+}
+
+static inline void mcc3ForwardWrite(const Mcc3Forward* f, uint8_t* p) {
+  mqttCtrlMeshPutU32(p, f->counter);
+  mqttCtrlMeshPutU32(p + 4, f->expiry);
+  memcpy(p + 8, f->rid, MCC3_RID_LEN);
+  p += 8 + MCC3_RID_LEN;
+  memcpy(p, f->target, 32);
+  p[32] = f->route;
+  p[33] = f->path_len;
+  memcpy(p + 34, f->path, MCC3_FWD_PATH);
+  p += 34 + MCC3_FWD_PATH;
+  p[0] = f->body_len;
+  memcpy(p + 1, f->body, MCC3_FWD_BODY);
+}
+
 // The relay's side, the checks that need no state, every refusal silent: base64url of 278
 // bytes with kind 'F' (bad-fields: not a forward), flags 0 (bad-version), a command key
 // (`keys` NULL: no-owner-key), the AEAD under K_fwd (sig-invalid). What opens is the
@@ -629,17 +674,7 @@ static inline MqttCtrlResult mcc3OpenForward(const Mcc3Keys* keys, const char* p
   if (!mcc3Open(keys->fwd, raw + 2, raw, MCC3_FWD_HEAD, p, MCC3_FWD_PLAIN, p)) {
     return MQTTCTRL_ERR_SIG_INVALID;
   }
-  out->counter = mqttCtrlMeshU32(p);
-  out->expiry = mqttCtrlMeshU32(p + 4);
-  memcpy(out->rid, p + 8, MCC3_RID_LEN);
-  p += 8 + MCC3_RID_LEN;
-  memcpy(out->target, p, 32);
-  out->route = p[32];
-  out->path_len = p[33];
-  memcpy(out->path, p + 34, MCC3_FWD_PATH);
-  p += 34 + MCC3_FWD_PATH;
-  out->body_len = p[0];
-  memcpy(out->body, p + 1, MCC3_FWD_BODY);
+  mcc3ForwardRead(p, out);
   memset(raw, 0, sizeof(raw));
   return MQTTCTRL_OK;
 }
@@ -654,19 +689,62 @@ static inline size_t mcc3BuildForward(const Mcc3Keys* keys, const uint8_t relay_
   raw[0] = MCC3_KIND_FORWARD;
   memcpy(raw + 2, nonce, MCC3_NONCE_LEN);
   uint8_t* plain = raw + MCC3_FWD_HEAD;
-  uint8_t* p = plain;
-  mqttCtrlMeshPutU32(p, f->counter);
-  mqttCtrlMeshPutU32(p + 4, f->expiry);
-  memcpy(p + 8, f->rid, MCC3_RID_LEN);
-  p += 8 + MCC3_RID_LEN;
-  memcpy(p, f->target, 32);
-  p[32] = f->route;
-  p[33] = f->path_len;
-  memcpy(p + 34, f->path, MCC3_FWD_PATH);
-  p += 34 + MCC3_FWD_PATH;
-  p[0] = f->body_len;
-  memcpy(p + 1, f->body, MCC3_FWD_BODY);
+  mcc3ForwardWrite(f, plain);
   mcc3Seal(keys->fwd, nonce, raw, MCC3_FWD_HEAD, plain, MCC3_FWD_PLAIN, plain);
+  return mqttV2B64Encode(raw, sizeof(raw), out, out_size);
+}
+
+// ---- a guest's forward (lou-21) ---------------------------------------------------------
+
+// K_gfwd, from X25519(this node's identity, the guest's key) on the relay, or (the guest's
+// identity, the relay's key) on the guest's side.
+static inline void mcc3DeriveGuestKey(const uint8_t shared[32], const char* relay_hex, uint8_t out[MCC3_KEY_LEN]) {
+  char info[10 + 64 + 1];
+  int n = snprintf(info, sizeof(info), "%s%s", MCC3_GFWD_LABEL, relay_hex);
+  hkdf<SHA256>(out, MCC3_KEY_LEN, shared, 32, NULL, 0, info, (size_t)n);
+}
+
+// The guest key a guest forward carries, read before any key is used: false for what is no
+// guest forward at all.
+static inline bool mcc3GuestForwardKey(const char* payload, size_t len, uint8_t guest_key[32]) {
+  uint8_t raw[MCC3_GFWD_SIZE];
+  if (payload == NULL || mqttV2B64Decode(payload, len, raw, sizeof(raw)) != MCC3_GFWD_SIZE
+      || raw[0] != MCC3_KIND_GUEST_FWD) {
+    return false;
+  }
+  memcpy(guest_key, raw + 1, 32);
+  return true;
+}
+
+// The relay's side, every refusal silent as an owner's forward's: bad-fields for what is not
+// a guest forward, sig-invalid for one that does not open under K_gfwd.
+static inline MqttCtrlResult mcc3OpenGuestForward(const uint8_t key[MCC3_KEY_LEN], const char* payload, size_t len,
+                                                  Mcc3Forward* out) {
+  uint8_t raw[MCC3_GFWD_SIZE];
+  if (payload == NULL || mqttV2B64Decode(payload, len, raw, sizeof(raw)) != MCC3_GFWD_SIZE
+      || raw[0] != MCC3_KIND_GUEST_FWD) {
+    return MQTTCTRL_ERR_BAD_FIELDS;
+  }
+  uint8_t* p = raw + MCC3_GFWD_HEAD;
+  if (!mcc3Open(key, raw + 33, raw, MCC3_GFWD_HEAD, p, MCC3_FWD_PLAIN, p)) return MQTTCTRL_ERR_SIG_INVALID;
+  mcc3ForwardRead(p, out);
+  memset(raw, 0, sizeof(raw));
+  return MQTTCTRL_OK;
+}
+
+// The guest's side, for the host suite and the vectors. 0 for one a relay would answer
+// bad-body.
+static inline size_t mcc3BuildGuestForward(const uint8_t key[MCC3_KEY_LEN], const uint8_t guest_key[32],
+                                           const uint8_t relay_key[32], const uint8_t nonce[MCC3_NONCE_LEN],
+                                           const Mcc3Forward* f, char* out, size_t out_size) {
+  if (!mcc3ForwardBodyOk(f, relay_key)) return 0;
+  uint8_t raw[MCC3_GFWD_SIZE] = {0};
+  raw[0] = MCC3_KIND_GUEST_FWD;
+  memcpy(raw + 1, guest_key, 32);
+  memcpy(raw + 33, nonce, MCC3_NONCE_LEN);
+  uint8_t* plain = raw + MCC3_GFWD_HEAD;
+  mcc3ForwardWrite(f, plain);
+  mcc3Seal(key, nonce, raw, MCC3_GFWD_HEAD, plain, MCC3_FWD_PLAIN, plain);
   return mqttV2B64Encode(raw, sizeof(raw), out, out_size);
 }
 
@@ -699,7 +777,7 @@ static inline bool mcc3RouteWide(uint8_t route, bool has_home) {
 static inline int mcc3RelayAdmit(Mcc3Relay* r, uint8_t mode, uint32_t now, const Mcc3Forward* f,
                                  const uint8_t node_key[32], bool has_home,
                                  bool clock_never_set = false) {
-  if (mode != MQTTCTRL_RELAY_OWN) return MCC3_FWD_OFF;
+  if (mode == MQTTCTRL_RELAY_OFF) return MCC3_FWD_OFF;
   if (mqttCtrlClockUnset(now, clock_never_set)) return MCC3_FWD_CLOCK_UNSET;
   if (f->expiry < now || f->expiry - now > MCC3_FWD_MAX_AHEAD_SECS) return MCC3_FWD_EXPIRED;
   if (!mqttCtrlCounterAccepted(r->last_counter, f->counter)) return MCC3_FWD_REPLAY;
@@ -722,6 +800,109 @@ static inline void mcc3RelaySent(Mcc3Relay* r, uint32_t now, uint8_t route, bool
 // millis(), and its wrap.
 static inline bool mcc3RelayWaitOver(uint32_t since_ms, uint32_t now_ms) {
   return now_ms - since_ms >= MCC3_FWD_WAIT_MS;
+}
+
+// ---- relaying for guests (lou-21, `relay any`) -------------------------------------------
+//
+// A guest's forward is taken within caps that keep the owner's half of the relay's budget,
+// all in RAM and new each day (midnight UTC) and at a restart: each guest key at most
+// `relay.guest` floods a day (10 by default); the guests together at most half the day's
+// floods (50) and only while less than half the quarter's airtime is spent; each target at
+// most 10 floods a day from guests, whoever sends them. A direct send counts against the
+// airtime alone. Keys and targets are counted in rings of the last 16, by their first 4
+// bytes: one pushed out starts at 0 again, and the guests' half bounds what that buys. A
+// guest forward never takes the last of the 4 arrival places (mqttCtrlQueuePush), and while
+// one is held the owner's forward waits behind it instead of being refused busy.
+#define MCC3_GUEST_RING          16
+#define MCC3_GUEST_TARGET_FLOODS 10
+#define MCC3_GUEST_FLOODS        (MQTTCTRL_RELAY_FLOODS_A_DAY / 2)
+
+struct Mcc3GuestCount {
+  uint8_t prefix[4];
+  uint8_t floods;
+  uint32_t last_counter;       // a key's: its forwards' counter
+  bool used;
+};
+
+struct Mcc3Guests {
+  uint32_t day;                // the UTC day the counts are of
+  Mcc3GuestCount key[MCC3_GUEST_RING];
+  Mcc3GuestCount target[MCC3_GUEST_RING];
+  uint8_t key_next, target_next;
+  uint8_t floods;              // the guests' floods today
+};
+
+static inline void mcc3GuestsToday(Mcc3Guests* g, uint32_t now) {
+  if (g->day == now / 86400UL) return;
+  memset(g, 0, sizeof(*g));
+  g->day = now / 86400UL;
+}
+
+// The count of a key or a target, or NULL; `add` takes the oldest place for one not counted.
+static inline Mcc3GuestCount* mcc3GuestCountOf(Mcc3GuestCount* ring, uint8_t* next, const uint8_t* key, bool add) {
+  for (int i = 0; i < MCC3_GUEST_RING; i++) {
+    if (ring[i].used && memcmp(ring[i].prefix, key, 4) == 0) return &ring[i];
+  }
+  if (!add) return NULL;
+  Mcc3GuestCount* c = &ring[*next];
+  *next = (uint8_t)((*next + 1) % MCC3_GUEST_RING);
+  memset(c, 0, sizeof(*c));
+  memcpy(c->prefix, key, 4);
+  c->used = true;
+  return c;
+}
+
+static inline int mcc3GuestKeys(const Mcc3Guests* g) {
+  int n = 0;
+  for (int i = 0; i < MCC3_GUEST_RING; i++) n += g->key[i].used;
+  return n;
+}
+
+// What mcc3RelayAdmit is for an owner's forward, for a guest's: the switch (any), the clock,
+// the expiry, this key's counter, the body, a forward already waiting, then the caps and the
+// budget. MCC3_FWD_SEND, or the status to answer with.
+static inline int mcc3RelayAdmitGuest(Mcc3Relay* r, Mcc3Guests* g, uint8_t mode, uint8_t per_key, uint32_t now,
+                                      const Mcc3Forward* f, const uint8_t guest_key[32], const uint8_t node_key[32],
+                                      bool has_home, bool clock_never_set = false) {
+  if (mode != MQTTCTRL_RELAY_ANY) return MCC3_FWD_OFF;
+  if (mqttCtrlClockUnset(now, clock_never_set)) return MCC3_FWD_CLOCK_UNSET;
+  if (f->expiry < now || f->expiry - now > MCC3_FWD_MAX_AHEAD_SECS) return MCC3_FWD_EXPIRED;
+  mcc3GuestsToday(g, now);
+  Mcc3GuestCount* k = mcc3GuestCountOf(g->key, &g->key_next, guest_key, true);
+  if (!mqttCtrlCounterAccepted(k->last_counter, f->counter)) return MCC3_FWD_REPLAY;
+  k->last_counter = f->counter;
+  if (!mcc3ForwardBodyOk(f, node_key)) return MCC3_FWD_BAD_BODY;
+  if (r->waiting) return MCC3_FWD_BUSY;
+  if (mcc3RouteFloods(f->route)) {
+    if (k->floods >= per_key) return MCC3_FWD_GUEST_CAP;
+    if (g->floods >= MCC3_GUEST_FLOODS) return MCC3_FWD_GUESTS_FULL;
+    const Mcc3GuestCount* t = mcc3GuestCountOf(g->target, &g->target_next, f->target, false);
+    if (t != NULL && t->floods >= MCC3_GUEST_TARGET_FLOODS) return MCC3_FWD_TARGET_CAP;
+  }
+  if (2 * r->budget.air.leftMs(now) <= r->budget.air.allowanceMs(now)) return MCC3_FWD_GUESTS_FULL;
+  if (!r->budget.allows(now, mcc3RouteFloods(f->route), mcc3RouteWide(f->route, has_home))) {
+    return MCC3_FWD_RATE_LIMITED;
+  }
+  return MCC3_FWD_SEND;
+}
+
+// After mcc3RelaySent, for a guest's request that went out.
+static inline void mcc3GuestSent(Mcc3Guests* g, const uint8_t guest_key[32], const Mcc3Forward* f) {
+  if (!mcc3RouteFloods(f->route)) return;
+  mcc3GuestCountOf(g->key, &g->key_next, guest_key, true)->floods++;
+  mcc3GuestCountOf(g->target, &g->target_next, f->target, true)->floods++;
+  g->floods++;
+}
+
+// The owner's forward that waited behind a guest's, once that one is over: its counter was
+// taken when it came, so only what time can have changed is judged again.
+static inline int mcc3RelayResume(Mcc3Relay* r, uint32_t now, const Mcc3Forward* f, bool has_home) {
+  if (f->expiry < now) return MCC3_FWD_EXPIRED;
+  if (r->waiting) return MCC3_FWD_BUSY;
+  if (!r->budget.allows(now, mcc3RouteFloods(f->route), mcc3RouteWide(f->route, has_home))) {
+    return MCC3_FWD_RATE_LIMITED;
+  }
+  return MCC3_FWD_SEND;
 }
 
 static inline void mcc3ForwardResultInit(Mcc3ForwardResult* r, uint32_t counter, uint8_t status) {

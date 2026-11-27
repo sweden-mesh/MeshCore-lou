@@ -86,6 +86,7 @@ class MqttControl {
   MqttCtrlBudget _transmits;
   uint8_t _mesh_mode;         // MqttCtrlMeshMode
   uint8_t _relay_mode;        // MqttCtrlRelayMode
+  uint8_t _relay_guest;       // floods a day per guest key
   MqttCtrlAirBudget _mesh_answers;
   // The newest counter answered over the mesh, run or refused. The saved counter moves only
   // when a command runs, so without this a refused request (the road closed, a denied
@@ -120,6 +121,8 @@ public:
   void setMeshMode(uint8_t mode) { _mesh_mode = mode; save(); }
   uint8_t relayMode() const { return _relay_mode; }
   void setRelayMode(uint8_t mode) { _relay_mode = mode; save(); }
+  uint8_t relayGuest() const { return _relay_guest; }
+  void setRelayGuest(uint8_t floods) { _relay_guest = floods; save(); }
   uint16_t aliveMinutes() const { return mqttCtrlAliveMinutes(_alive_minutes); }
   uint32_t boots() const { return _boot; }
 
@@ -175,6 +178,16 @@ public:
            && mcc3PayloadKind(staged->payload, staged->payload_len) == MCC3_KIND_FORWARD;
   }
   MqttCtrlResult takeForward(Mcc3Forward* out);
+  // A guest's forward (kind 'G'), which needs no command key of this node's: opened under
+  // K_gfwd from `self` and the guest key it carries, and taken off the queue whatever the
+  // verdict. `key` is K_gfwd, which the result is sealed under.
+  bool guestForwardPending() const {
+    const MqttCtrlStaged* staged = mqttCtrlQueueFront(&_queue);
+    return staged != NULL && mcc3IsCommandTopic(staged->topic)
+           && mcc3PayloadKind(staged->payload, staged->payload_len) == MCC3_KIND_GUEST_FWD;
+  }
+  MqttCtrlResult takeGuestForward(const mesh::LocalIdentity& self, Mcc3Forward* out, uint8_t guest_key[PUB_KEY_SIZE],
+                                  uint8_t key[MCC3_KEY_LEN]);
 
   // Called on the loop task. Verifies the oldest staged command against 'owner' and runs
   // it through 'mesh' if it passes, writing a human-readable outcome into 'reply'
