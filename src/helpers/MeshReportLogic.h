@@ -247,3 +247,240 @@ static inline MreportAckPlan* mreportAckDue(MreportAcks* a, uint32_t now_ms) {
   }
   return NULL;
 }
+
+// ---- the reporting node's table ---------------------------------------------------------
+//
+// The one thing a reporting node keeps, on flash (/mccobs): up to 4 Observer nodes that
+// acked it, each with the SNR of its last ack, whether each of the node's last 4 reports got
+// its ack on the first zero-hop try (a bit each, the newest lowest), and the path a path ack
+// taught (0 for none: zero-hop only). Nothing about any other node.
+//
+//   version | 4 x ( key 32 | SNR i8 | first-try bits | path length | path 8 )     173 bytes
+//
+// Written only when an Observer node joins or leaves it, or its bits cross the line of the
+// reliable rule: a few writes a day at most. A fifth gives way to the one with the fewest
+// first-try acks, then the weakest SNR.
+#define MREPORT_OBSERVERS        4
+#define MREPORT_TABLE_PATH       8
+#define MREPORT_TABLE_VER        1
+#define MREPORT_ENTRY_SIZE       (32 + 1 + 1 + 1 + MREPORT_TABLE_PATH)
+#define MREPORT_TABLE_SIZE       (1 + MREPORT_OBSERVERS * MREPORT_ENTRY_SIZE)
+
+struct MreportObserver {
+  uint8_t key[32];
+  int8_t snr;
+  uint8_t first_try;            // the last 4 reports, newest in bit 0
+  uint8_t path_len;             // MeshCore's; 0 for none
+  uint8_t path[MREPORT_TABLE_PATH];
+};
+
+struct MreportTable {
+  MreportObserver entry[MREPORT_OBSERVERS];
+  uint8_t count;
+};
+
+static inline int mreportFirstTries(const MreportObserver* o) {
+  int n = 0;
+  for (int b = 0; b < 4; b++) n += (o->first_try >> b) & 1;
+  return n;
+}
+
+// Better to name: more first-try acks, then the stronger SNR.
+static inline bool mreportBetter(const MreportObserver* a, const MreportObserver* b) {
+  const int fa = mreportFirstTries(a), fb = mreportFirstTries(b);
+  return fa != fb ? fa > fb : a->snr > b->snr;
+}
+
+// The Observer node to name in a state packet, or -1 for an empty table.
+static inline int mreportBest(const MreportTable* t) {
+  int best = -1;
+  for (int i = 0; i < t->count; i++) if (best < 0 || mreportBetter(&t->entry[i], &t->entry[best])) best = i;
+  return best;
+}
+
+// The one to try along a path, or -1 when none has one.
+static inline int mreportBestPath(const MreportTable* t) {
+  int best = -1;
+  for (int i = 0; i < t->count; i++) {
+    if (mreportPathBytes(t->entry[i].path_len) <= 0) continue;
+    if (best < 0 || mreportBetter(&t->entry[i], &t->entry[best])) best = i;
+  }
+  return best;
+}
+
+static inline int mreportFind(const MreportTable* t, const uint8_t key[32]) {
+  for (int i = 0; i < t->count; i++) if (memcmp(t->entry[i].key, key, 32) == 0) return i;
+  return -1;
+}
+
+// An Observer node acked: its SNR and, from a path ack, its path. The index of its entry;
+// `joined` says whether it is new there, which the caller writes to flash.
+static inline int mreportLearn(MreportTable* t, const uint8_t key[32], int8_t snr, bool has_path,
+                               uint8_t path_len, const uint8_t* path, bool* joined) {
+  *joined = false;
+  int i = mreportFind(t, key);
+  if (i < 0) {
+    if (t->count < MREPORT_OBSERVERS) {
+      i = t->count++;
+    } else {
+      i = 0;
+      for (int j = 1; j < t->count; j++) if (mreportBetter(&t->entry[i], &t->entry[j])) i = j;
+    }
+    memset(&t->entry[i], 0, sizeof(t->entry[i]));
+    memcpy(t->entry[i].key, key, 32);
+    *joined = true;
+  }
+  t->entry[i].snr = snr;
+  if (has_path) {
+    const int n = mreportPathBytes(path_len);
+    if (n >= 0 && n <= MREPORT_TABLE_PATH && (n == 0 || path != NULL)) {
+      t->entry[i].path_len = path_len;
+      memset(t->entry[i].path, 0, sizeof(t->entry[i].path));
+      if (n > 0) memcpy(t->entry[i].path, path, n);
+    }
+  }
+  return i;
+}
+
+// The reliable rule: 3 of the last 4 reports acked on the first try by one Observer node, and
+// not two rounds in a row that needed the path or the flood.
+static inline bool mreportReliable(const MreportTable* t, uint8_t fallbacks) {
+  if (fallbacks >= 2) return false;
+  for (int i = 0; i < t->count; i++) if (mreportFirstTries(&t->entry[i]) >= 3) return true;
+  return false;
+}
+
+// A report ended: each Observer node's bits move on, a 1 for the one that acked the first try.
+static inline void mreportRoundEnd(MreportTable* t, int first_try_by) {
+  for (int i = 0; i < t->count; i++) {
+    t->entry[i].first_try = (uint8_t)(((t->entry[i].first_try << 1) | (i == first_try_by ? 1 : 0)) & 0x0F);
+  }
+}
+
+static inline size_t mreportTableEncode(const MreportTable* t, uint8_t out[MREPORT_TABLE_SIZE]) {
+  memset(out, 0, MREPORT_TABLE_SIZE);
+  out[0] = MREPORT_TABLE_VER;
+  for (int i = 0; i < t->count; i++) {
+    uint8_t* e = out + 1 + i * MREPORT_ENTRY_SIZE;
+    memcpy(e, t->entry[i].key, 32);
+    e[32] = (uint8_t)t->entry[i].snr;
+    e[33] = t->entry[i].first_try;
+    e[34] = t->entry[i].path_len;
+    memcpy(e + 35, t->entry[i].path, MREPORT_TABLE_PATH);
+  }
+  return MREPORT_TABLE_SIZE;
+}
+
+// An entry with an all-zero key is free; one whose path does not fit is kept without it.
+static inline bool mreportTableDecode(const uint8_t* buf, size_t len, MreportTable* t) {
+  memset(t, 0, sizeof(*t));
+  if (buf == NULL || len < MREPORT_TABLE_SIZE || buf[0] != MREPORT_TABLE_VER) return false;
+  static const uint8_t zero[32] = {0};
+  for (int i = 0; i < MREPORT_OBSERVERS; i++) {
+    const uint8_t* e = buf + 1 + i * MREPORT_ENTRY_SIZE;
+    if (memcmp(e, zero, 32) == 0) continue;
+    MreportObserver* o = &t->entry[t->count++];
+    memcpy(o->key, e, 32);
+    o->snr = (int8_t)e[32];
+    o->first_try = e[33] & 0x0F;
+    const int n = mreportPathBytes(e[34]);
+    if (n >= 0 && n <= MREPORT_TABLE_PATH) {
+      o->path_len = e[34];
+      memcpy(o->path, e + 35, MREPORT_TABLE_PATH);
+    }
+  }
+  return true;
+}
+
+// ---- the ladder -------------------------------------------------------------------------
+//
+// One report: up to 3 zero-hop state packets 8-20 s apart, each naming the best Observer
+// node of the table; no ack, then the announce along the best learnt path, once, and 30 s
+// for its path ack; still nothing, the region flood, and 90 s more for a path ack to teach
+// a path for next time. Then the next report in 12 h when the reliable rule holds, else
+// 23 h, a tenth either way.
+#define MREPORT_ZERO_HOP_TRIES   3
+#define MREPORT_TRY_GAP_MIN_MS   8000UL
+#define MREPORT_TRY_GAP_SPAN_MS  12000UL
+#define MREPORT_DIRECT_WAIT_MS   30000UL
+#define MREPORT_FLOOD_WAIT_MS    90000UL
+#define MREPORT_RELIABLE_MS      (12UL * 3600UL * 1000UL)
+
+enum MreportRung : uint8_t {
+  MREPORT_IDLE = 0,
+  MREPORT_ZERO_HOP,
+  MREPORT_PATH,
+  MREPORT_FLOOD,
+};
+
+enum MreportAction : uint8_t {
+  MREPORT_WAIT = 0,
+  MREPORT_SEND_STATE,
+  MREPORT_SEND_DIRECT,
+  MREPORT_SEND_FLOOD,
+  MREPORT_DONE,
+};
+
+struct MreportLadder {
+  uint8_t rung;                 // MreportRung
+  uint8_t tries;                // zero-hop tries sent
+  bool sent;                    // the path or the flood went
+  bool acked;
+  int first_try_by;             // the table entry that acked the first try, else -1
+  uint8_t report[MREPORT_ID_LEN];
+  uint32_t next_ms;
+};
+
+static inline void mreportStart(MreportLadder* l, const uint8_t* report, uint32_t now_ms) {
+  memset(l, 0, sizeof(*l));
+  l->rung = MREPORT_ZERO_HOP;
+  l->first_try_by = -1;
+  memcpy(l->report, report, MREPORT_ID_LEN);
+  l->next_ms = now_ms;
+}
+
+// What to do now. `has_path`: the table holds a path. The caller sends, then calls
+// mreportSent, or mreportLater when it could not.
+static inline uint8_t mreportStep(MreportLadder* l, uint32_t now_ms, bool has_path) {
+  if (l->rung == MREPORT_IDLE) return MREPORT_WAIT;
+  if (l->acked) return MREPORT_DONE;
+  if ((int32_t)(now_ms - l->next_ms) < 0) return MREPORT_WAIT;
+  if (l->rung == MREPORT_ZERO_HOP) {
+    if (l->tries < MREPORT_ZERO_HOP_TRIES) return MREPORT_SEND_STATE;
+    l->rung = has_path ? MREPORT_PATH : MREPORT_FLOOD;
+    l->sent = false;
+  } else if (l->rung == MREPORT_PATH && (l->sent || !has_path)) {
+    l->rung = MREPORT_FLOOD;
+    l->sent = false;
+  } else if (l->rung == MREPORT_FLOOD && l->sent) {
+    return MREPORT_DONE;
+  }
+  return l->rung == MREPORT_PATH ? MREPORT_SEND_DIRECT : MREPORT_SEND_FLOOD;
+}
+
+static inline void mreportSent(MreportLadder* l, uint32_t now_ms, uint32_t rnd) {
+  if (l->rung == MREPORT_ZERO_HOP) {
+    l->tries++;
+    l->next_ms = now_ms + MREPORT_TRY_GAP_MIN_MS + rnd % (MREPORT_TRY_GAP_SPAN_MS + 1);
+  } else {
+    l->sent = true;
+    l->next_ms = now_ms + (l->rung == MREPORT_PATH ? MREPORT_DIRECT_WAIT_MS : MREPORT_FLOOD_WAIT_MS);
+  }
+}
+
+// A send that could not go (the airtime budget, no packet) is tried again in a minute.
+static inline void mreportLater(MreportLadder* l, uint32_t now_ms) {
+  l->next_ms = now_ms + MALIVE_SOON_MAX_MS;
+}
+
+// An ack for this report: a zero-hop one by table entry `by`, or a path ack. True when it
+// was this report's.
+static inline bool mreportAck(MreportLadder* l, const uint8_t* report, int by) {
+  if (l->rung == MREPORT_IDLE || memcmp(report, l->report, MREPORT_ID_LEN) != 0) return false;
+  if (l->rung == MREPORT_ZERO_HOP && l->tries == 1 && !l->acked && by >= 0) l->first_try_by = by;
+  l->acked = true;
+  return true;
+}
+
+// Whether the report that ended needed the path or the flood.
+static inline bool mreportFellBack(const MreportLadder* l) { return l->rung >= MREPORT_PATH; }

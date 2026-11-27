@@ -21,6 +21,11 @@
   #if !defined(WITH_MQTT_BRIDGE) && !defined(NO_FORK_ANNOUNCE)
     #define FORK_ANNOUNCE 1
   #endif
+  // ... and reports to an Observer node nearby, zero-hop and acknowledged, before it floods
+  // (MeshReportLogic.h). NO_FORK_LADDER leaves that out: the node then floods every 23 hours.
+  #if defined(FORK_ANNOUNCE) && !defined(NO_FORK_LADDER)
+    #define FORK_LADDER 1
+  #endif
 #endif
 
 class MyMesh;
@@ -130,7 +135,24 @@ class Fork {
 
   bool announceRegion();
   bool announceScope(TransportKey* scope);
+  bool buildAnnounce(uint8_t out[MALIVE_PAYLOAD]);
+  bool floodAnnounce(const uint8_t* announce);
   void loopAnnounce();
+#endif
+#ifdef FORK_LADDER
+  // The Observer nodes that acked this node, on flash, and the report under way.
+  MreportTable _observers = {};
+  bool _observers_changed = false;
+  MreportLadder _report = {};
+  uint8_t _report_announce[MALIVE_PAYLOAD] = {0};
+  uint8_t _report_fallbacks = 0;               // reports in a row that needed the path or the flood
+
+  void loadObservers();
+  void saveObservers();
+  void loopReport();
+  void endReport(uint32_t now_ms);
+  bool sendReportState();
+  bool sendReportDirect(int at);
 #endif
 #if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
   // Owned here so the bridge's subscription list outlives every reconnect: mcc/cmd/<key>.
@@ -263,14 +285,15 @@ public:
   }
 #endif
 
-  // Every packet heard, before Mesh reads it (Mesh::onRecvPacket). Nothing is taken from it.
-  // And a zero-hop control packet, before upstream's discovery reads it: true when it was a
-  // report's or its ack, which upstream would ignore anyway.
-#if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
-  void onRecvPacket(const mesh::Packet* pkt);
+  // Every packet heard, before Mesh reads it (Mesh::onRecvPacket): true for one that ended
+  // its path here and was a report's, which Mesh then releases. And a zero-hop control
+  // packet, before upstream's discovery reads it: true when it was a report or its ack,
+  // which upstream would ignore anyway.
+#if defined(WITH_MQTT_COMMAND) && (defined(WITH_MQTT_BRIDGE) || defined(FORK_LADDER))
+  bool onRecvPacket(const mesh::Packet* pkt);
   bool onControlData(mesh::Packet* pkt);
 #else
-  void onRecvPacket(const mesh::Packet*) { }
+  bool onRecvPacket(const mesh::Packet*) { return false; }
   bool onControlData(mesh::Packet*) { return false; }
 #endif
 

@@ -789,6 +789,49 @@ hears another's ack first. An ack goes zero-hop, is counted with the node's answ
 mesh, and is not sent at all when that budget has no room. `set cmd.debug on` prints
 `mcc: report: 4FD099CC acked, 620 ms on the air`.
 
+**The ladder.** A node that announces (above) climbs it once a report:
+
+1. **Zero-hop**: the state packet, up to 3 tries 8 to 20 s apart, each naming the best Observer
+   node of its table (the most first-try acks, then the best SNR), or nobody while the table is
+   empty.
+2. **Along a path**: no ack, and the table holds a path to an Observer node that a path ack
+   taught: the announce as an `ANON_REQ` sent direct along it, once, followed by the Observer
+   node it is for (2 bytes of its key), the path length (1) and the path (node to Observer
+   node), at most 184 bytes. Every repeater on the path sends it on by its path; that Observer
+   node hands it to the server (`via` 1) and acks with a path ack back along the path reversed.
+   30 s for the ack.
+3. **The flood**, as above. The Observer node that heard it first and closest acks it: each that
+   heard it waits 3 s for every hop it travelled, and up to 0.8 s more the weaker it was, and
+   steps back when it hears another's ack. Heard with no hops it acks zero-hop; with 1 to 8 hops
+   (8 bytes of path at most) by a path ack along the flood's path reversed, which teaches the node
+   the path for rung 2. 90 s for that ack.
+
+**The path ack** is an `ANON_REQ` sent direct, 55 bytes: the node's first key byte, the
+Observer node's key (32), kind `0x4B`, the report id (4), the path length (1), the path from the
+node to the Observer node (16, zeros after it). The node takes it at the end of the path before
+anything else reads it; any other node forwards it by its path as any direct packet.
+
+**Every 12 hours when it works.** The node remembers, for each Observer node of its table,
+whether each of its last 4 reports was acked on the first zero-hop try. With 3 of 4 from any one,
+the next report is in 12 hours, a tenth either way; else in 23. Two reports in a row that needed
+rung 2 or 3 put it back to 23 hours at once. Next to an Observer node that is 2 state packets a
+day of 1.6 s each, from the node alone, against a flood a day of about 32 s summed over a county.
+
+**The table**, `/mccobs` on flash, 173 bytes: a version byte, then up to 4 Observer nodes, each
+its key (32), the SNR of its last ack (1), the first-try bits (1), a path length (1) and the path
+(8). It is written when an Observer node joins it, when a path ack teaches a path, and when the
+first-try bits cross the 3-of-4 line, so a restart resumes the 12-hour rate. A fifth Observer
+node takes the place of the one with the fewest first-try acks, then the weakest SNR. Nothing
+about any other node is kept.
+
+`set cmd.debug on` prints `mcc: report: try 1, zero-hop, naming DDE3, 1588 ms on the air`,
+`mcc: report: acked by DDE3BCCE, new`, `mcc: report: 7.2 acked on the first try, next in 12 h`,
+`mcc: report: along a path of 2 to DDE3BCCE, ...`, `mcc: announce: 7.2 flooded, ...` and
+`mcc: report: a path of 2 learnt from DDE3BCCE`.
+
+- A node next to a lou-20 Observer node gets no ack and floods every 23 hours, as before.
+- A board built with `NO_FORK_LADDER` skips the ladder and floods every 23 hours.
+
 The pieces are `src/helpers/MeshAliveLogic.h`, `src/helpers/MeshReportLogic.h` and their suites
 in `test/test_mqtt_v3/`; the vectors the tools and the server share are
 `test/data/malive-vectors.json`, made by `scripts/malive-vectors.py`, the packets between nodes
