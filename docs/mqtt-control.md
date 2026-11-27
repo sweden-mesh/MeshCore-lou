@@ -262,7 +262,8 @@ accepted, is gone ([Upgrading to lou-21](#upgrading-to-lou-21)).
 mcc/cmd/{NODE}      commands and forwards to this node, and the broker's pong; the only topic it subscribes to
 mcc/r/{RID}         results, on the reply id the sealed command names (random per mccontrol session)
 mcc/alive/{NODE}    the node's alive message, retained; the slot's will empties it
-mcc/heard/{NODE}/{slot}   an announce this node caught for its owner, retained; slot 0-15 (lou-21)
+mcc/seen/{NODE}     an announce this node heard, any owner's, not retained (lou-21)
+mcc/node/{KEY}      the server's entry for a node without Wi-Fi, retained; written by the server only (lou-21)
 mcc/ping/{NODE}     `cmd ping`; the broker answers `pong|<nonce>` on mcc/cmd/{NODE}
 ```
 
@@ -697,7 +698,7 @@ Any other flag bit is still refused.
 
 An image without Wi-Fi has no MQTT and so no alive message. Up to lou-20 its owner had to copy
 its 64-character key into the tools by hand. From lou-21 the node says that it exists, over the
-mesh, and an Observer node of the same owner that hears it tells the command server.
+mesh, and any Observer node that hears it tells the command server.
 
 **What is sent.** One `ANON_REQ` packet with 165 bytes of payload, flooded inside one region:
 
@@ -739,40 +740,42 @@ budget of its answers over the mesh; when that is spent the announce waits, trie
 minute.
 `set cmd.debug on` prints `mcc: announce: 7.1 sent, 1603 ms on the air` (boot and sequence).
 
-**What an Observer node does with it.** An Observer `rc` or `arrc` image with a command key and
-`set cmd on` looks at every flooded `ANON_REQ` of exactly this size and kind before it forwards
-it, checks the signature, and keeps those whose owner tag is its own key's, in a table of 16 nodes in RAM: per node
-the newest boot and sequence, when it was heard, its SNR and its hops. A copy by another path,
-or an older one, is dropped. A full table drops the node heard longest ago. At most 4 node keys
-new to the table are admitted in an hour. The packet is forwarded like any other, and nothing
-reaches the console.
+**What an Observer node does with it.** Every Observer `rc` or `arrc` image with `set cmd on`
+looks at every flooded `ANON_REQ` of exactly this size and kind before it forwards it, checks the
+signature, and hands each one that holds to the command server, whoever owns the node: it keeps
+nothing about the node (a "hot potato"). The packet is forwarded like any other, and nothing
+reaches the console. It is published once, not retained, on `mcc/seen/{NODE}`, `{NODE}` the
+Observer node's own key:
 
-Each entry is published retained on `mcc/heard/{NODE}/{slot}`, `{NODE}` the Observer node's
-own key and the slot 0 to 15, sealed to the owner as the alive message is: kind `0x48`, a
-random nonce, then under HKDF info `mcc3/heard/` + the Observer node's key the announced
-node's key (32), the announce from its kind byte to its signature (132), when it was heard by
-the Observer node's clock (4, 0 while unset), SNR in quarter-dB (1), hops (1), and the same three
-for the node's last advert, which lou-21 leaves zero. 205 bytes, 274 characters. An entry is
-published when its announce is new, one publish in 90 s at most. A changed command key empties
-the table and all 16 slots. The node's will does not empty them, and nor does a restart: what
-was heard stays true. The command server sees how many announces a node has caught and not
-whose.
+| offset | size | field |
+|---|---|---|
+| 0 | 1 | kind `0x53` (`S`) |
+| 1 | 164 | the announce, bytes 1 to 164 |
+| 165 | 1 | SNR in quarter-dB, signed |
+| 166 | 1 | hops it travelled |
+| 167 | 1 | how it came: 0 a zero-hop state packet, 1 direct along a path, 2 a flood |
 
-The owner's tool reads the slots of its Observer nodes, opens each with the owner's key, and
-then opens the announce inside with the announced node's key. One that does not open is
-dropped, so a forged announce can take a slot in a table but never shows as a node.
-`set cmd.debug on` prints `mcc: heard: an announce of 4FD099CC, 7.1, 2 hop(s), slot 0, new` and
-`mcc: heard: slot 0 published`.
+168 bytes, 224 characters of base64url. The server adds when it arrived; the Observer node's
+clock is not trusted. The server checks the signature, keeps the newest announce of each node
+and the Observer nodes that heard it, and publishes that, retained, on `mcc/node/{the announced
+node's key}`; the owner's tool finds its nodes there by the owner tag.
+
+- **Copies.** A (node key, boot, sequence) forwarded in the last 10 minutes is not forwarded
+  again: the copies of one flood by other paths. A window of 8 in RAM, not a table of nodes.
+- **Pacing.** One publish in 2 s at most. While the server cannot be reached up to 8 wait in RAM
+  and go when it can again; a ninth pushes out the oldest, and a restart loses them.
+- `set cmd.debug on` prints `mcc: seen: an announce of 4FD099CC, 7.1, 2 hop(s), via 2, 1 waiting`
+  and `mcc: seen: 4FD099CC published`.
 
 The pieces are `src/helpers/MeshAliveLogic.h` and `test/test_mqtt_v3/test_mesh_alive.cpp`; the
 vectors both tools share are `test/data/malive-vectors.json`, made by
 `scripts/malive-vectors.py`.
 
-- A lou-20 Observer node catches nothing, and a lou-20 node without Wi-Fi never announces: it
+- A lou-20 Observer node forwards nothing, and a lou-20 node without Wi-Fi never announces: it
   is added by its key, as before.
 - Where few repeaters hold the region the announce reaches fewer Observer nodes, or none; the
   node is then added by its key.
-- A command server that does not know `mcc/heard` yet refuses the publish, and nothing else
+- A command server that does not know `mcc/seen` yet refuses the publish, and nothing else
   changes.
 
 ## What is not defended

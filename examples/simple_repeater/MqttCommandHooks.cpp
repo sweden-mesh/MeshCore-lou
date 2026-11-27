@@ -299,7 +299,7 @@ void Fork::loopMqttControl() {
   _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
   if (_mesh.bridge != NULL) {
     loopAlive();
-    loopHeard();
+    loopSeen();
   }
   loopRelay();
   const uint32_t dropped = _mqtt_control.dropped();

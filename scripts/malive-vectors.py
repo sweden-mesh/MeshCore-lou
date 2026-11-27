@@ -8,7 +8,8 @@
 This is a second implementation of the format, in Python on the `cryptography` package; the
 host suite (test/test_mqtt_v3/test_mesh_alive.cpp) rebuilds every vector with the firmware's
 own code and must get the same bytes. The seeds are mcc3's (test/data/mcc3-vectors.json):
-the owner is its command key, the announcing node its node, the catching node its other node.
+the owner is its command key, the announcing node its node, the Observer node that hears it
+its other node.
 Ed25519 is deterministic, so the signatures by those fixed identities are vectors too.
 Without `cryptography`, --check compares the header with the JSON and no more.
 """
@@ -25,7 +26,7 @@ SOURCE = ROOT / "test/data/malive-vectors.json"
 HEADER = ROOT / "test/test_mqtt_v3/malive_vectors.h"
 
 P = 2 ** 255 - 19
-KIND, KIND_HEARD = 0x4D, 0x48
+KIND, KIND_SEEN = 0x4D, 0x53
 MAX_VERSION, MAX_NAME, SEALED, TAG = 14, 16, 47, 8
 SIGNED, SIG = 100, 64
 PAYLOAD = 1 + SIGNED + SIG
@@ -108,15 +109,11 @@ def announce(seal, sign, seed, key, command_key, node_key, f):
     }
 
 
-def heard(seal, key, catcher_key, slot, node_key, payload, f, nonce):
-    plain = node_key + payload[33:] + struct.pack("<IbBIbB", f["heard_at"], f["snr"], f["hops"],
-                                                 f["advert_heard_at"], f["advert_snr"], f["advert_hops"])
-    head = bytes([KIND_HEARD]) + nonce
-    raw = head + seal(key, nonce, head, plain)
+def seen(catcher_key, payload, f):
+    raw = bytes([KIND_SEEN]) + payload[1:] + struct.pack("<bBB", f["snr"], f["hops"], f["via"])
     return {
-        "slot": slot, "topic": "mcc/heard/%s/%d" % (up(catcher_key), slot), "nonce": up(nonce),
-        "plaintext": up(plain), "bytes": len(raw), "payload": b64(raw),
-        "opened": dict(f, node_key=up(node_key), announce=up(payload)),
+        "topic": "mcc/seen/%s" % up(catcher_key), "bytes": len(raw), "payload": b64(raw),
+        "opened": dict(f, node_key=up(payload[1:33]), announce=up(payload)),
     }
 
 
@@ -131,9 +128,7 @@ def generate():
     assert s_node == shared(bytes.fromhex(seeds["owner"]), pub["node"])
     assert up(s_node) == mcc3["shared_secret"]
     k_malive = derive(s_node, "mcc3/malive/", pub["node"])
-    k_heard = derive(s_catcher, "mcc3/heard/", pub["catcher"])
-    # The catching node announcing itself, which no Observer image does: a second node key
-    # for the table.
+    # The catching node announcing itself, which no Observer image does: a second node.
     k_malive_catcher = derive(s_catcher, "mcc3/malive/", pub["catcher"])
 
     fields = [
@@ -157,19 +152,15 @@ def generate():
         v.update(announce(seal, sign, bytes.fromhex(seeds[who]), key, pub["owner"], pub[who], f))
         announces.append(v)
 
-    def entry(name, slot, a, f, nonce):
+    def seen_entry(name, a, f):
         v = {"name": name, "announce": a["name"]}
-        v.update(heard(seal, k_heard, pub["catcher"], slot, pub[a["node"]], bytes.fromhex(a["payload"]), f,
-                       bytes.fromhex(nonce)))
+        v.update(seen(pub["catcher"], bytes.fromhex(a["payload"]), f))
         return v
 
-    heard_entries = [
-        entry("H1 as lou-21 publishes it: no advert heard", 0, announces[0],
-              {"heard_at": 1795000050, "snr": -22, "hops": 2,
-               "advert_heard_at": 0, "advert_snr": 0, "advert_hops": 0}, "505152535455565758595A5B"),
-        entry("H2 the last slot, the catching node's clock unset, an advert heard since", 15, announces[1],
-              {"heard_at": 0, "snr": 47, "hops": 0,
-               "advert_heard_at": 1795003600, "advert_snr": -80, "advert_hops": 5}, "606162636465666768696A6B"),
+    seen_entries = [
+        seen_entry("S1 a flood, two hops", announces[0], {"snr": -22, "hops": 2, "via": 2}),
+        seen_entry("S2 a zero-hop state packet", announces[1], {"snr": 47, "hops": 0, "via": 0}),
+        seen_entry("S3 direct along a path, another node", announces[3], {"snr": -80, "hops": 0, "via": 1}),
     ]
 
     def flipped(hexed, at):
@@ -211,11 +202,10 @@ def generate():
             "kind": KIND, "payload_bytes": PAYLOAD, "sealed_bytes": SEALED, "tag_bytes": TAG,
             "signed_bytes": SIGNED, "signature_bytes": SIG, "label_signature": "mcc3/ann|",
             "max_version": MAX_VERSION, "max_name": MAX_NAME,
-            "label_owner_tag": "mcc3/own|", "label_malive": "mcc3/malive/", "label_heard": "mcc3/heard/",
-            "kind_heard": KIND_HEARD, "kept_bytes": PAYLOAD - 33, "heard_plain_bytes": 32 + PAYLOAD - 33 + 12,
-            "heard_bytes": 1 + 12 + 32 + PAYLOAD - 33 + 12 + 16,
-            "heard_base64url_chars": len(b64(bytes(1 + 12 + 32 + PAYLOAD - 33 + 12 + 16))),
-            "table_slots": 16, "new_nodes_an_hour": 4,
+            "label_owner_tag": "mcc3/own|", "label_malive": "mcc3/malive/",
+            "kind_seen": KIND_SEEN, "seen_bytes": PAYLOAD + 3, "seen_base64url_chars": len(b64(bytes(PAYLOAD + 3))),
+            "via": {"zero_hop": 0, "direct": 1, "flood": 2}, "seen_queue": 8, "seen_gap_seconds": 2,
+            "seen_again_after_seconds": 600,
             "interval_seconds": 82800, "interval_spread_seconds": 8280,
         },
         "keys": {
@@ -225,10 +215,9 @@ def generate():
             "shared_catcher_owner": up(s_catcher),
             "k_malive_node": up(k_malive),
             "k_malive_catcher": up(k_malive_catcher),
-            "k_heard_catcher": up(k_heard),
         },
         "announces": announces,
-        "heard": heard_entries,
+        "seen": seen_entries,
         "refusals": refusals,
     }
 
@@ -261,18 +250,15 @@ def render(d):
         "const char* name_field; const char* opened_version; const char* opened_name; "
         "const char* owner_tag; const char* nonce; const char* plaintext; const char* signed_bytes; "
         "const char* signature; const char* payload; };",
-        "struct MAliveVecHeard { const char* name; const char* announce; int slot; const char* topic; "
-        "uint32_t heard_at; int snr; uint8_t hops; uint32_t advert_heard_at; int advert_snr; "
-        "uint8_t advert_hops; const char* node_key; const char* nonce; const char* plaintext; "
-        "size_t bytes; const char* payload; };",
+        "struct MAliveVecSeen { const char* name; const char* announce; const char* topic; int snr; "
+        "uint8_t hops; uint8_t via; size_t bytes; const char* payload; };",
         "struct MAliveVecRefusal { const char* name; const char* input; const char* outcome; };",
         "",
     ]
     for name in ("owner", "node", "catcher", "other_owner"):
         lines.append("static const char* const MALIVE_SEED_%s = %s;" % (name.upper(), c_str(k["seeds"][name])))
         lines.append("static const char* const MALIVE_PUB_%s = %s;" % (name.upper(), c_str(k["public"][name])))
-    for name in ("shared_node_owner", "shared_catcher_owner", "k_malive_node", "k_malive_catcher",
-                 "k_heard_catcher"):
+    for name in ("shared_node_owner", "shared_catcher_owner", "k_malive_node", "k_malive_catcher"):
         lines.append("static const char* const MALIVE_%s = %s;" % (name.upper(), c_str(k[name])))
     lines.append("")
 
@@ -286,13 +272,11 @@ def render(d):
                          c_str(v["plaintext"]), c_str(v["signed"]), c_str(v["signature"]), c_str(v["payload"])))
     lines.append("};")
 
-    lines.append("static const MAliveVecHeard MALIVE_HEARD[] = {")
-    for v in d["heard"]:
+    lines.append("static const MAliveVecSeen MALIVE_SEEN[] = {")
+    for v in d["seen"]:
         o = v["opened"]
-        lines.append(row(c_str(v["name"]), c_str(v["announce"]), str(v["slot"]), c_str(v["topic"]),
-                         "%uu" % o["heard_at"], str(o["snr"]), str(o["hops"]), "%uu" % o["advert_heard_at"],
-                         str(o["advert_snr"]), str(o["advert_hops"]), c_str(o["node_key"]), c_str(v["nonce"]),
-                         c_str(v["plaintext"]), str(v["bytes"]), c_str(v["payload"])))
+        lines.append(row(c_str(v["name"]), c_str(v["announce"]), c_str(v["topic"]), str(o["snr"]), str(o["hops"]),
+                         str(o["via"]), str(v["bytes"]), c_str(v["payload"])))
     lines.append("};")
 
     lines.append("static const MAliveVecRefusal MALIVE_REFUSALS[] = {")
