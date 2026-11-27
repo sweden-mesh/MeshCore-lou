@@ -1388,27 +1388,42 @@ static inline size_t mqttCtrlMeshResponseRoom(bool path_return, size_t path_byte
 
 // ---- the relay (lou-20) ---------------------------------------------------------------
 //
-// An Observer node on the plane sends its owner's mesh-road request to a node the broker does
-// not reach, and publishes what comes back (MqttControlV3.h has the envelope and the order of
-// the checks). `set relay off|own`: own, the default (operator 2026-11-20), serves the
-// holder of this node's command key and nobody else. Zero is own, so a file written before
-// the setting reads so. The name is outside `cmd` on purpose: the deny list refuses
+// An Observer node on the plane sends a mesh-road request to a node the broker does not
+// reach, and publishes what comes back (MqttControlV3.h has the envelopes and the order of the
+// checks). `set relay any|own|off`: own serves the holder of this node's command key and nobody
+// else; any, the default from lou-21 (operator 2026-11-27), serves anybody who seals a guest
+// forward to this node, within caps that keep the owner's half of the budget. Zero is own, so a
+// file written before the setting reads so; a version 7 file's own is the old default and reads
+// as any (mqttCtrlConfigDecode). The name is outside `cmd` on purpose: the deny list refuses
 // everything under that, and the owner may switch relaying over the plane.
 enum MqttCtrlRelayMode : uint8_t {
   MQTTCTRL_RELAY_OWN = 0,
   MQTTCTRL_RELAY_OFF,
+  MQTTCTRL_RELAY_ANY,
 };
 
 static inline const char* mqttCtrlRelayModeName(uint8_t mode) {
-  return mode == MQTTCTRL_RELAY_OFF ? "off" : "own";
+  return mode == MQTTCTRL_RELAY_OFF ? "off" : mode == MQTTCTRL_RELAY_ANY ? "any" : "own";
 }
 
 static inline bool mqttCtrlRelayParseMode(const char* text, uint8_t* out) {
   if (text == NULL || out == NULL) return false;
-  for (uint8_t m = MQTTCTRL_RELAY_OWN; m <= MQTTCTRL_RELAY_OFF; m++) {
+  for (uint8_t m = MQTTCTRL_RELAY_OWN; m <= MQTTCTRL_RELAY_ANY; m++) {
     if (strcmp(text, mqttCtrlRelayModeName(m)) == 0) { *out = m; return true; }
   }
   return false;
+}
+
+// `set relay.guest <n>`: the floods a day one guest key may have sent, 0 to 100.
+#define MQTTCTRL_RELAY_GUEST_DEFAULT  10
+#define MQTTCTRL_RELAY_GUEST_MAX      100
+
+static inline bool mqttCtrlRelayParseGuest(const char* text, uint8_t* out) {
+  uint32_t v = 0;
+  if (text == NULL || out == NULL || !mqttCtrlParseU32(text, strlen(text), &v)) return false;
+  if (v > MQTTCTRL_RELAY_GUEST_MAX) return false;
+  *out = (uint8_t)v;
+  return true;
 }
 
 // A forward costs this node airtime, which MqttCtrlAirBudget holds, and a flooded one the
@@ -1479,40 +1494,47 @@ struct MqttCtrlRelayBudget {
 };
 
 // `get relay`: the mode, what the relay has done since boot, the quarter it is in with
-// the airtime left of it, and the day's floods.
+// the airtime left of it, and the day's floods; with `any`, the guests of the day.
 static inline void mqttCtrlRelayDescribe(uint8_t mode, uint32_t forwarded, uint32_t answered,
                                          uint32_t refused, uint8_t phase, uint32_t left_ms,
-                                         int floods_today, char* out, size_t out_size) {
+                                         int floods_today, int guest_keys, int guest_floods,
+                                         char* out, size_t out_size) {
   if (out == NULL || out_size == 0) return;
   if (mode == MQTTCTRL_RELAY_OFF) {
     snprintf(out, out_size, "> off");
     return;
   }
-  snprintf(out, out_size, "> own, forwarded %lu, answered %lu, refused %lu, %s, %lu.%lu s airtime left, "
-                          "floods today %d of %d", (unsigned long)forwarded, (unsigned long)answered,
-           (unsigned long)refused, mqttCtrlAirPhaseName(phase), (unsigned long)(left_ms / 1000),
-           (unsigned long)(left_ms % 1000 / 100), floods_today, MQTTCTRL_RELAY_FLOODS_A_DAY);
+  int n = snprintf(out, out_size, "> %s, forwarded %lu, answered %lu, refused %lu, %s, %lu.%lu s airtime left, "
+                                  "floods today %d of %d", mqttCtrlRelayModeName(mode), (unsigned long)forwarded,
+                   (unsigned long)answered, (unsigned long)refused, mqttCtrlAirPhaseName(phase),
+                   (unsigned long)(left_ms / 1000), (unsigned long)(left_ms % 1000 / 100), floods_today,
+                   MQTTCTRL_RELAY_FLOODS_A_DAY);
+  if (mode == MQTTCTRL_RELAY_ANY && n > 0 && (size_t)n < out_size) {
+    snprintf(out + n, out_size - n, ", guests: %d keys, %d floods today", guest_keys, guest_floods);
+  }
 }
 
 // /mqttcontrol, the plane's settings file. Append-only, as /autoreply is: version 1 was
 // on/off and the counter; 2 added the slot and the command key; 3 two automatic-OTA bytes
 // that releases up to ar-13 kept here; 4 the mesh road's mode; 5 how the key was set; 6 the
-// alive interval and the boot counter alive messages are ordered by; 7 the relay's mode. OTA
+// alive interval and the boot counter alive messages are ordered by; 7 the relay's mode; 8
+// the guests' cap, and a relay mode that means what it says (see mqttCtrlConfigDecode). OTA
 // keeps its bytes in /ota now, and they are carried exactly as read, so an image that rolls
 // back to ar-13 still finds what it wrote; an older image reads the fields it knows and
 // ignores the rest. A build without the plane neither reads nor writes this file, so it
 // survives untouched.
 //
 //   ver | enabled | counter (4, native order) | slot | key (64 hex + NUL) | ota (2) | mesh | via
-//       | alive minutes (2, 0 = the default) | boot counter (4) | relay
+//       | alive minutes (2, 0 = the default) | boot counter (4) | relay | relay.guest
 #define MQTTCTRL_CONFIG_VER_1   1
-#define MQTTCTRL_CONFIG_VER     7
+#define MQTTCTRL_CONFIG_VER     8
 #define MQTTCTRL_CONFIG_KEY_LEN 65
 #define MQTTCTRL_CONFIG_LEN_3   (1 + 1 + 4 + 1 + MQTTCTRL_CONFIG_KEY_LEN + 2)
 #define MQTTCTRL_CONFIG_LEN_4   (MQTTCTRL_CONFIG_LEN_3 + 1)
 #define MQTTCTRL_CONFIG_LEN_5   (MQTTCTRL_CONFIG_LEN_4 + 1)
 #define MQTTCTRL_CONFIG_LEN_6   (MQTTCTRL_CONFIG_LEN_5 + 2 + 4)
-#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_6 + 1)
+#define MQTTCTRL_CONFIG_LEN_7   (MQTTCTRL_CONFIG_LEN_6 + 1)
+#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_7 + 1)
 
 // The alive message (mcc3, IATA-2 design §3): every `alive.interval` minutes, 5..1440,
 // default 15, and no `off`: alive is the owner's only discovery.
@@ -1530,18 +1552,23 @@ struct MqttCtrlStoredConfig {
   uint8_t key_via;                           // MqttCtrlKeyVia; a key older than v5 was USB's
   uint16_t alive_minutes;                    // 0 is the default
   uint32_t boot;                             // +1 every boot of an image with the uplink
-  uint8_t relay_mode;                        // MqttCtrlRelayMode; 0, the default, is own
+  uint8_t relay_mode;                        // MqttCtrlRelayMode; any by default
+  uint8_t relay_guest;                       // floods a day per guest key
 };
 
 static inline void mqttCtrlConfigDefaults(MqttCtrlStoredConfig* c) {
   if (c == NULL) return;
   memset(c, 0, sizeof(*c));
   c->ota_legacy[1] = OTA_AUTO_CHECK_HOURS_DEFAULT;
+  c->relay_mode = MQTTCTRL_RELAY_ANY;
+  c->relay_guest = MQTTCTRL_RELAY_GUEST_DEFAULT;
 }
 
 // Fields the file is too old or too short to hold keep what 'c' had. A version 1 file has
 // no slot and no key, so it loads deaf and keyless: guessing a slot would subscribe on a
-// broker that may refuse it. A slot beyond 'slot_count' reads as none.
+// broker that may refuse it. A slot beyond 'slot_count' reads as none. A version 7 file's
+// relay mode own cannot be told from the default it was then, so it reads as any, today's
+// default; an owner who wants own sets it again, and version 8 keeps that.
 static inline bool mqttCtrlConfigDecode(const uint8_t* buf, size_t len, int slot_count,
                                         MqttCtrlStoredConfig* c) {
   if (buf == NULL || c == NULL || len < 2 || buf[0] < MQTTCTRL_CONFIG_VER_1) return false;
@@ -1560,9 +1587,14 @@ static inline bool mqttCtrlConfigDecode(const uint8_t* buf, size_t len, int slot
     memcpy(&c->alive_minutes, &buf[MQTTCTRL_CONFIG_LEN_5], 2);
     memcpy(&c->boot, &buf[MQTTCTRL_CONFIG_LEN_5 + 2], 4);
   }
-  if (ver >= 7 && len >= MQTTCTRL_CONFIG_LEN) c->relay_mode = buf[MQTTCTRL_CONFIG_LEN_6];
+  if (ver >= 7 && len >= MQTTCTRL_CONFIG_LEN_7) {
+    c->relay_mode = buf[MQTTCTRL_CONFIG_LEN_6];
+    if (ver == 7 && c->relay_mode == MQTTCTRL_RELAY_OWN) c->relay_mode = MQTTCTRL_RELAY_ANY;
+  }
+  if (ver >= 8 && len >= MQTTCTRL_CONFIG_LEN) c->relay_guest = buf[MQTTCTRL_CONFIG_LEN_7];
   if (c->mesh_mode > MQTTCTRL_MESH_OFF) c->mesh_mode = MQTTCTRL_MESH_AUTO;
-  if (c->relay_mode > MQTTCTRL_RELAY_OFF) c->relay_mode = MQTTCTRL_RELAY_OWN;
+  if (c->relay_mode > MQTTCTRL_RELAY_ANY) c->relay_mode = MQTTCTRL_RELAY_ANY;
+  if (c->relay_guest > MQTTCTRL_RELAY_GUEST_MAX) c->relay_guest = MQTTCTRL_RELAY_GUEST_DEFAULT;
   if (c->key_via > MQTTCTRL_KEY_VIA_REKEY) c->key_via = MQTTCTRL_KEY_VIA_USB;
   if (c->slot > slot_count) c->slot = 0;
   if (c->alive_minutes != 0 && (c->alive_minutes < MQTTCTRL_ALIVE_MIN_MINUTES ||
@@ -1583,6 +1615,7 @@ static inline size_t mqttCtrlConfigEncode(const MqttCtrlStoredConfig* c, uint8_t
   memcpy(&buf[MQTTCTRL_CONFIG_LEN_5], &c->alive_minutes, 2);
   memcpy(&buf[MQTTCTRL_CONFIG_LEN_5 + 2], &c->boot, 4);
   buf[MQTTCTRL_CONFIG_LEN_6] = c->relay_mode;
+  buf[MQTTCTRL_CONFIG_LEN_7] = c->relay_guest;
   return MQTTCTRL_CONFIG_LEN;
 }
 
@@ -1675,15 +1708,17 @@ static inline void mqttCtrlQueueReset(MqttCtrlQueue* q) {
 }
 
 // False when the message is not kept: one that could never fit takes no slot and is not
-// counted, one that finds the queue full is counted.
-static inline bool mqttCtrlQueuePush(MqttCtrlQueue* q, const char* topic, const uint8_t* payload, size_t len) {
+// counted, one that finds the queue full is counted. `keep_free` places stay for others: a
+// guest's forward never takes the last one, so a stranger cannot fill the queue.
+static inline bool mqttCtrlQueuePush(MqttCtrlQueue* q, const char* topic, const uint8_t* payload, size_t len,
+                                     uint32_t keep_free = 0) {
   if (q == NULL || topic == NULL || payload == NULL) return false;
   if (len == 0 || len > MQTTCTRL_MAX_PAYLOAD) return false;
   const size_t topic_len = strlen(topic);
   if (topic_len > MQTTCTRL_MAX_TOPIC) return false;
 
   const uint32_t head = q->head;
-  if (head - __atomic_load_n(&q->tail, __ATOMIC_ACQUIRE) >= MQTTCTRL_QUEUE_LEN) {
+  if (head - __atomic_load_n(&q->tail, __ATOMIC_ACQUIRE) + keep_free >= MQTTCTRL_QUEUE_LEN) {
     __atomic_store_n(&q->dropped, q->dropped + 1, __ATOMIC_RELAXED);
     return false;
   }

@@ -41,7 +41,7 @@ MqttControl::MqttControl()
     _alive_minutes(0), _boot(0), _mcc3_ready(false),
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW),
-    _mesh_mode(MQTTCTRL_MESH_AUTO), _relay_mode(MQTTCTRL_RELAY_OWN)
+    _mesh_mode(MQTTCTRL_MESH_AUTO), _relay_mode(MQTTCTRL_RELAY_ANY), _relay_guest(MQTTCTRL_RELAY_GUEST_DEFAULT)
 {
   _pubkey[0] = 0;
   _ota_legacy[0] = 0;
@@ -92,6 +92,7 @@ void MqttControl::load() {
   _alive_minutes = c.alive_minutes;
   _boot = c.boot;
   _relay_mode = c.relay_mode;
+  _relay_guest = c.relay_guest;
 }
 
 void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
@@ -105,6 +106,7 @@ void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
   c->alive_minutes = _alive_minutes;
   c->boot = _boot;
   c->relay_mode = _relay_mode;
+  c->relay_guest = _relay_guest;
 }
 
 void MqttControl::save() {
@@ -125,9 +127,10 @@ void MqttControl::stage(const char* topic, const uint8_t* payload, size_t len) {
   // Runs on the client's esp-mqtt event task, which has a fraction of the stack the
   // bridge task has and none of the loop task's right to touch flash. Copy, queue,
   // and get out; MQTTBridge.cpp:1630-1636 says the same about publishing. A full
-  // queue drops the newer and counts it.
+  // queue drops the newer and counts it, and a guest's forward leaves the last place free.
   if (!_enabled) return;
-  mqttCtrlQueuePush(&_queue, topic, payload, len);
+  const bool guest = mcc3PayloadKind((const char *)payload, len) == MCC3_KIND_GUEST_FWD;
+  mqttCtrlQueuePush(&_queue, topic, payload, len, guest ? 1 : 0);
 }
 
 MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
@@ -191,6 +194,23 @@ MqttCtrlResult MqttControl::drain(const mesh::Identity& owner, uint32_t now,
 MqttCtrlResult MqttControl::takeForward(Mcc3Forward* out) {
   const MqttCtrlStaged* staged = mqttCtrlQueueFront(&_queue);
   MqttCtrlResult result = mcc3OpenForward(mcc3Keys(), staged->payload, staged->payload_len, out);
+  mqttCtrlQueuePop(&_queue);
+  return result;
+}
+
+MqttCtrlResult MqttControl::takeGuestForward(const mesh::LocalIdentity& self, Mcc3Forward* out,
+                                             uint8_t guest_key[PUB_KEY_SIZE], uint8_t key[MCC3_KEY_LEN]) {
+  const MqttCtrlStaged* staged = mqttCtrlQueueFront(&_queue);
+  MqttCtrlResult result = MQTTCTRL_ERR_BAD_FIELDS;
+  if (mcc3GuestForwardKey(staged->payload, staged->payload_len, guest_key)) {
+    uint8_t shared[PUB_KEY_SIZE];
+    char self_hex[PUB_KEY_SIZE * 2 + 1];
+    self.calcSharedSecret(shared, guest_key);
+    mesh::Utils::toHex(self_hex, self.pub_key, PUB_KEY_SIZE);
+    mcc3DeriveGuestKey(shared, self_hex, key);
+    memset(shared, 0, sizeof(shared));
+    result = mcc3OpenGuestForward(key, staged->payload, staged->payload_len, out);
+  }
   mqttCtrlQueuePop(&_queue);
   return result;
 }

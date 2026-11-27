@@ -176,8 +176,12 @@ class Fork {
   char _ctrl_ping_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
   bool _ctrl_refused = false;                 // the server refused the plane's topic and has not granted it since
   // The relay (MqttRelayHooks.cpp): one forward at a time waits for its target's answer,
-  // and the target is a peer of this node only while it does.
+  // and the target is a peer of this node only while it does. A guest's forward is counted
+  // in _guests, and an owner's that came while one was out waits in _relay_held.
   Mcc3Relay _relay;
+  Mcc3Guests _guests = {};
+  Mcc3Forward _relay_held;
+  bool _relay_holding = false;
   struct RelayWait {
     mesh::Identity target;
     uint8_t secret[PUB_KEY_SIZE];
@@ -187,6 +191,8 @@ class Fork {
     uint32_t request;                        // the request's own counter, for the log (0: an old request)
     uint8_t sent;                            // MCC3_SENT_DIRECT or MCC3_SENT_FLOOD
     unsigned long since;                     // millis() the request went out
+    bool guest;
+    uint8_t key[MCC3_KEY_LEN];               // what the result is sealed under: K_fwd or a guest's K_gfwd
   } _relay_wait;
 
   // The announces heard, on their way to the command server (MeshAliveHooks.cpp): nothing
@@ -203,9 +209,11 @@ class Fork {
   void loopSeen();
   void loopAcks();
   void relayForward();
+  void relayGuestForward();
+  void relayHeld();
   bool sendRelayRequest(const Mcc3Forward& fwd, uint32_t* air_ms);
   bool isRelayPeer(const uint8_t* hash);
-  void publishRelayResult(const uint8_t* rid, Mcc3ForwardResult& result);
+  void publishRelayResult(const uint8_t* key, const uint8_t* rid, Mcc3ForwardResult& result);
   void onRelayResponse(mesh::Packet* packet, uint8_t path_len, const uint8_t* path,
                        const uint8_t* data, size_t len);
   void loopRelay();

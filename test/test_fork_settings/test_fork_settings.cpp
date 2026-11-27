@@ -286,7 +286,6 @@ TEST(ControlConfig, TheAliveIntervalAndTheBootCounterAreVersion6) {
 TEST(ControlConfig, TheRelayModeIsVersion7AndAnOlderFileReadsAsOwn) {
   MqttCtrlStoredConfig c;
   mqttCtrlConfigDefaults(&c);
-  EXPECT_EQ(MQTTCTRL_RELAY_OWN, c.relay_mode);
   strcpy(c.pubkey, KEY);
   c.counter = 77;
   c.alive_minutes = 60;
@@ -295,13 +294,10 @@ TEST(ControlConfig, TheRelayModeIsVersion7AndAnOlderFileReadsAsOwn) {
   c.relay_mode = MQTTCTRL_RELAY_OFF;
   uint8_t buf[MQTTCTRL_CONFIG_LEN];
   ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mqttCtrlConfigEncode(&c, buf, sizeof(buf)));
-  EXPECT_EQ(7, buf[0]);
-  EXPECT_EQ((size_t)MQTTCTRL_CONFIG_LEN_6 + 1, (size_t)MQTTCTRL_CONFIG_LEN);
-  EXPECT_EQ(83u, (size_t)MQTTCTRL_CONFIG_LEN);
-  EXPECT_EQ(0u, mqttCtrlConfigEncode(&c, buf, sizeof(buf) - 1));
+  buf[0] = 7;
   MqttCtrlStoredConfig back;
   mqttCtrlConfigDefaults(&back);
-  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_7, 6, &back));
   EXPECT_EQ(MQTTCTRL_RELAY_OFF, back.relay_mode);
   EXPECT_EQ(60, back.alive_minutes);
   EXPECT_EQ(9u, back.boot);
@@ -311,26 +307,75 @@ TEST(ControlConfig, TheRelayModeIsVersion7AndAnOlderFileReadsAsOwn) {
 
   // What an image before the relay reads of it: the 82 bytes it knows, every field.
   mqttCtrlConfigDefaults(&back);
+  back.relay_mode = MQTTCTRL_RELAY_OWN;
   ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_6, 6, &back));
   EXPECT_EQ(60, back.alive_minutes);
   EXPECT_EQ(9u, back.boot);
   EXPECT_EQ(MQTTCTRL_RELAY_OWN, back.relay_mode);
 
-  // A v6 file, as that image writes it, reads as own whatever byte follows it in the buffer.
+  // A v6 file, as that image writes it, leaves the mode as it was, whatever byte follows.
   buf[0] = 6;
   mqttCtrlConfigDefaults(&back);
-  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_6, 6, &back));
-  EXPECT_EQ(MQTTCTRL_RELAY_OWN, back.relay_mode);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(MQTTCTRL_RELAY_ANY, back.relay_mode);
+  EXPECT_EQ(60, back.alive_minutes);
+}
+
+// Version 8 (lou-21): any is the default, a version 7 file's own was that default and reads as
+// any, and the guests' cap follows the mode.
+TEST(ControlConfig, Version8MovesTheDefaultOwnToAnyAndKeepsTheGuestCap) {
+  MqttCtrlStoredConfig c;
+  mqttCtrlConfigDefaults(&c);
+  EXPECT_EQ(MQTTCTRL_RELAY_ANY, c.relay_mode);
+  EXPECT_EQ(MQTTCTRL_RELAY_GUEST_DEFAULT, c.relay_guest);
+  c.relay_mode = MQTTCTRL_RELAY_OWN;
+  c.relay_guest = 3;
+  c.boot = 9;
+  uint8_t buf[MQTTCTRL_CONFIG_LEN];
+  ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mqttCtrlConfigEncode(&c, buf, sizeof(buf)));
+  EXPECT_EQ(8, buf[0]);
+  EXPECT_EQ((size_t)MQTTCTRL_CONFIG_LEN_7 + 1, (size_t)MQTTCTRL_CONFIG_LEN);
+  EXPECT_EQ(84u, (size_t)MQTTCTRL_CONFIG_LEN);
+  EXPECT_EQ(0u, mqttCtrlConfigEncode(&c, buf, sizeof(buf) - 1));
+  EXPECT_EQ(MQTTCTRL_RELAY_OWN, buf[MQTTCTRL_CONFIG_LEN_6]);
+  EXPECT_EQ(3, buf[MQTTCTRL_CONFIG_LEN_7]);
+
+  // An own set in version 8 was chosen, and stays.
+  MqttCtrlStoredConfig back;
   mqttCtrlConfigDefaults(&back);
   ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
   EXPECT_EQ(MQTTCTRL_RELAY_OWN, back.relay_mode);
-  EXPECT_EQ(60, back.alive_minutes);
+  EXPECT_EQ(3, back.relay_guest);
+  EXPECT_EQ(9u, back.boot);
 
-  // A mode this build does not know reads as the default.
+  // The same byte in version 7 was the default, and moves to any; off stays off.
   buf[0] = 7;
-  buf[MQTTCTRL_CONFIG_LEN_6] = 2;
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_7, 6, &back));
+  EXPECT_EQ(MQTTCTRL_RELAY_ANY, back.relay_mode);
+  EXPECT_EQ(MQTTCTRL_RELAY_GUEST_DEFAULT, back.relay_guest);
+  buf[MQTTCTRL_CONFIG_LEN_6] = MQTTCTRL_RELAY_OFF;
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_7, 6, &back));
+  EXPECT_EQ(MQTTCTRL_RELAY_OFF, back.relay_mode);
+
+  // Any in version 8 is any; lou-20 reads it as a mode it does not know, which is own there.
+  buf[0] = 8;
+  buf[MQTTCTRL_CONFIG_LEN_6] = MQTTCTRL_RELAY_ANY;
   ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
-  EXPECT_EQ(MQTTCTRL_RELAY_OWN, back.relay_mode);
+  EXPECT_EQ(MQTTCTRL_RELAY_ANY, back.relay_mode);
+
+  // A mode or a cap this build does not know reads as the default; a short file keeps it.
+  buf[MQTTCTRL_CONFIG_LEN_6] = 3;
+  buf[MQTTCTRL_CONFIG_LEN_7] = 101;
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(MQTTCTRL_RELAY_ANY, back.relay_mode);
+  EXPECT_EQ(MQTTCTRL_RELAY_GUEST_DEFAULT, back.relay_guest);
+  buf[MQTTCTRL_CONFIG_LEN_7] = 0;
+  back.relay_guest = 42;
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_7, 6, &back));
+  EXPECT_EQ(42, back.relay_guest);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(0, back.relay_guest);
 }
 
 int main(int argc, char** argv) {
