@@ -231,3 +231,195 @@ TEST(MeshReportAcks, AnAckHeardCancelsOne) {
   EXPECT_EQ(mreportAckDue(&acks, 0xFFu), nullptr);
   EXPECT_NE(mreportAckDue(&acks, 0x100u), nullptr);
 }
+
+// ---- the table ------------------------------------------------------------------------
+
+TEST(MeshReportTable, AHashSizeWithNoHopsIsNoPath) {
+  MreportTable t = {};
+  bool joined;
+  mreportLearn(&t, keyOf(1).data(), 0, true, 0x40, NULL, &joined);
+  EXPECT_EQ(mreportBestPath(&t), -1);
+}
+
+TEST(MeshReportTable, LearnsNamesAndGivesWay) {
+  MreportTable t = {};
+  EXPECT_EQ(mreportBest(&t), -1);
+  EXPECT_EQ(mreportBestPath(&t), -1);
+  bool joined = false;
+  EXPECT_EQ(mreportLearn(&t, keyOf(1).data(), -20, false, 0, NULL, &joined), 0);
+  EXPECT_TRUE(joined);
+  EXPECT_EQ(mreportLearn(&t, keyOf(2).data(), 10, false, 0, NULL, &joined), 1);
+  EXPECT_EQ(mreportBest(&t), 1);                       // the stronger, both without first tries
+  t.entry[0].first_try = 0x01;
+  EXPECT_EQ(mreportBest(&t), 0);                       // a first-try ack counts before SNR
+  EXPECT_EQ(mreportBestPath(&t), -1);
+  const uint8_t path[] = { 5, 6 };
+  EXPECT_EQ(mreportLearn(&t, keyOf(2).data(), 12, true, 2, path, &joined), 1);
+  EXPECT_FALSE(joined);
+  EXPECT_EQ(t.entry[1].snr, 12);
+  EXPECT_EQ(mreportBestPath(&t), 1);
+  EXPECT_EQ(hexOf(t.entry[1].path, 2), "0506");
+  // A zero-hop ack keeps the path a path ack taught.
+  mreportLearn(&t, keyOf(2).data(), 14, false, 0, NULL, &joined);
+  EXPECT_EQ(t.entry[1].path_len, 2);
+  // A path longer than the table holds is not kept.
+  uint8_t nine[9] = {0};
+  mreportLearn(&t, keyOf(1).data(), 0, true, 9, nine, &joined);
+  EXPECT_EQ(t.entry[0].path_len, 0);
+
+  mreportLearn(&t, keyOf(3).data(), 30, false, 0, NULL, &joined);
+  mreportLearn(&t, keyOf(4).data(), -40, false, 0, NULL, &joined);
+  EXPECT_EQ(t.count, 4);
+  // A fifth replaces the one with the fewest first-try acks, then the weakest SNR: 4.
+  EXPECT_EQ(mreportLearn(&t, keyOf(5).data(), 0, false, 0, NULL, &joined), 3);
+  EXPECT_TRUE(joined);
+  EXPECT_EQ(mreportFind(&t, keyOf(4).data()), -1);
+  EXPECT_EQ(mreportFind(&t, keyOf(1).data()), 0);
+  EXPECT_EQ(t.entry[3].first_try, 0);
+}
+
+TEST(MeshReportTable, ThreeOfFourFirstTriesMakeItReliable) {
+  MreportTable t = {};
+  bool joined;
+  mreportLearn(&t, keyOf(1).data(), 0, false, 0, NULL, &joined);
+  mreportLearn(&t, keyOf(2).data(), 0, false, 0, NULL, &joined);
+  EXPECT_FALSE(mreportReliable(&t, 0));
+  mreportRoundEnd(&t, 0);
+  mreportRoundEnd(&t, 0);
+  EXPECT_FALSE(mreportReliable(&t, 0));
+  mreportRoundEnd(&t, 0);
+  EXPECT_EQ(t.entry[0].first_try, 0x07);
+  EXPECT_EQ(t.entry[1].first_try, 0x00);
+  EXPECT_TRUE(mreportReliable(&t, 0));
+  EXPECT_TRUE(mreportReliable(&t, 1));
+  EXPECT_FALSE(mreportReliable(&t, 2));                // two rounds in a row needed a fallback
+  mreportRoundEnd(&t, 1);
+  EXPECT_EQ(t.entry[0].first_try, 0x0E);
+  EXPECT_TRUE(mreportReliable(&t, 0));
+  mreportRoundEnd(&t, -1);
+  EXPECT_EQ(t.entry[0].first_try, 0x0C);                // only the last four
+  EXPECT_FALSE(mreportReliable(&t, 0));
+}
+
+TEST(MeshReportTable, OnFlashAndBack) {
+  EXPECT_EQ(MREPORT_ENTRY_SIZE, 43);
+  EXPECT_EQ(MREPORT_TABLE_SIZE, 173);
+  MreportTable t = {};
+  bool joined;
+  const uint8_t path[] = { 7, 8, 9 };
+  mreportLearn(&t, keyOf(1).data(), -30, true, 3, path, &joined);
+  mreportLearn(&t, keyOf(2).data(), 44, false, 0, NULL, &joined);
+  t.entry[1].first_try = 0x0B;
+  uint8_t buf[MREPORT_TABLE_SIZE];
+  ASSERT_EQ(mreportTableEncode(&t, buf), (size_t)MREPORT_TABLE_SIZE);
+  EXPECT_EQ(buf[0], 1);
+  MreportTable back;
+  ASSERT_TRUE(mreportTableDecode(buf, sizeof(buf), &back));
+  ASSERT_EQ(back.count, 2);
+  EXPECT_EQ(0, memcmp(&back.entry[0], &t.entry[0], sizeof(MreportObserver)));
+  EXPECT_EQ(0, memcmp(&back.entry[1], &t.entry[1], sizeof(MreportObserver)));
+  EXPECT_TRUE(mreportReliable(&back, 0));               // so the 12 h rate resumes after a restart
+
+  EXPECT_FALSE(mreportTableDecode(buf, sizeof(buf) - 1, &back));
+  EXPECT_EQ(back.count, 0);
+  buf[0] = 2;
+  EXPECT_FALSE(mreportTableDecode(buf, sizeof(buf), &back));
+  EXPECT_FALSE(mreportTableDecode(NULL, 0, &back));
+  buf[0] = 1;
+  buf[1 + 34] = 0xC1;                                    // a path length no table holds
+  ASSERT_TRUE(mreportTableDecode(buf, sizeof(buf), &back));
+  EXPECT_EQ(back.entry[0].path_len, 0);
+}
+
+// ---- the ladder -----------------------------------------------------------------------
+
+TEST(MeshReportLadder, AFirstTryAckEndsIt) {
+  MreportLadder l;
+  const uint8_t r[] = { 1, 2, 3, 4 }, other[] = { 4, 3, 2, 1 };
+  MreportLadder idle = {};
+  EXPECT_EQ(mreportStep(&idle, 0, true), MREPORT_WAIT);
+  EXPECT_FALSE(mreportAck(&idle, r, 0));
+  mreportStart(&l, r, 1000);
+  EXPECT_EQ(mreportStep(&l, 1000, true), MREPORT_SEND_STATE);
+  mreportSent(&l, 1000, 0);
+  EXPECT_EQ(mreportStep(&l, 8999, true), MREPORT_WAIT);
+  EXPECT_FALSE(mreportAck(&l, other, 0));
+  EXPECT_TRUE(mreportAck(&l, r, 2));
+  EXPECT_EQ(l.first_try_by, 2);
+  EXPECT_EQ(mreportStep(&l, 1001, true), MREPORT_DONE);
+  EXPECT_FALSE(mreportFellBack(&l));
+}
+
+TEST(MeshReportLadder, ThreeTriesThenThePathThenTheFlood) {
+  MreportLadder l;
+  const uint8_t r[] = { 1, 2, 3, 4 };
+  mreportStart(&l, r, 0);
+  uint32_t now = 0;
+  for (int i = 0; i < 3; i++) {
+    ASSERT_EQ(mreportStep(&l, now, true), MREPORT_SEND_STATE) << i;
+    mreportSent(&l, now, i == 0 ? 0 : 12000);
+    const uint32_t gap = i == 0 ? 8000 : 20000;
+    EXPECT_EQ(mreportStep(&l, now + gap - 1, true), MREPORT_WAIT);
+    now += gap;
+  }
+  // An ack on the second try is no first try.
+  MreportLadder second = l;
+  second.tries = 2;
+  mreportAck(&second, r, 1);
+  EXPECT_EQ(second.first_try_by, -1);
+
+  EXPECT_EQ(mreportStep(&l, now, true), MREPORT_SEND_DIRECT);
+  mreportSent(&l, now, 0);
+  EXPECT_EQ(mreportStep(&l, now + 29999, true), MREPORT_WAIT);
+  now += 30000;
+  EXPECT_EQ(mreportStep(&l, now, true), MREPORT_SEND_FLOOD);
+  // The flood could not go: a minute later.
+  mreportLater(&l, now);
+  EXPECT_EQ(mreportStep(&l, now + 59999, true), MREPORT_WAIT);
+  now += 60000;
+  EXPECT_EQ(mreportStep(&l, now, true), MREPORT_SEND_FLOOD);
+  mreportSent(&l, now, 0);
+  EXPECT_EQ(mreportStep(&l, now + 89999, true), MREPORT_WAIT);
+  EXPECT_EQ(mreportStep(&l, now + 90000, true), MREPORT_DONE);
+  EXPECT_TRUE(mreportFellBack(&l));
+  EXPECT_EQ(l.first_try_by, -1);
+}
+
+TEST(MeshReportLadder, NoPathGoesStraightToTheFloodAndAPathAckEndsIt) {
+  MreportLadder l;
+  const uint8_t r[] = { 1, 2, 3, 4 };
+  mreportStart(&l, r, 0);
+  for (int i = 0; i < 3; i++) {
+    ASSERT_EQ(mreportStep(&l, (uint32_t)i * 20000, false), MREPORT_SEND_STATE);
+    mreportSent(&l, (uint32_t)i * 20000, 12000);
+  }
+  EXPECT_EQ(mreportStep(&l, 60000, false), MREPORT_SEND_FLOOD);
+  mreportSent(&l, 60000, 0);
+  EXPECT_EQ(mreportStep(&l, 61000, false), MREPORT_WAIT);
+  EXPECT_TRUE(mreportAck(&l, r, -1));
+  EXPECT_EQ(mreportStep(&l, 61000, false), MREPORT_DONE);
+  EXPECT_TRUE(mreportFellBack(&l));
+
+  // A path that left the table while its send waited: the flood instead.
+  mreportStart(&l, r, 0);
+  for (int i = 0; i < 3; i++) mreportSent(&l, 0, 0);
+  EXPECT_EQ(mreportStep(&l, 8000, true), MREPORT_SEND_DIRECT);
+  mreportLater(&l, 8000);
+  EXPECT_EQ(mreportStep(&l, 68000, false), MREPORT_SEND_FLOOD);
+
+  // A zero-hop try that could not go is not counted as one.
+  mreportStart(&l, r, 0);
+  mreportLater(&l, 0);
+  EXPECT_EQ(mreportStep(&l, 60000, false), MREPORT_SEND_STATE);
+  EXPECT_EQ(l.tries, 0);
+}
+
+TEST(MeshReportLadder, TwelveHoursWhenReliable) {
+  EXPECT_EQ(MREPORT_RELIABLE_MS, 43200000UL);
+  MeshAliveClock c = {};
+  c.ready = true;
+  meshAliveSentIn(&c, 0, MREPORT_RELIABLE_MS, 0);
+  EXPECT_EQ(c.due_ms, 38880000u);                       // 10.8 h
+  meshAliveSentIn(&c, 0, MREPORT_RELIABLE_MS, 2 * (MREPORT_RELIABLE_MS / 10));
+  EXPECT_EQ(c.due_ms, 47520000u);                       // 13.2 h
+}

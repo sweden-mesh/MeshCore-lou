@@ -11,6 +11,9 @@ void Fork::begin(FILESYSTEM* fs) {
 #ifdef WITH_MQTT_COMMAND
   _mqtt_control.begin(fs);
 #endif
+#ifdef FORK_LADDER
+  loadObservers();
+#endif
 #ifdef WITH_MQTT_BRIDGE
   // Before the slot is mended: a plane switched off here is one the mending leaves alone.
   settleArrival();

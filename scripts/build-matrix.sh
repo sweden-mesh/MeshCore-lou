@@ -98,6 +98,9 @@ QUIET_ENVS="${QUIET_ENVS:-Xiao_S3_WIO_repeater_observer_mqtt}"
 # Images that do not fit their board, as <env>-<combination>: never planned and never built.
 # wio-e5-mini (STM32WLE5, 229 376 B of flash): arrc is 5 584 B over since lou-20; ar and rc fit.
 NO_FIT="${NO_FIT-wio-e5-mini_repeater-arrc}"
+# Images the reporting ladder (lou-21) does not fit, built with NO_FORK_LADDER: they announce by
+# flood every 23 hours. The STM32WLE5 arrc images were 1.8 KB over with it; rc fits.
+NO_LADDER="${NO_LADDER-RAK_3x72_repeater-arrc Tiny_Relay_repeater-arrc wio-e5_repeater-arrc}"
 
 for combo in $COMBOS; do
   flags_for "$combo" >/dev/null || { echo "not a combination for $BASE: '$combo'" >&2; exit 2; }
@@ -118,6 +121,7 @@ for combo in $COMBOS; do
     quiet=""
     case " $QUIET_ENVS " in *" $env "*) quiet=1 ;; esac
     extra="${quiet:+ -UMQTT_DEBUG}"
+    case " $NO_LADDER " in *" $variant "*) extra="$extra -DNO_FORK_LADDER=1" ;; esac
     if [ $DRY -eq 1 ]; then
       echo "$env $combo flags='$flags$extra' version=<mcu>-$BASE_VERSION-$REV-$combo variant=$variant${quiet:+ quiet}"
       continue

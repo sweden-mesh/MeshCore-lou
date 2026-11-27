@@ -260,9 +260,16 @@ static inline void meshAliveLater(MeshAliveClock* c, uint32_t now_ms) {
   c->due_ms = now_ms + MALIVE_SOON_MAX_MS;
 }
 
-static inline void meshAliveSent(MeshAliveClock* c, uint32_t now_ms, uint32_t rnd) {
-  c->due_ms = now_ms + MALIVE_INTERVAL_MS - MALIVE_SPREAD_MS + rnd % (2 * MALIVE_SPREAD_MS + 1);
+// The next announce in `interval_ms`, a tenth either way: 23 hours, or 12 for a node whose
+// reports an Observer node nearby acks (MeshReportLogic.h).
+static inline void meshAliveSentIn(MeshAliveClock* c, uint32_t now_ms, uint32_t interval_ms, uint32_t rnd) {
+  const uint32_t spread = interval_ms / 10;
+  c->due_ms = now_ms + interval_ms - spread + rnd % (2 * spread + 1);
   c->armed = true;
+}
+
+static inline void meshAliveSent(MeshAliveClock* c, uint32_t now_ms, uint32_t rnd) {
+  meshAliveSentIn(c, now_ms, MALIVE_INTERVAL_MS, rnd);
 }
 
 // ---- the catching node -----------------------------------------------------------------
