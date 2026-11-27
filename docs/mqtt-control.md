@@ -699,7 +699,7 @@ An image without Wi-Fi has no MQTT and so no alive message. Up to lou-20 its own
 its 64-character key into the tools by hand. From lou-21 the node says that it exists, over the
 mesh, and an Observer node of the same owner that hears it tells the command server.
 
-**What is sent.** One `ANON_REQ` packet with 101 bytes of payload, flooded inside one region:
+**What is sent.** One `ANON_REQ` packet with 165 bytes of payload, flooded inside one region:
 
 | offset | size | field |
 |---|---|---|
@@ -711,6 +711,7 @@ mesh, and an Observer node of the same owner that hears it tells the command ser
 | 42 | 4 | sequence since boot, from 1 |
 | 46 | 47 | sealed: uptime (4), clock (4, 0 while unset), last command counter (4), flags (1, the alive message's), battery in millivolts (2, 0 when the board cannot read it), version (length byte, at most 14), name (length byte, at most 16, cut), zeros |
 | 93 | 8 | the seal's tag, its first 8 bytes |
+| 101 | 64 | Ed25519 signature by the node's identity over `mcc3/ann|` + bytes 1 to 100 |
 
 Integers are little-endian. The seal is ChaCha20-Poly1305 under a key of its own, HKDF info
 `mcc3/malive/` + the node's key, from the same `S`; the nonce is four zero bytes, the boot
@@ -718,10 +719,11 @@ counter and the sequence; bytes 1 to 45 are the associated data. Repeaters, stoc
 among them, forward it as they forward any `ANON_REQ` flood in a region they hold: they do not
 read it. Its size and its rhythm show in the public packet feed; what it says does not.
 
-The owner tag lets an Observer node keep the announces made for its own command key. It
-changes with every node and every announce. Somebody who knows the owner's public command key
-can make a tag, so the tag proves nothing: only the owner, who opens the seal, knows that an
-announce is real.
+The signature covers the node's key, the owner tag, boot, sequence, the sealed part and its
+tag, so anyone can check that the node it names made it: an Observer node checks it before
+anything else and drops one that fails in silence. Who owns the node stays hidden: the owner
+tag and the seal need the owner's command key. The owner tag changes with every node and every
+announce; the owner's tool tests it with one hash per announce before it opens anything.
 
 **Who sends it, and when.** An `rc` or `arrc` image without the Observer bridge, with a command
 key, `set cmd on`, and a region: `region home`, else `region default`. With neither it does
@@ -730,16 +732,16 @@ not announce, since an unscoped flood would cross every county, and `get cmd` en
 after `set cmd.pubkey` and after `set cmd on`, and then every 23 hours with a tenth either way.
 The interval is fixed. An Observer image never sends one: it has its alive message.
 
-**What it costs.** At SF8, 62.5 kHz, CR 4:8 the packet is about 1 s on the air, for the node
+**What it costs.** At SF8, 62.5 kHz, CR 4:8 the packet is about 1.6 s on the air, for the node
 and once for each repeater that forwards it: with 100 such nodes in a county a forwarding
-repeater spends about 104 s a day on them, 0.12 % of its day. The node counts it in the airtime
+repeater spends about 166 s a day on them, 0.19 % of its day. The node counts it in the airtime
 budget of its answers over the mesh; when that is spent the announce waits, tried again each
 minute.
-`set cmd.debug on` prints `mcc: announce: 7.1 sent, 1012 ms on the air` (boot and sequence).
+`set cmd.debug on` prints `mcc: announce: 7.1 sent, 1603 ms on the air` (boot and sequence).
 
 **What an Observer node does with it.** An Observer `rc` or `arrc` image with a command key and
 `set cmd on` looks at every flooded `ANON_REQ` of exactly this size and kind before it forwards
-it, and keeps those whose owner tag is its own key's, in a table of 16 nodes in RAM: per node
+it, checks the signature, and keeps those whose owner tag is its own key's, in a table of 16 nodes in RAM: per node
 the newest boot and sequence, when it was heard, its SNR and its hops. A copy by another path,
 or an older one, is dropped. A full table drops the node heard longest ago. At most 4 node keys
 new to the table are admitted in an hour. The packet is forwarded like any other, and nothing
@@ -748,9 +750,9 @@ reaches the console.
 Each entry is published retained on `mcc/heard/{NODE}/{slot}`, `{NODE}` the Observer node's
 own key and the slot 0 to 15, sealed to the owner as the alive message is: kind `0x48`, a
 random nonce, then under HKDF info `mcc3/heard/` + the Observer node's key the announced
-node's key (32), the announce from its kind byte to its tag (68), when it was heard by the
-Observer node's clock (4, 0 while unset), SNR in quarter-dB (1), hops (1), and the same three
-for the node's last advert, which lou-21 leaves zero. 141 bytes, 188 characters. An entry is
+node's key (32), the announce from its kind byte to its signature (132), when it was heard by
+the Observer node's clock (4, 0 while unset), SNR in quarter-dB (1), hops (1), and the same three
+for the node's last advert, which lou-21 leaves zero. 205 bytes, 274 characters. An entry is
 published when its announce is new, one publish in 90 s at most. A changed command key empties
 the table and all 16 slots. The node's will does not empty them, and nor does a restart: what
 was heard stays true. The command server sees how many announces a node has caught and not

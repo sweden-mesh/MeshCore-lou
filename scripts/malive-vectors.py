@@ -9,6 +9,7 @@ This is a second implementation of the format, in Python on the `cryptography` p
 host suite (test/test_mqtt_v3/test_mesh_alive.cpp) rebuilds every vector with the firmware's
 own code and must get the same bytes. The seeds are mcc3's (test/data/mcc3-vectors.json):
 the owner is its command key, the announcing node its node, the catching node its other node.
+Ed25519 is deterministic, so the signatures by those fixed identities are vectors too.
 Without `cryptography`, --check compares the header with the JSON and no more.
 """
 import base64
@@ -26,6 +27,8 @@ HEADER = ROOT / "test/test_mqtt_v3/malive_vectors.h"
 P = 2 ** 255 - 19
 KIND, KIND_HEARD = 0x4D, 0x48
 MAX_VERSION, MAX_NAME, SEALED, TAG = 14, 16, 47, 8
+SIGNED, SIG = 100, 64
+PAYLOAD = 1 + SIGNED + SIG
 
 
 def up(b):
@@ -71,14 +74,21 @@ def crypto():
     def seal(key, nonce, aad, plain):
         return ChaCha20Poly1305(key).encrypt(nonce, plain, aad)
 
-    return public, shared, derive, seal
+    def sign(seed, message):
+        return ed25519.Ed25519PrivateKey.from_private_bytes(seed).sign(message)
+
+    return public, shared, derive, seal, sign
 
 
 def owner_tag(command_key, node_key, boot, sequence):
     return hashlib.sha256(b"mcc3/own|" + command_key + node_key + struct.pack("<II", boot, sequence)).digest()[:4]
 
 
-def announce(seal, key, command_key, node_key, f):
+def signed(payload):
+    return b"mcc3/ann|" + payload[1:1 + SIGNED]
+
+
+def announce(seal, sign, seed, key, command_key, node_key, f):
     version = utf8_cut(f["version"].encode(), MAX_VERSION)
     name = utf8_cut(f["name"].encode(), MAX_NAME)
     plain = struct.pack("<IIIBH", f["uptime"], f["clock"], f["last_counter"], f["flags"], f["battery_mv"])
@@ -89,10 +99,12 @@ def announce(seal, key, command_key, node_key, f):
     nonce = bytes(4) + struct.pack("<II", f["boot"], f["sequence"])
     sealed = seal(key, nonce, head[1:], plain)
     payload = head + sealed[:SEALED + TAG]
+    payload += sign(seed, signed(payload))
     opened = dict(f, version=version.decode(), name=name.decode())
     return {
         "owner_tag": up(tag), "nonce": up(nonce), "aad": up(head[1:]), "plaintext": up(plain),
-        "full_tag": up(sealed[SEALED:]), "bytes": len(payload), "payload": up(payload), "opened": opened,
+        "full_tag": up(sealed[SEALED:]), "signed": up(signed(payload)), "signature": up(payload[1 + SIGNED:]),
+        "bytes": len(payload), "payload": up(payload), "opened": opened,
     }
 
 
@@ -109,7 +121,7 @@ def heard(seal, key, catcher_key, slot, node_key, payload, f, nonce):
 
 
 def generate():
-    public, shared, derive, seal = crypto()
+    public, shared, derive, seal, sign = crypto()
     mcc3 = json.loads(MCC3.read_bytes())["keys"]
     seeds = {"owner": mcc3["seeds"]["command"], "node": mcc3["seeds"]["node"],
              "catcher": mcc3["seeds"]["other_node"], "other_owner": mcc3["seeds"]["other_owner"]}
@@ -142,7 +154,7 @@ def generate():
     for name, who, f in fields:
         key = k_malive if who == "node" else k_malive_catcher
         v = {"name": name, "node": who, "fields": f}
-        v.update(announce(seal, key, pub["owner"], pub[who], f))
+        v.update(announce(seal, sign, bytes.fromhex(seeds[who]), key, pub["owner"], pub[who], f))
         announces.append(v)
 
     def entry(name, slot, a, f, nonce):
@@ -165,28 +177,45 @@ def generate():
         raw[at] ^= 0x01
         return up(bytes(raw))
 
+    def resigned(hexed):
+        """Signed again by the node, as somebody holding its identity could: what the seal and
+        the owner tag must then refuse on their own."""
+        raw = bytes.fromhex(hexed)[:1 + SIGNED]
+        return up(raw + sign(bytes.fromhex(seeds["node"]), signed(raw)))
+
     a1 = announces[0]
-    other = announce(seal, k_malive, pub["other_owner"], pub["node"], fields[0][2])
+    other = announce(seal, sign, bytes.fromhex(seeds["node"]), k_malive, pub["other_owner"], pub["node"],
+                     fields[0][2])
     refusals = [
         {"name": "the kind byte is not 0x4D", "input": flipped(a1["payload"], 33), "outcome": "not-announce"},
         {"name": "one byte short", "input": a1["payload"][:-2], "outcome": "not-announce"},
         {"name": "one byte long", "input": a1["payload"] + "00", "outcome": "not-announce"},
+        {"name": "the 101 bytes of lou-21 as first built", "input": a1["payload"][:202], "outcome": "not-announce"},
+        {"name": "a signature byte changed", "input": flipped(a1["payload"], 130), "outcome": "bad-signature"},
+        {"name": "the boot counter changed", "input": flipped(a1["payload"], 38), "outcome": "bad-signature"},
+        {"name": "the node key changed", "input": flipped(a1["payload"], 20), "outcome": "bad-signature"},
+        {"name": "a sealed byte changed", "input": flipped(a1["payload"], 60), "outcome": "bad-signature"},
         {"name": "made for another command key", "input": other["payload"], "outcome": "other-owner"},
-        {"name": "the boot counter changed", "input": flipped(a1["payload"], 38), "outcome": "other-owner"},
-        {"name": "the node key changed", "input": flipped(a1["payload"], 20), "outcome": "other-owner"},
-        {"name": "a sealed byte changed", "input": flipped(a1["payload"], 60), "outcome": "does-not-open"},
-        {"name": "the tag changed", "input": flipped(a1["payload"], 100), "outcome": "does-not-open"},
+        {"name": "the boot counter changed, signed again", "input": resigned(flipped(a1["payload"], 38)),
+         "outcome": "other-owner"},
+        {"name": "a sealed byte changed, signed again", "input": resigned(flipped(a1["payload"], 60)),
+         "outcome": "does-not-open"},
+        {"name": "the tag changed, signed again", "input": resigned(flipped(a1["payload"], 100)),
+         "outcome": "does-not-open"},
     ]
 
     return {
         "_source": "generated by scripts/malive-vectors.py in MeshCore-lou; do not edit",
         "_doc": "docs/mqtt-control.md, Announcing; src/helpers/MeshAliveLogic.h",
         "constants": {
-            "kind": KIND, "payload_bytes": 101, "sealed_bytes": SEALED, "tag_bytes": TAG,
+            "kind": KIND, "payload_bytes": PAYLOAD, "sealed_bytes": SEALED, "tag_bytes": TAG,
+            "signed_bytes": SIGNED, "signature_bytes": SIG, "label_signature": "mcc3/ann|",
             "max_version": MAX_VERSION, "max_name": MAX_NAME,
             "label_owner_tag": "mcc3/own|", "label_malive": "mcc3/malive/", "label_heard": "mcc3/heard/",
-            "kind_heard": KIND_HEARD, "kept_bytes": 68, "heard_plain_bytes": 112, "heard_bytes": 141,
-            "heard_base64url_chars": 188, "table_slots": 16, "new_nodes_an_hour": 4,
+            "kind_heard": KIND_HEARD, "kept_bytes": PAYLOAD - 33, "heard_plain_bytes": 32 + PAYLOAD - 33 + 12,
+            "heard_bytes": 1 + 12 + 32 + PAYLOAD - 33 + 12 + 16,
+            "heard_base64url_chars": len(b64(bytes(1 + 12 + 32 + PAYLOAD - 33 + 12 + 16))),
+            "table_slots": 16, "new_nodes_an_hour": 4,
             "interval_seconds": 82800, "interval_spread_seconds": 8280,
         },
         "keys": {
@@ -230,7 +259,8 @@ def render(d):
         "struct MAliveVecAnnounce { const char* name; const char* node; uint32_t boot, sequence, uptime, "
         "clock, last_counter; uint8_t flags; uint16_t battery_mv; const char* version; "
         "const char* name_field; const char* opened_version; const char* opened_name; "
-        "const char* owner_tag; const char* nonce; const char* plaintext; const char* payload; };",
+        "const char* owner_tag; const char* nonce; const char* plaintext; const char* signed_bytes; "
+        "const char* signature; const char* payload; };",
         "struct MAliveVecHeard { const char* name; const char* announce; int slot; const char* topic; "
         "uint32_t heard_at; int snr; uint8_t hops; uint32_t advert_heard_at; int advert_snr; "
         "uint8_t advert_hops; const char* node_key; const char* nonce; const char* plaintext; "
@@ -253,7 +283,7 @@ def render(d):
                          *("%uu" % f[n] for n in ("boot", "sequence", "uptime", "clock", "last_counter")),
                          str(f["flags"]), str(f["battery_mv"]), c_str(f["version"]), c_str(f["name"]),
                          c_str(o["version"]), c_str(o["name"]), c_str(v["owner_tag"]), c_str(v["nonce"]),
-                         c_str(v["plaintext"]), c_str(v["payload"])))
+                         c_str(v["plaintext"]), c_str(v["signed"]), c_str(v["signature"]), c_str(v["payload"])))
     lines.append("};")
 
     lines.append("static const MAliveVecHeard MALIVE_HEARD[] = {")

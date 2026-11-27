@@ -40,6 +40,18 @@ struct Ident {
 
 const Ident OWNER(MALIVE_SEED_OWNER), NODE(MALIVE_SEED_NODE), CATCHER(MALIVE_SEED_CATCHER);
 
+// The node's identity signs, as LocalIdentity::sign does; the key the announce names verifies.
+void signAs(void* ctx, uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len) {
+  const Ident* id = (const Ident*)ctx;
+  ed25519_sign(sig, msg, len, id->pub, id->prv);
+}
+bool verifyNamed(void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len) {
+  return ed25519_verify(sig, msg, len, (const uint8_t*)ctx) == 1;
+}
+bool open(const uint8_t* key, const uint8_t* payload, size_t len, MeshAliveOpened* o) {
+  return meshAliveOpen(key, OWNER.pub, payload, len, verifyNamed, (void*)(payload + 1), o);
+}
+
 // One side's key: its own identity, the other's public key, and the node the key is named by.
 std::vector<uint8_t> derive(const Ident& self, const uint8_t* peer, const char* label, const uint8_t* node_key) {
   uint8_t shared[32];
@@ -65,20 +77,24 @@ MeshAlive fieldsOf(const MAliveVecAnnounce& v) {
   return a;
 }
 
-// An announce of a made-up node for OWNER: a catching node cannot tell, which is the point.
+// An announce of a made-up node for OWNER, signed by an identity made from the same byte.
 std::vector<uint8_t> announceOf(uint8_t node, uint32_t boot, uint32_t sequence, const uint8_t* owner = OWNER.pub) {
-  uint8_t key[32], node_key[32];
+  uint8_t key[32], seed[32];
   memset(key, 0x5A, sizeof(key));
-  memset(node_key, node, sizeof(node_key));
+  memset(seed, node, sizeof(seed));
+  Ident id(hex(seed, 32).c_str());
   MeshAlive a = {};
   a.boot = boot;
   a.sequence = sequence;
   a.version = "lou-21-rc";
   a.name = "n";
   std::vector<uint8_t> out(MALIVE_PAYLOAD);
-  meshAliveBuild(key, owner, node_key, &a, out.data());
+  meshAliveBuild(key, owner, id.pub, &a, signAs, (void*)&id, out.data());
   return out;
 }
+
+// The made-up node's key, as the table keeps it.
+uint8_t keyByteOf(uint8_t node) { return announceOf(node, 1, 1)[1]; }
 
 MeshAliveVerdict take(MeshAliveTable* t, const std::vector<uint8_t>& p, uint32_t now_secs, int* slot = NULL,
                       uint32_t heard_at = 1795000000, int8_t snr = 0, uint8_t hops = 0) {
@@ -122,9 +138,14 @@ TEST(MeshAlive, EveryAnnounceIsRebuiltByteForByte) {
     std::vector<uint8_t> key = derive(node, OWNER.pub, MALIVE_LABEL, node.pub);
     MeshAlive a = fieldsOf(v);
     uint8_t out[MALIVE_PAYLOAD];
-    meshAliveBuild(key.data(), OWNER.pub, node.pub, &a, out);
+    meshAliveBuild(key.data(), OWNER.pub, node.pub, &a, signAs, (void*)&node, out);
     EXPECT_EQ(hex(out, sizeof(out)), v.payload);
     EXPECT_EQ(hex(out + MALIVE_AT_OWNER_TAG, 4), v.owner_tag);
+    uint8_t msg[9 + MALIVE_SIGNED];
+    EXPECT_EQ(meshAliveSignedBytes(out, msg), 109u);
+    EXPECT_EQ(hex(msg, sizeof(msg)), v.signed_bytes);
+    EXPECT_EQ(hex(out + MALIVE_AT_SIG, MCC3_SIG_LEN), v.signature);
+    EXPECT_TRUE(meshAliveSignatureOk(out, verifyNamed, (void*)node.pub));
     EXPECT_EQ(out[0], node.pub[0]);
     EXPECT_EQ(0, memcmp(out + 1, node.pub, 32));
     EXPECT_EQ(out[MALIVE_AT_KIND], 0x4D);
@@ -142,7 +163,7 @@ TEST(MeshAlive, TheOwnerOpensEveryAnnounce) {
     std::vector<uint8_t> key = derive(OWNER, node.pub, MALIVE_LABEL, node.pub);
     std::vector<uint8_t> payload = unhex(v.payload);
     MeshAliveOpened o;
-    ASSERT_TRUE(meshAliveOpen(key.data(), OWNER.pub, payload.data(), payload.size(), &o));
+    ASSERT_TRUE(open(key.data(), payload.data(), payload.size(), &o));
     EXPECT_EQ(hex(o.node_key, 32), hex(node.pub, 32));
     EXPECT_EQ(o.boot, v.boot);
     EXPECT_EQ(o.sequence, v.sequence);
@@ -170,9 +191,13 @@ TEST(MeshAlive, TheSealedPartHoldsTheBatteryAfterTheFlags) {
   EXPECT_EQ(plain[13], 0x93);
   EXPECT_EQ(plain[14], 0x0F);
   EXPECT_EQ(plain[15], strlen(v.version));
-  EXPECT_EQ(MALIVE_PAYLOAD, 101);
-  EXPECT_EQ(MALIVE_AT_SEALED + MALIVE_SEALED + MALIVE_TAG_LEN, MALIVE_PAYLOAD);
+  EXPECT_EQ(MALIVE_PAYLOAD, 165);
+  EXPECT_EQ(MALIVE_AT_SEALED + MALIVE_SEALED + MALIVE_TAG_LEN, 101);
+  EXPECT_EQ(MALIVE_AT_SIG + MCC3_SIG_LEN, MALIVE_PAYLOAD);
+  EXPECT_EQ(MALIVE_SIGNED, 100);
   EXPECT_EQ(MALIVE_AAD_LEN, 45);
+  // It fits an ANON_REQ with the room the mesh gives a payload.
+  EXPECT_LE(MALIVE_PAYLOAD, 184);   // MAX_PACKET_PAYLOAD
   // The longest version and name fill the sealed part exactly.
   EXPECT_EQ(15 + 1 + MALIVE_MAX_VERSION + 1 + MALIVE_MAX_NAME, MALIVE_SEALED);
   EXPECT_EQ(MALIVE_ANNOUNCES[1].battery_mv, 0);
@@ -180,17 +205,18 @@ TEST(MeshAlive, TheSealedPartHoldsTheBatteryAfterTheFlags) {
 
 TEST(MeshAlive, EveryRefusalGivesItsOutcome) {
   std::vector<uint8_t> key = derive(OWNER, NODE.pub, MALIVE_LABEL, NODE.pub);
-  ASSERT_GE(sizeof(MALIVE_REFUSALS) / sizeof(MALIVE_REFUSALS[0]), 8u);
+  ASSERT_GE(sizeof(MALIVE_REFUSALS) / sizeof(MALIVE_REFUSALS[0]), 12u);
   for (const MAliveVecRefusal& v : MALIVE_REFUSALS) {
     SCOPED_TRACE(v.name);
     std::vector<uint8_t> p = unhex(v.input);
     std::string outcome = "opens";
     MeshAliveOpened o;
     if (!meshAliveIsAnnounce(p.data(), p.size())) outcome = "not-announce";
+    else if (!meshAliveSignatureOk(p.data(), verifyNamed, (void*)(p.data() + 1))) outcome = "bad-signature";
     else if (!meshAliveForOwner(p.data(), OWNER.pub)) outcome = "other-owner";
-    else if (!meshAliveOpen(key.data(), OWNER.pub, p.data(), p.size(), &o)) outcome = "does-not-open";
+    else if (!open(key.data(), p.data(), p.size(), &o)) outcome = "does-not-open";
     EXPECT_EQ(outcome, v.outcome);
-    EXPECT_FALSE(meshAliveOpen(key.data(), OWNER.pub, p.data(), p.size(), &o));
+    EXPECT_FALSE(open(key.data(), p.data(), p.size(), &o));
   }
 }
 
@@ -198,15 +224,23 @@ TEST(MeshAlive, EveryBitOfAnAnnounceIsGuarded) {
   std::vector<uint8_t> key = derive(OWNER, NODE.pub, MALIVE_LABEL, NODE.pub);
   std::vector<uint8_t> good = unhex(MALIVE_ANNOUNCES[0].payload);
   MeshAliveOpened o;
-  ASSERT_TRUE(meshAliveOpen(key.data(), OWNER.pub, good.data(), good.size(), &o));
+  ASSERT_TRUE(open(key.data(), good.data(), good.size(), &o));
   for (size_t bit = 0; bit < good.size() * 8; bit++) {
     std::vector<uint8_t> p = good;
     p[bit / 8] ^= (uint8_t)(1 << (bit % 8));
-    EXPECT_FALSE(meshAliveOpen(key.data(), OWNER.pub, p.data(), p.size(), &o)) << "bit " << bit;
+    EXPECT_FALSE(open(key.data(), p.data(), p.size(), &o)) << "bit " << bit;
+    // The signature alone guards every byte from the node's key on, the seal not needed.
+    if (bit >= 8) EXPECT_FALSE(meshAliveSignatureOk(p.data(), verifyNamed, (void*)(p.data() + 1))) << "bit " << bit;
   }
   // Another node's key opens nothing, and nor does the owner's key for another node.
   std::vector<uint8_t> other = derive(OWNER, CATCHER.pub, MALIVE_LABEL, CATCHER.pub);
-  EXPECT_FALSE(meshAliveOpen(other.data(), OWNER.pub, good.data(), good.size(), &o));
+  EXPECT_FALSE(open(other.data(), good.data(), good.size(), &o));
+  // Signed by another identity than the one it names.
+  std::vector<uint8_t> forged = good;
+  uint8_t msg[9 + MALIVE_SIGNED];
+  signAs((void*)&CATCHER, forged.data() + MALIVE_AT_SIG, msg, meshAliveSignedBytes(forged.data(), msg));
+  EXPECT_FALSE(meshAliveSignatureOk(forged.data(), verifyNamed, (void*)(forged.data() + 1)));
+  EXPECT_TRUE(meshAliveSignatureOk(forged.data(), verifyNamed, (void*)CATCHER.pub));
   EXPECT_FALSE(meshAliveIsAnnounce(NULL, MALIVE_PAYLOAD));
 }
 
@@ -302,7 +336,7 @@ TEST(MeshAliveTable, KeepsTheNewestOfANode) {
   EXPECT_EQ(t.entry[0].snr, -8);
   EXPECT_EQ(t.entry[0].hops, 3);
   EXPECT_EQ(t.entry[0].advert_heard_at, 0u);
-  EXPECT_EQ(hex(t.entry[0].kept, MALIVE_KEPT), hex(announceOf(1, 5, 1).data() + 33, 68));
+  EXPECT_EQ(hex(t.entry[0].kept, MALIVE_KEPT), hex(announceOf(1, 5, 1).data() + 33, MALIVE_KEPT));
 
   // The same again, by another path or replayed, and anything older: dropped, nothing moves.
   slot = -1;
@@ -378,8 +412,8 @@ TEST(MeshAliveTable, AFullTableDropsTheNodeHeardLongestAgo) {
   int slot = -1;
   EXPECT_EQ(take(&t, announceOf(100, 1, 1), now, &slot), MALIVE_ADDED);
   EXPECT_EQ(slot, 1);
-  EXPECT_EQ(t.entry[1].node_key[0], 100);
-  EXPECT_EQ(t.entry[0].node_key[0], 1);
+  EXPECT_EQ(t.entry[1].node_key[0], keyByteOf(100));
+  EXPECT_EQ(t.entry[0].node_key[0], keyByteOf(1));
   // Nothing of the entry that left stays behind in its slot.
   EXPECT_EQ(meshAliveEntrySequence(&t.entry[1]), 1u);
   EXPECT_EQ(t.entry[1].advert_heard_at, 0u);
@@ -440,7 +474,7 @@ TEST(MeshAliveHeard, EveryPublishIsRebuiltByteForByteAndOpened) {
     const Ident& node = identOf(*heard);
     std::vector<uint8_t> malive = derive(OWNER, node.pub, MALIVE_LABEL, node.pub);
     MeshAliveOpened o;
-    ASSERT_TRUE(meshAliveOpen(malive.data(), OWNER.pub, announce, sizeof(announce), &o));
+    ASSERT_TRUE(open(malive.data(), announce, sizeof(announce), &o));
     EXPECT_STREQ(o.name, heard->opened_name);
     EXPECT_EQ(o.battery_mv, heard->battery_mv);
   }
@@ -472,10 +506,10 @@ TEST(MeshAliveHeard, OnlyTheOwnerOpensIt) {
 }
 
 TEST(MeshAliveHeard, TheSizesAndTheSlots) {
-  EXPECT_EQ(MALIVE_KEPT, 68);
-  EXPECT_EQ(MALIVE_HEARD_PLAIN, 112);
-  EXPECT_EQ(MALIVE_HEARD_SIZE, 141);
-  EXPECT_EQ((int)MALIVE_HEARD_B64, 188);
+  EXPECT_EQ(MALIVE_KEPT, 132);
+  EXPECT_EQ(MALIVE_HEARD_PLAIN, 176);
+  EXPECT_EQ(MALIVE_HEARD_SIZE, 205);
+  EXPECT_EQ((int)MALIVE_HEARD_B64, 274);
   EXPECT_EQ(MALIVE_TABLE, 16);
 
   char topic[MQTTCTRL_MAX_TOPIC + 1];

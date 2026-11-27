@@ -16,7 +16,7 @@
 // and an Observer node of the same owner that hears it publishes it to the command server
 // (docs/mqtt-control.md, "Announcing"). An alive message cannot do it: such a node has no MQTT.
 //
-// It is an ANON_REQ flooded inside a region, 101 bytes of payload, which every repeater that
+// It is an ANON_REQ flooded inside a region, 165 bytes of payload, which every repeater that
 // holds the region forwards without reading:
 //
 //   0    1   the first byte of the node's key, where ANON_REQ has its destination hash
@@ -29,19 +29,21 @@
 //            uptime, clock, last command counter, flags, battery (mV, 0 for none),
 //            version (length, at most 14), name (length, at most 16), zeros
 //   93   8   the seal's tag, its first 8 bytes
+//  101  64   Ed25519 by the node's identity over "mcc3/ann|" | bytes 1..100
 //
 //   K_malive  HKDF-SHA256(S, salt empty, "mcc3/malive/" + KEY)   S and KEY as MqttControlV3.h
 //   K_heard   HKDF-SHA256(S, salt empty, "mcc3/heard/"  + KEY)   the catching node's S and KEY
 //
 // The nonce is a counter, so K_malive seals nothing else and (boot, sequence) never repeats.
-// The owner tag lets a catching node keep the announces made for its own command key without
-// being able to open one. Anyone who knows that key can make a tag: the tag sorts, it proves
-// nothing, and only the owner, who opens the seal, knows an announce is real.
+// The signature lets anyone check that the node made the announce, the catching node first of
+// all; who owns the node stays hidden, since the owner tag and the seal need the owner's key.
+// The owner tag lets the owner's tool find its own nodes with one hash each, and anyone who
+// knows the owner's public key can make one: the tag sorts, it proves nothing.
 //
 // Nothing here draws randomness, reads a clock or touches the node's state.
 
 #define MALIVE_KIND            0x4D
-#define MALIVE_PAYLOAD         101
+#define MALIVE_PAYLOAD         165
 #define MALIVE_AT_KIND         33
 #define MALIVE_AT_OWNER_TAG    34
 #define MALIVE_AT_BOOT         38
@@ -49,6 +51,9 @@
 #define MALIVE_AT_SEALED       46
 #define MALIVE_SEALED          47
 #define MALIVE_TAG_LEN         8
+#define MALIVE_AT_SIG          (MALIVE_AT_SEALED + MALIVE_SEALED + MALIVE_TAG_LEN)
+#define MALIVE_SIGNED          (MALIVE_AT_SIG - 1)
+#define MALIVE_SIG_LABEL       "mcc3/ann|"
 #define MALIVE_AAD_LEN         (MALIVE_AT_SEALED - 1)
 #define MALIVE_MAX_VERSION     14
 #define MALIVE_MAX_NAME        16
@@ -57,6 +62,9 @@
 // The transport codes a scoped flood adds to the packet, which Packet::getRawLength counts
 // only once the route is set.
 #define MALIVE_TRANSPORT_BYTES 4
+
+// The node's identity signs; anyone may verify (Mcc3Verifier, with the node's key).
+typedef void (*MeshAliveSigner)(void* ctx, uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len);
 
 struct MeshAlive {
   uint32_t boot;            // persisted, +1 every boot
@@ -107,11 +115,18 @@ static inline void meshAliveNonce(uint32_t boot, uint32_t sequence, uint8_t nonc
   mqttCtrlMeshPutU32(nonce + 8, sequence);
 }
 
-// The node's side: the 101 bytes of an ANON_REQ payload. The strings are cut on a character
+// What the node's identity signs: the label, then bytes 1..100 of the announce.
+static inline size_t meshAliveSignedBytes(const uint8_t* payload, uint8_t out[9 + MALIVE_SIGNED]) {
+  memcpy(out, MALIVE_SIG_LABEL, 9);
+  memcpy(out + 9, payload + 1, MALIVE_SIGNED);
+  return 9 + MALIVE_SIGNED;
+}
+
+// The node's side: the 165 bytes of an ANON_REQ payload. The strings are cut on a character
 // boundary.
 static inline void meshAliveBuild(const uint8_t key[MCC3_KEY_LEN], const uint8_t command_key[32],
-                                  const uint8_t node_key[32], const MeshAlive* a,
-                                  uint8_t out[MALIVE_PAYLOAD]) {
+                                  const uint8_t node_key[32], const MeshAlive* a, MeshAliveSigner sign,
+                                  void* sign_ctx, uint8_t out[MALIVE_PAYLOAD]) {
   memset(out, 0, MALIVE_PAYLOAD);
   out[0] = node_key[0];
   memcpy(out + 1, node_key, 32);
@@ -139,11 +154,20 @@ static inline void meshAliveBuild(const uint8_t key[MCC3_KEY_LEN], const uint8_t
   c.encrypt(p, p, MALIVE_SEALED);
   c.computeTag(out + MALIVE_AT_SEALED + MALIVE_SEALED, MALIVE_TAG_LEN);
   c.clear();
+  uint8_t msg[9 + MALIVE_SIGNED];
+  sign(sign_ctx, out + MALIVE_AT_SIG, msg, meshAliveSignedBytes(out, msg));
 }
 
 // What a catching node tests before anything else: the size and the kind byte.
 static inline bool meshAliveIsAnnounce(const uint8_t* payload, size_t len) {
   return payload != NULL && len == MALIVE_PAYLOAD && payload[MALIVE_AT_KIND] == MALIVE_KIND;
+}
+
+// Then the signature, by the key the announce names. `verify` is called with that key's
+// bytes as they are in the payload.
+static inline bool meshAliveSignatureOk(const uint8_t* payload, Mcc3Verifier verify, void* ctx) {
+  uint8_t msg[9 + MALIVE_SIGNED];
+  return verify(ctx, payload + MALIVE_AT_SIG, msg, meshAliveSignedBytes(payload, msg));
 }
 
 // Whether an announce carries the tag of this command key.
@@ -154,13 +178,14 @@ static inline bool meshAliveForOwner(const uint8_t* payload, const uint8_t comma
   return memcmp(tag, payload + MALIVE_AT_OWNER_TAG, 4) == 0;
 }
 
-// The owner's side, for the host suite and the vectors: false for what is no announce, has
-// another owner's tag, does not open under this node's K_malive, or names a string longer
-// than its field.
+// The owner's side, for the host suite and the vectors: false for what is no announce, is
+// not signed by the node it names, has another owner's tag, does not open under this node's
+// K_malive, or names a string longer than its field.
 static inline bool meshAliveOpen(const uint8_t key[MCC3_KEY_LEN], const uint8_t command_key[32],
-                                 const uint8_t* payload, size_t len, MeshAliveOpened* out) {
+                                 const uint8_t* payload, size_t len, Mcc3Verifier verify, void* verify_ctx,
+                                 MeshAliveOpened* out) {
   if (!meshAliveIsAnnounce(payload, len) || payload[0] != payload[1]
-      || !meshAliveForOwner(payload, command_key)) {
+      || !meshAliveSignatureOk(payload, verify, verify_ctx) || !meshAliveForOwner(payload, command_key)) {
     return false;
   }
   const uint32_t boot = mqttCtrlMeshU32(payload + MALIVE_AT_BOOT);
@@ -199,8 +224,8 @@ static inline bool meshAliveOpen(const uint8_t key[MCC3_KEY_LEN], const uint8_t 
 //
 // 5 to 60 s after the node is ready to (it has started, or was given its command key, its
 // `cmd on` or a region since), then every 23 hours with a tenth either way, so that nodes
-// started together drift apart. A fixed number: at SF8 and 62.5 kHz an announce is about a
-// second on the air for the node and for every repeater that forwards it. millis(), and its
+// started together drift apart. A fixed number: at SF8 and 62.5 kHz an announce is about
+// 1.6 s on the air for the node and for every repeater that forwards it. millis(), and its
 // wrap.
 #define MALIVE_SOON_MIN_MS     5000UL
 #define MALIVE_SOON_MAX_MS     60000UL
@@ -250,8 +275,8 @@ static inline void meshAliveSent(MeshAliveClock* c, uint32_t now_ms, uint32_t rn
 // key: the table is small, a new node key is admitted four times an hour, and what a forger
 // fills it with the owner's tool drops, since it does not open.
 //
-// Kept of an announce: everything after the node's key, 68 bytes, the tag with it, so that
-// the owner can open what is published.
+// Kept of an announce: everything after the node's key, the tag and the signature with it,
+// so that the owner can check and open what is published.
 #define MALIVE_KEPT            (MALIVE_PAYLOAD - MALIVE_AT_KIND)
 #define MALIVE_TABLE           16
 #define MALIVE_NEW_MAX         4
