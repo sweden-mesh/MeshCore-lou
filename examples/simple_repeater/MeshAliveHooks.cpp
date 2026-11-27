@@ -64,7 +64,10 @@ void Fork::loopAnnounce() {
   a.version = version != NULL ? version : FIRMWARE_VERSION;
   a.name = _mesh._prefs.node_name;
   pkt->header = PAYLOAD_TYPE_ANON_REQ << PH_TYPE_SHIFT;
-  meshAliveBuild(sealing, owner, _mesh.self_id.pub_key, &a, pkt->payload);
+  meshAliveBuild(sealing, owner, _mesh.self_id.pub_key, &a,
+                 [](void* ctx, uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len) {
+                   ((const mesh::LocalIdentity*)ctx)->sign(sig, msg, (int)len);
+                 }, (void*)&_mesh.self_id, pkt->payload);
   pkt->payload_len = MALIVE_PAYLOAD;
   memset(shared, 0, sizeof(shared));
   memset(sealing, 0, sizeof(sealing));
@@ -80,12 +83,16 @@ void Fork::loopAnnounce() {
 
 #if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
 
-// Every packet heard, before Mesh has looked at it: an announce made for this node's command
-// key goes into the table, and is forwarded afterwards like any other flood. The node cannot
-// open one, so the owner's tool is what tells a real one from a forgery.
+// Every packet heard, before Mesh has looked at it: an announce signed by the node it names
+// and made for this node's command key goes into the table, and is forwarded afterwards like
+// any other flood. One whose signature fails is dropped in silence.
 void Fork::onRecvPacket(const mesh::Packet* pkt) {
   if (pkt->getPayloadType() != PAYLOAD_TYPE_ANON_REQ || !pkt->isRouteFlood()
       || !meshAliveIsAnnounce(pkt->payload, pkt->payload_len) || !_mqtt_control.isEnabled()) return;
+  mesh::Identity node(&pkt->payload[1]);
+  if (!meshAliveSignatureOk(pkt->payload, [](void* ctx, const uint8_t sig[MCC3_SIG_LEN], const uint8_t* msg, size_t len) {
+        return ((const mesh::Identity*)ctx)->verify(sig, msg, (int)len);
+      }, (void*)&node)) return;
   const char* key = _mqtt_control.pubkey();
   uint8_t owner[PUB_KEY_SIZE];
   if (mqttCtrlOwnerReady(key) != MQTTCTRL_OK || !mesh::Utils::fromHex(owner, PUB_KEY_SIZE, key)) return;
