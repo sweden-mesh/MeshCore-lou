@@ -23,6 +23,7 @@ src/helpers/ForkText.h
 src/helpers/LoginThrottle.h
 src/helpers/MQTTSlotAuth.h
 src/helpers/MeshAliveLogic.h
+src/helpers/MeshReportLogic.h
 src/helpers/MqttControlLogic.h
 src/helpers/MqttControlV3.h
 src/helpers/SensorReadout.h
@@ -51,6 +52,7 @@ test/test_base64url/test_base64url.cpp
 test/test_mqtt_v3/test_mqtt_v3.cpp
 test/test_mqtt_v3/mcc3_vectors.h
 test/test_mqtt_v3/test_mesh_alive.cpp
+test/test_mqtt_v3/test_mesh_report.cpp
 test/test_mqtt_v3/malive_vectors.h
 test/test_ota_auto/test_ota_auto.cpp
 test/test_ota_verify/test_ota_verify.cpp

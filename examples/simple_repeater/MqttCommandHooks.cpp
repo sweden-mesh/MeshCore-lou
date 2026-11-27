@@ -302,6 +302,7 @@ void Fork::loopMqttControl() {
     loopSeen();
   }
   loopRelay();
+  loopAcks();
   const uint32_t dropped = _mqtt_control.dropped();
   if (dropped != _ctrl_dropped_seen) {
     debugLine("mqtt: %u arrival(s) dropped, the queue was full (%u since boot)",

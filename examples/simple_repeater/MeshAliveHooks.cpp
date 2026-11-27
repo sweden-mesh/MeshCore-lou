@@ -110,6 +110,44 @@ void Fork::onRecvPacket(const mesh::Packet* pkt) {
   takeAnnounce(pkt->payload, (int8_t)(pkt->getSNR() * 4), pkt->getPathHashCount(), MALIVE_VIA_FLOOD);
 }
 
+// A zero-hop report: its announce goes to the server as a flood's does, and the node is
+// acked by whoever is named, else by whoever heard it, unless another's ack is heard first.
+// Another node's ack only cancels this node's. Acked whether or not the announce was a copy:
+// a node that tries again did not hear the first ack.
+bool Fork::onControlData(mesh::Packet* pkt) {
+  if (mreportIsAck(pkt->payload, pkt->payload_len)) {
+    mreportAckHeard(&_acks, &pkt->payload[5]);
+    return true;
+  }
+  uint8_t announce[MALIVE_PAYLOAD];
+  if (!mreportStateAnnounce(pkt->payload, pkt->payload_len, announce)) return false;
+  if (!_mqtt_control.isEnabled()
+      || !takeAnnounce(announce, (int8_t)(pkt->getSNR() * 4), 0, MALIVE_VIA_ZERO_HOP)) return true;
+  const int named = mreportStateNamed(pkt->payload, _mesh.self_id.pub_key);
+  mreportPlanAck(&_acks, MREPORT_ACK_ZERO_HOP, &announce[1], mreportId(announce), 0, NULL, millis(),
+                 mreportStateAckDelay(named, _mesh.getRNG()->nextInt(0, 0x7FFFFFFF)));
+  return true;
+}
+
+// An ack goes when it is due, counted with the node's answers over the mesh; one the budget
+// has no room for is not sent at all, since a late ack is no ack.
+void Fork::loopAcks() {
+  MreportAckPlan* p = mreportAckDue(&_acks, millis());
+  if (p == NULL) return;
+  p->pending = false;
+  const uint32_t now = _mesh.getRTCClock()->getCurrentTime();
+  if (!_mqtt_control.meshAirAllows(now)) return;
+  uint8_t data[MREPORT_ACK_SIZE];
+  mreportBuildAck(p->node_key, p->report, _mesh.self_id.pub_key, data);
+  mesh::Packet* pkt = _mesh.createControlData(data, sizeof(data));
+  if (pkt == NULL) return;
+  const uint32_t air_ms = _mesh._radio->getEstAirtimeFor(pkt->getRawLength());
+  _mqtt_control.meshAnswered(now, air_ms);
+  _mesh.sendZeroHop(pkt);
+  debugLine("report: %02X%02X%02X%02X acked, %u ms on the air", p->node_key[0], p->node_key[1], p->node_key[2],
+            p->node_key[3], (unsigned)air_ms);
+}
+
 // One publish at a time, a gap between them, not retained: the server keeps what it needs.
 void Fork::loopSeen() {
   const uint8_t* item = meshAliveSeenFront(&_seen);
