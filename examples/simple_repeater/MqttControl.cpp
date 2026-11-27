@@ -62,12 +62,11 @@ MqttControl::MqttControl()
 void MqttControl::begin(FILESYSTEM* fs) {
   _fs = fs;
   load();
-#ifdef WITH_MQTT_BRIDGE
-  // Alive messages are ordered by (boot, sequence), so the boot counter moves before any
-  // can go out; a message from an earlier boot then reads as older whatever its sequence.
+  // Alive messages and announces are ordered by (boot, sequence), so the boot counter moves
+  // before any can go out; one from an earlier boot then reads as older whatever its
+  // sequence. An announce's nonce is the pair, so it must never come twice.
   _boot++;
   save();
-#endif
 }
 
 void MqttControl::load() {

@@ -917,6 +917,11 @@ public:
     if (topic == NULL || topic[0] == 0 || payload == NULL || len == 0) return false;
     return publishToSlot(_control_slot, topic, payload, len, true, qos);
   }
+  // Empties a retained message the plane keeps on its slot, as the will does for alive.
+  bool clearControlRetained(const char* topic, uint8_t qos) {
+    if (topic == NULL || topic[0] == 0) return false;
+    return publishToSlot(_control_slot, topic, "", 0, true, qos);
+  }
   void setControlWill(const char* topic) { _control_will = topic; }
 
   // The control slot: connected, what the broker has said about its subscriptions

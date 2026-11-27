@@ -65,7 +65,7 @@ class MqttControl {
   // rolls back to one of those releases still finds what it wrote.
   uint8_t _ota_legacy[2];
   uint16_t _alive_minutes;    // 0 = the default
-  uint32_t _boot;             // boots of an image with the uplink, persisted
+  uint32_t _boot;             // boots of an image with the command plane, persisted
   // mcc3 (IATA-2): the node's three keys with its command key, derived once per key and
   // kept in RAM only, on every image -- the mesh road needs them too.
   Mcc3Keys _mcc3;
@@ -115,6 +115,8 @@ public:
   uint8_t meshMode() const { return _mesh_mode; }
   // An answer went out over the mesh: `air_ms` is the radio's estimate for its packet.
   void meshAnswered(uint32_t now, uint32_t air_ms) { _mesh_answers.spend(now, air_ms); }
+  // Whether that budget has room: an announce is counted in it as an answer is.
+  bool meshAirAllows(uint32_t now) { return _mesh_answers.allows(now); }
   void setMeshMode(uint8_t mode) { _mesh_mode = mode; save(); }
   uint8_t relayMode() const { return _relay_mode; }
   void setRelayMode(uint8_t mode) { _relay_mode = mode; save(); }

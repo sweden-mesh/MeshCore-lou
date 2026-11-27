@@ -23,3 +23,5 @@ jobs:
           bash scripts/fork-check.sh origin/fork/observer origin/fork/core
       - name: The mcc3 vectors are mccontrol-spec's, and the suite's header is made from them
         run: python3 scripts/mcc3-vectors.py --check
+      - name: The announce's vectors and the suite's header made from them are current
+        run: python3 scripts/malive-vectors.py --check

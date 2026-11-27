@@ -676,6 +676,7 @@ mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
   } else {
     recv_pkt_region = NULL;
   }
+  fork.onRecvPacket(pkt);
   return Mesh::onRecvPacket(pkt);
 }
 

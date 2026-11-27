@@ -55,6 +55,9 @@ void Fork::loop() {
 #endif
   otaLoop();
 #endif
+#ifdef FORK_ANNOUNCE
+  loopAnnounce();
+#endif
 }
 
 #if defined(WITH_AUTO_REPLY) || defined(WITH_MQTT_COMMAND)

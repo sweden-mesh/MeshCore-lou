@@ -15,6 +15,12 @@
     #include <helpers/bridges/MQTTBridge.h>
   #endif
   #include "MqttControl.h"
+  #include <helpers/MeshAliveLogic.h>
+  // An image without Wi-Fi announces itself to its owner over the mesh (MeshAliveHooks.cpp).
+  // NO_FORK_ANNOUNCE leaves it out of a board whose flash it does not fit.
+  #if !defined(WITH_MQTT_BRIDGE) && !defined(NO_FORK_ANNOUNCE)
+    #define FORK_ANNOUNCE 1
+  #endif
 #endif
 
 class MyMesh;
@@ -117,6 +123,15 @@ class Fork {
                          uint32_t tag, uint32_t counter, MqttCtrlResult result, const char* reply,
                          bool zero_hop);
 #endif
+#ifdef FORK_ANNOUNCE
+  MeshAliveClock _announce = {};
+  uint32_t _announce_sequence = 0;
+  char _announce_key_for[PUB_KEY_SIZE * 2 + 1] = {0};
+
+  bool announceRegion();
+  bool announceScope(TransportKey* scope);
+  void loopAnnounce();
+#endif
 #if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
   // Owned here so the bridge's subscription list outlives every reconnect: mcc/cmd/<key>.
   char _mcc3_topic[MQTTCTRL_MAX_TOPIC + 1] = {0};
@@ -152,6 +167,15 @@ class Fork {
     unsigned long since;                     // millis() the request went out
   } _relay_wait;
 
+  // The announces heard for this node's owner (MeshAliveHooks.cpp), in RAM, and the slots
+  // whose retained message is behind the table.
+  MeshAliveTable _heard;
+  uint16_t _heard_dirty = 0;
+  bool _heard_published = false;
+  uint32_t _heard_published_ms = 0;
+  char _heard_key_for[PUB_KEY_SIZE * 2 + 1] = {0};
+
+  void loopHeard();
   void relayForward();
   bool sendRelayRequest(const Mcc3Forward& fwd, uint32_t* air_ms);
   bool isRelayPeer(const uint8_t* hash);
@@ -233,6 +257,13 @@ public:
   bool onPeerPath(mesh::Packet*, int, const uint8_t*, uint8_t, uint8_t, const uint8_t*, uint8_t, bool*) {
     return false;
   }
+#endif
+
+  // Every packet heard, before Mesh reads it (Mesh::onRecvPacket). Nothing is taken from it.
+#if defined(WITH_MQTT_COMMAND) && defined(WITH_MQTT_BRIDGE)
+  void onRecvPacket(const mesh::Packet* pkt);
+#else
+  void onRecvPacket(const mesh::Packet*) { }
 #endif
 
   // An anonymous request, before upstream reads it as a login or a query. Returns true
