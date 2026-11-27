@@ -252,8 +252,8 @@ accepted, is gone ([Upgrading to lou-21](#upgrading-to-lou-21)).
   version, `region home` and name. It is the owner's only way to find its nodes; anyone else
   learns that the node is on the plane and nothing more. None without a command key.
   `set alive.interval <5-1440>` (minutes, default 15), `get alive.interval`; admitted over the
-  plane. A mesh-only image has no MQTT and sends no alive message: its owner adds it to the
-  tools by its public key. Bit 0 of the message's flags is reserved and never set: lou-20 set
+  plane. A mesh-only image has no MQTT and sends no alive message: from lou-21 it announces
+  itself over the mesh instead (see "Announcing" below). Bit 0 of the message's flags is reserved and never set: lou-20 set
   it while it still subscribed to the old topic.
 
 ## Topics
@@ -262,6 +262,7 @@ accepted, is gone ([Upgrading to lou-21](#upgrading-to-lou-21)).
 mcc/cmd/{NODE}      commands and forwards to this node, and the broker's pong; the only topic it subscribes to
 mcc/r/{RID}         results, on the reply id the sealed command names (random per mccontrol session)
 mcc/alive/{NODE}    the node's alive message, retained; the slot's will empties it
+mcc/heard/{NODE}/{slot}   an announce this node caught for its owner, retained; slot 0-15 (lou-21)
 mcc/ping/{NODE}     `cmd ping`; the broker answers `pong|<nonce>` on mcc/cmd/{NODE}
 ```
 
@@ -691,6 +692,86 @@ answers directly to the sender, however the request arrived. mccontrol sets it o
 relay hears the target directly and sends with no hops, so the whole exchange is two
 transmissions. If the link works one way only, the answer is lost although the command ran.
 Any other flag bit is still refused.
+
+## Announcing: a node without Wi-Fi finds its owner (lou-21)
+
+An image without Wi-Fi has no MQTT and so no alive message. Up to lou-20 its owner had to copy
+its 64-character key into the tools by hand. From lou-21 the node says that it exists, over the
+mesh, and an Observer node of the same owner that hears it tells the command server.
+
+**What is sent.** One `ANON_REQ` packet with 101 bytes of payload, flooded inside one region:
+
+| offset | size | field |
+|---|---|---|
+| 0 | 1 | the first byte of the node's key (where `ANON_REQ` has its destination hash) |
+| 1 | 32 | the node's key (where `ANON_REQ` has its sender) |
+| 33 | 1 | kind `0x4D` |
+| 34 | 4 | owner tag: `SHA-256("mcc3/own|" + command key + node key + boot + sequence)`, first 4 bytes |
+| 38 | 4 | boot counter |
+| 42 | 4 | sequence since boot, from 1 |
+| 46 | 47 | sealed: uptime (4), clock (4, 0 while unset), last command counter (4), flags (1, the alive message's), battery in millivolts (2, 0 when the board cannot read it), version (length byte, at most 14), name (length byte, at most 16, cut), zeros |
+| 93 | 8 | the seal's tag, its first 8 bytes |
+
+Integers are little-endian. The seal is ChaCha20-Poly1305 under a key of its own, HKDF info
+`mcc3/malive/` + the node's key, from the same `S`; the nonce is four zero bytes, the boot
+counter and the sequence; bytes 1 to 45 are the associated data. Repeaters, stock MeshCore
+among them, forward it as they forward any `ANON_REQ` flood in a region they hold: they do not
+read it. Its size and its rhythm show in the public packet feed; what it says does not.
+
+The owner tag lets an Observer node keep the announces made for its own command key. It
+changes with every node and every announce. Somebody who knows the owner's public command key
+can make a tag, so the tag proves nothing: only the owner, who opens the seal, knows that an
+announce is real.
+
+**Who sends it, and when.** An `rc` or `arrc` image without the Observer bridge, with a command
+key, `set cmd on`, and a region: `region home`, else `region default`. With neither it does
+not announce, since an unscoped flood would cross every county, and `get cmd` ends in
+`no announce: set region home or region default`. It is sent 5 to 60 s after the node starts,
+after `set cmd.pubkey` and after `set cmd on`, and then every 23 hours with a tenth either way.
+The interval is fixed. An Observer image never sends one: it has its alive message.
+
+**What it costs.** At SF8, 62.5 kHz, CR 4:8 the packet is about 1 s on the air, for the node
+and once for each repeater that forwards it: with 100 such nodes in a county a forwarding
+repeater spends about 104 s a day on them, 0.12 % of its day. The node counts it in the airtime
+budget of its answers over the mesh; when that is spent the announce waits, tried again each
+minute.
+`set cmd.debug on` prints `mcc: announce: 7.1 sent, 1012 ms on the air` (boot and sequence).
+
+**What an Observer node does with it.** An Observer `rc` or `arrc` image with a command key and
+`set cmd on` looks at every flooded `ANON_REQ` of exactly this size and kind before it forwards
+it, and keeps those whose owner tag is its own key's, in a table of 16 nodes in RAM: per node
+the newest boot and sequence, when it was heard, its SNR and its hops. A copy by another path,
+or an older one, is dropped. A full table drops the node heard longest ago. At most 4 node keys
+new to the table are admitted in an hour. The packet is forwarded like any other, and nothing
+reaches the console.
+
+Each entry is published retained on `mcc/heard/{NODE}/{slot}`, `{NODE}` the Observer node's
+own key and the slot 0 to 15, sealed to the owner as the alive message is: kind `0x48`, a
+random nonce, then under HKDF info `mcc3/heard/` + the Observer node's key the announced
+node's key (32), the announce from its kind byte to its tag (68), when it was heard by the
+Observer node's clock (4, 0 while unset), SNR in quarter-dB (1), hops (1), and the same three
+for the node's last advert, which lou-21 leaves zero. 141 bytes, 188 characters. An entry is
+published when its announce is new, one publish in 90 s at most. A changed command key empties
+the table and all 16 slots. The node's will does not empty them, and nor does a restart: what
+was heard stays true. The command server sees how many announces a node has caught and not
+whose.
+
+The owner's tool reads the slots of its Observer nodes, opens each with the owner's key, and
+then opens the announce inside with the announced node's key. One that does not open is
+dropped, so a forged announce can take a slot in a table but never shows as a node.
+`set cmd.debug on` prints `mcc: heard: an announce of 4FD099CC, 7.1, 2 hop(s), slot 0, new` and
+`mcc: heard: slot 0 published`.
+
+The pieces are `src/helpers/MeshAliveLogic.h` and `test/test_mqtt_v3/test_mesh_alive.cpp`; the
+vectors both tools share are `test/data/malive-vectors.json`, made by
+`scripts/malive-vectors.py`.
+
+- A lou-20 Observer node catches nothing, and a lou-20 node without Wi-Fi never announces: it
+  is added by its key, as before.
+- Where few repeaters hold the region the announce reaches fewer Observer nodes, or none; the
+  node is then added by its key.
+- A command server that does not know `mcc/heard` yet refuses the publish, and nothing else
+  changes.
 
 ## What is not defended
 

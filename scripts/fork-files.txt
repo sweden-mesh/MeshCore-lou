@@ -11,6 +11,7 @@ examples/simple_repeater/AutoReplyHooks.cpp
 examples/simple_repeater/Fork.cpp
 examples/simple_repeater/Fork.h
 examples/simple_repeater/ForkOta.cpp
+examples/simple_repeater/MeshAliveHooks.cpp
 examples/simple_repeater/MqttCommandHooks.cpp
 examples/simple_repeater/MqttRelayHooks.cpp
 examples/simple_repeater/MqttControl.cpp
@@ -21,6 +22,7 @@ src/helpers/ForkArrival.h
 src/helpers/ForkText.h
 src/helpers/LoginThrottle.h
 src/helpers/MQTTSlotAuth.h
+src/helpers/MeshAliveLogic.h
 src/helpers/MqttControlLogic.h
 src/helpers/MqttControlV3.h
 src/helpers/SensorReadout.h
@@ -37,6 +39,7 @@ src/helpers/SlidingBudget.h
 test/data/command-verdicts-rc.txt
 test/data/command-verdicts.txt
 test/data/mcc3-vectors.json
+test/data/malive-vectors.json
 test/stubs/Arduino.h
 test/test_autoreply/test_autoreply.cpp
 test/test_fork_arrival/test_fork_arrival.cpp
@@ -47,6 +50,8 @@ test/test_mqtt_slot_auth/test_mqtt_slot_auth.cpp
 test/test_base64url/test_base64url.cpp
 test/test_mqtt_v3/test_mqtt_v3.cpp
 test/test_mqtt_v3/mcc3_vectors.h
+test/test_mqtt_v3/test_mesh_alive.cpp
+test/test_mqtt_v3/malive_vectors.h
 test/test_ota_auto/test_ota_auto.cpp
 test/test_ota_verify/test_ota_verify.cpp
 .github/workflows/fork-files.yml
@@ -54,6 +59,7 @@ scripts/fork-check.sh
 scripts/fork-files.txt
 scripts/fork-sync.sh
 scripts/mcc3-vectors.py
+scripts/malive-vectors.py
 scripts/boards-core.txt
 scripts/build-matrix.sh
 scripts/check-build-matrix.sh

@@ -236,6 +236,12 @@ void Fork::describeMqttControl(char* reply) {
           (unsigned)_mqtt_control.counter());
   size_t used = strlen(reply);
   mqttCtrlMeshNote(MQTTCTRL_MESH_ON, _mesh_ok, _mesh_refused, &reply[used], MQTTCTRL_MAX_REPLY - used);
+#ifdef FORK_ANNOUNCE
+  if (!announceRegion()) {
+    used = strlen(reply);
+    snprintf(&reply[used], MQTTCTRL_MAX_REPLY - used, ", no announce: set region home or region default");
+  }
+#endif
 #else
   char age[20];
   if (_ctrl_last_verified_ms == 0) {
@@ -291,7 +297,10 @@ void Fork::loopMqttControl() {
   }
   const bool up = _mesh.bridge != NULL && mqttCtrlSlotUp(_mesh.bridge->controlSlotConnected(), _ctrl_refused);
   _mesh_down_since = mqttCtrlMeshDownSince(up, _mesh_down_since, millis());
-  if (_mesh.bridge != NULL) loopAlive();
+  if (_mesh.bridge != NULL) {
+    loopAlive();
+    loopHeard();
+  }
   loopRelay();
   const uint32_t dropped = _mqtt_control.dropped();
   if (dropped != _ctrl_dropped_seen) {
