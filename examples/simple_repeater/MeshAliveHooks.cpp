@@ -176,6 +176,11 @@ void Fork::loopReport() {
   else sent = floodAnnounce(_report_announce);
   if (sent) mreportSent(&_report, now_ms, _mesh.getRNG()->nextInt(0, 0x7FFFFFFF));
   else mreportLater(&_report, now_ms);
+#ifdef RX_POWERSAVING
+  // With RX power saving on, the receiver stays awake from the report until the latest an
+  // ack to it starts (3.2 s after it ends), and gives up waiting for it to go after 10 s.
+  if (sent) radio_driver.holdContinuousRx(10000, MREPORT_DEFER_MS + MREPORT_TURNAROUND_SPAN);
+#endif
 }
 
 // The table moves on, is written when an Observer node joined or the reliable rule turned,

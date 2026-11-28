@@ -25,6 +25,10 @@ ruling 2026-11-25). In the full image each feature is off until a setting switch
 Every Observer image also carries signed pull OTA; a core image has none. Room-server and
 companion images are not built (TODO 22a rulings 14, 23).
 
+A core image also carries RX power saving, from IoTThinks' PowerSaving 18: the radio sleeps
+between short listening windows, off until `set radio.rxps` switches it on (on `fork/core`,
+`docs/rx-power-saving.md`). An Observer image does not: its Wi-Fi draws far more than the radio.
+
 An image says which combination it is in its version, which `ver` reports and every status
 publish carries: `<mcu>-v1.18.0-lou-<nn>-<features>-<hash>`, for example
 `esp32s3-v1.18.0-lou-15-arrc-1a2b3c4d` -- the image file's name; inside an Observer image

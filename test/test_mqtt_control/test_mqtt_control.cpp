@@ -920,6 +920,17 @@ TEST(Allowlist, TheTuningWritesTravelAndTheRadioOnesDoNot) {
   EXPECT_FALSE(allowed("tempradio 869.618 62.5 8 8"));
 }
 
+TEST(Allowlist, RxPowerSavingStaysOnTheConsole) {
+  // `set radio.rxps` (lou-21, PowerSaving 18's receive sleep) is a radio setting: a profile
+  // that does not fit leaves the node deaf, so `set radio` keeps it out. Reading it travels.
+  EXPECT_FALSE(allowed("set radio.rxps balanced"));
+  EXPECT_FALSE(allowed("set radio.rxps overdrive"));
+  EXPECT_FALSE(allowed("set radio.rxps level 9 preamble 32"));
+  EXPECT_FALSE(allowed("set radio.rxps 51200 89300"));
+  EXPECT_FALSE(allowed("set radio.rxps off"));
+  EXPECT_TRUE(allowed("get radio.rxps"));
+}
+
 TEST(Allowlist, ADeniedFamilyCannotBeReachedByRunningIntoAnotherWord) {
   // The deny list uses the boundary rule, so `set radio` denies `set radio.rxgain`
   // but not a setting that merely starts with the letters; and the other way, a

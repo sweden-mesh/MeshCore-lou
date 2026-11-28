@@ -854,6 +854,8 @@ about any other node is kept.
 
 - A node next to a lou-20 Observer node gets no ack and floods every 23 hours, as before.
 - A board built with `NO_FORK_LADDER` skips the ladder and floods every 23 hours.
+- A node with RX power saving on (images without Wi-Fi, `set radio.rxps`) listens without its
+  receive sleep from each try until 3.2 s after it has gone out, the latest a zero-hop ack starts.
 
 The pieces are `src/helpers/MeshAliveLogic.h`, `src/helpers/MeshReportLogic.h` and their suites
 in `test/test_mqtt_v3/`; the vectors the tools and the server share are
