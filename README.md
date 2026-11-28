@@ -42,7 +42,8 @@ What the features do:
   [upgrading to lou-21](docs/mqtt-control.md#upgrading-to-lou-21). Also from lou-20:
   - [The relay](docs/mqtt-control.md#relaying-one-nodes-mqtt-for-another-nodes-command-lou-20): an Observer node
     sends its owner's commands over the air to the owner's nodes without Wi-Fi and returns the
-    answers, one at a time, on a fixed airtime and flood budget. `set relay off|own`.
+    answers, one at a time, on a fixed airtime and flood budget. `set relay any|own|off`; from
+    lou-21 `any`, the default, serves other owners too, within caps.
   - [Over the mesh](docs/mqtt-control.md#over-the-mesh-when-wi-fi-or-the-broker-is-down-lou-19): an Observer node
     takes the same signed commands from a companion radio when its broker is down.
     `set cmd.mesh off|on|auto`.
