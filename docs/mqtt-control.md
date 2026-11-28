@@ -145,6 +145,28 @@ What changes for a node that comes from lou-20 or older:
   `clock not set: run time <epoch> or check NTP`.
 - **Four arriving messages are held; lou-20 held one.** A stranger's publish on a node's command topic
   no longer pushes the owner's command out ("Relaying", "One at a time").
+- **An Observer node relays for anyone by default.** lou-20 relayed for the holder of its own
+  command key alone (`own`, its default). lou-21's default is `any`: it also sends guest forwards
+  from other owners, within caps that leave the owner half the floods
+  ([Relaying](#relaying-one-nodes-mqtt-for-another-nodes-command-lou-20)). A node whose lou-20
+  settings hold `own` moves to `any` at the first start, because lou-20's file cannot tell an
+  `own` that was typed from the default. An owner who wants only their own forwards types
+  `set relay own` again, on the console or over the plane, and lou-21 keeps it; `set relay off`
+  stops relaying; `get relay` says which.
+- **A node without Wi-Fi announces itself, signed.** An `rc` or `arrc` image without the
+  Observer bridge, with a command key, `set cmd on` and a region home or default, sends an
+  announce 5 to 60 s after it starts and then every 12 or 23 hours, signed by the node's own
+  identity ([Announcing](#announcing-a-node-without-wi-fi-finds-its-owner-lou-21)). It tries a
+  zero-hop report to an Observer node nearby first, and reports less on a low battery
+  (`announce.low`, `announce.critical`). Nothing has to be typed beyond the region.
+- **The command server keeps the announces.** Every lou-21 Observer node with `set cmd on` hands
+  each valid announce it hears to the server on `mcc/seen/{its key}`, whoever owns the node, and
+  keeps nothing. The server keeps one entry per announced node, retained on `mcc/node/{NODE}`:
+  the newest signed announce, the first 4 Observer nodes that heard it and the first 4 that
+  heard the one before, dropped after 365 days without a newer one. mccontrol finds its owner's nodes there on unlock.
+- **No `mcc/heard`.** The per-Observer table of announces on `mcc/heard/{NODE}/{0-15}`, built
+  before lou-21 was released, is gone from the firmware and the server. A tool reads
+  `mcc/node/+` instead.
 
 For a node that comes from lou-18 or older, also:
 
@@ -163,7 +185,7 @@ For a node that comes from lou-18 or older, also:
   is one command to each.
 - **On by default after the update,** on a node with a command key: the alive message
   (`alive.interval`), the mesh road in `auto` (`cmd.mesh`) and, on an Observer image, the relay
-  for the node's own key (`set relay off` stops it). The command budget is 50 an hour, from 10.
+  (`any` from lou-21, above; `set relay off` stops it). The command budget is 50 an hour, from 10.
 - **Rolling back to lou-18 keeps the command key, the counter and the slot:** they are stored
   where lou-18 reads them. What came after (`cmd.mesh`, `relay`, `alive.interval`) lou-18
   does not read.
@@ -656,6 +678,9 @@ counter are not involved. This is the plane's second sanctioned transmit, beside
   HKDF-SHA256(X25519(relay identity, guest key), info `mcc3/gfwd/` + the relay's key), with
   the kind, the key and the nonce as associated data: 309 bytes, 412 characters. Only the holder
   of the guest key can make one or read its result, a forward result sealed under the same key.
+  mccontrol does not put the owner's command key there: it uses a guest key derived from the
+  command key's seed (HKDF, info `mcc3/guestkey/`), made again when needed and never stored, so
+  a relay cannot link a guest forward to the owner's command key or to their alive messages.
   The caps are in RAM, new each day at midnight UTC and at a restart: each guest key at most
   `set relay.guest <n>` floods a day (0 to 100, default 10; `get relay.guest`); all guests
   together at most half the day's floods (50 of 100) and only while less than half the
@@ -753,8 +778,8 @@ announce; the owner's tool tests it with one hash per announce before it opens a
 key, `set cmd on`, and a region: `region home`, else `region default`. With neither it does
 not announce, since an unscoped flood would cross every county, and `get cmd` ends in
 `no announce: set region home or region default`. It is sent 5 to 60 s after the node starts,
-after `set cmd.pubkey` and after `set cmd on`, and then every 23 hours with a tenth either way.
-The interval is fixed. An Observer image never sends one: it has its alive message.
+after `set cmd.pubkey` and after `set cmd on`, and then every 23 hours with a tenth either way,
+or 12 hours when an Observer node nearby acks it (below). The intervals are fixed. An Observer image never sends one: it has its alive message.
 
 **What it costs.** At SF8, 62.5 kHz, CR 4:8 the packet is about 1.6 s on the air, for the node
 and once for each repeater that forwards it: with 100 such nodes in a county a forwarding
@@ -840,6 +865,28 @@ the next report is in 12 hours, a tenth either way; else in 23. Two reports in a
 rung 2 or 3 put it back to 23 hours at once. Next to an Observer node that is 2 state packets a
 day of 1.6 s each, from the node alone, against a flood a day of about 32 s summed over a county.
 
+**A low battery reports less.** The node reads its battery when it builds the announce, the
+reading the announce carries, and decides the report from it:
+
+- under `announce.low` (default 3600 mV): no 12-hour rate; the next report is in 23 hours;
+- under `announce.critical` (default 3400 mV): one zero-hop try instead of 3, and the path and
+  the flood only every second report, the first such report included, so the owner sees the low
+  battery. A report that ends with that one try unacked counts as one that needed a fallback.
+
+```
+set announce.low <mV>        # 0 to 10000; 0 never applies the rule
+set announce.critical <mV>
+get announce.low             # > 3600
+get announce.critical        # > 3400
+```
+
+A battery reading of 0 (a board that cannot read its battery) switches both off. The two
+settings are kept in `/mqttcontrol` version 9; they are not under `cmd`, so the owner may change
+them over the mesh road. They exist on images with the ladder only: the three STM32WLE5 `arrc`
+images (built with `NO_FORK_LADDER`) flood every 23 hours whatever the battery. `set cmd.debug on`
+prints `mcc: report: battery 3350 mV: 1 zero-hop try, no fallback, no 12 h rate` when the rule
+applies.
+
 **The table**, `/mccobs` on flash, 173 bytes: a version byte, then up to 4 Observer nodes, each
 its key (32), the SNR of its last ack (1), the first-try bits (1), a path length (1) and the path
 (8). It is written when an Observer node joins it, when a path ack teaches a path, and when the
@@ -854,8 +901,10 @@ about any other node is kept.
 
 - A node next to a lou-20 Observer node gets no ack and floods every 23 hours, as before.
 - A board built with `NO_FORK_LADDER` skips the ladder and floods every 23 hours.
-- A node with RX power saving on (images without Wi-Fi, `set radio.rxps`) listens without its
-  receive sleep from each try until 3.2 s after it has gone out, the latest a zero-hop ack starts.
+- A node with RX power saving on (images without Wi-Fi, `set radio.rxps`, off by default;
+  [rx-power-saving.md](https://github.com/sweden-mesh/MeshCore-lou/blob/fork/core/docs/rx-power-saving.md)
+  on fork/core) listens without its receive sleep from each try until 3.2 s after it has gone
+  out, the latest a zero-hop ack starts.
 
 The pieces are `src/helpers/MeshAliveLogic.h`, `src/helpers/MeshReportLogic.h` and their suites
 in `test/test_mqtt_v3/`; the vectors the tools and the server share are
