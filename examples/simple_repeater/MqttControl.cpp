@@ -41,7 +41,8 @@ MqttControl::MqttControl()
     _alive_minutes(0), _boot(0), _mcc3_ready(false),
     _commands(MQTTCTRL_CMD_MAX, MQTTCTRL_CMD_WINDOW_SECS),
     _transmits(MQTTCTRL_TRIGGER_MAX, MQTTCTRL_TRIGGER_WINDOW),
-    _mesh_mode(MQTTCTRL_MESH_AUTO), _relay_mode(MQTTCTRL_RELAY_ANY), _relay_guest(MQTTCTRL_RELAY_GUEST_DEFAULT)
+    _mesh_mode(MQTTCTRL_MESH_AUTO), _relay_mode(MQTTCTRL_RELAY_ANY), _relay_guest(MQTTCTRL_RELAY_GUEST_DEFAULT),
+    _announce_low(MQTTCTRL_ANNOUNCE_LOW_DEFAULT), _announce_critical(MQTTCTRL_ANNOUNCE_CRITICAL_DEFAULT)
 {
   _pubkey[0] = 0;
   _ota_legacy[0] = 0;
@@ -93,6 +94,8 @@ void MqttControl::load() {
   _boot = c.boot;
   _relay_mode = c.relay_mode;
   _relay_guest = c.relay_guest;
+  _announce_low = c.announce_low;
+  _announce_critical = c.announce_critical;
 }
 
 void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
@@ -107,6 +110,8 @@ void MqttControl::toStored(MqttCtrlStoredConfig* c) const {
   c->boot = _boot;
   c->relay_mode = _relay_mode;
   c->relay_guest = _relay_guest;
+  c->announce_low = _announce_low;
+  c->announce_critical = _announce_critical;
 }
 
 void MqttControl::save() {

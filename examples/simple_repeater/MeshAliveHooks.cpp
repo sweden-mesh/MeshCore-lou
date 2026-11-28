@@ -66,7 +66,7 @@ bool Fork::buildAnnounce(uint8_t out[MALIVE_PAYLOAD]) {
   a.clock = mqttCtrlClockReported(now, clockNeverSet(now));
   a.last_counter = _mqtt_control.counter();
   a.flags = (FORK_AUTO_REPLY ? MCC3_ALIVE_AUTO_REPLY : 0) | (a.clock != 0 ? MCC3_ALIVE_CLOCK_SET : 0);
-  a.battery_mv = board.getBattMilliVolts();
+  a.battery_mv = _announce_mv = board.getBattMilliVolts();
   a.version = version != NULL ? version : FIRMWARE_VERSION;
   a.name = _mesh._prefs.node_name;
   meshAliveBuild(sealing, owner, _mesh.self_id.pub_key, &a,
@@ -126,6 +126,15 @@ void Fork::loopAnnounce() {
   }
 #ifdef FORK_LADDER
   mreportStart(&_report, mreportId(announce), now_ms);
+  _report_battery = mreportBattery(_announce_mv, _mqtt_control.announceLow(), _mqtt_control.announceCritical(),
+                                   &_report_critical);
+  mreportLimit(&_report, &_report_battery);
+  if (!_report_battery.twelve_hours || _report_battery.tries < MREPORT_ZERO_HOP_TRIES) {
+    debugLine("report: battery %u mV: %u zero-hop %s, %s, %s", (unsigned)_announce_mv,
+              (unsigned)_report_battery.tries, _report_battery.tries == 1 ? "try" : "tries",
+              _report_battery.fallback ? "then the fallback" : "no fallback",
+              _report_battery.twelve_hours ? "12 h allowed" : "no 12 h rate");
+  }
   loopReport();
 #else
   if (!floodAnnounce(announce)) {
@@ -184,14 +193,14 @@ void Fork::loopReport() {
 }
 
 // The table moves on, is written when an Observer node joined or the reliable rule turned,
-// and the next report is 12 or 23 hours away.
+// and the next report is 12 or 23 hours away: 23 with a low battery.
 void Fork::endReport(uint32_t now_ms) {
   const bool was = mreportReliable(&_observers, 0);
   mreportRoundEnd(&_observers, _report.first_try_by);
   const bool fell_back = mreportFellBack(&_report);
   _report_fallbacks = fell_back ? (uint8_t)min(_report_fallbacks + 1, 2) : 0;
   if (_observers_changed || mreportReliable(&_observers, 0) != was) saveObservers();
-  const bool reliable = mreportReliable(&_observers, _report_fallbacks);
+  const bool reliable = mreportReliable(&_observers, _report_fallbacks) && _report_battery.twelve_hours;
   _report.rung = MREPORT_IDLE;
   meshAliveSentIn(&_announce, now_ms, reliable ? MREPORT_RELIABLE_MS : MALIVE_INTERVAL_MS,
                   _mesh.getRNG()->nextInt(0, 0x7FFFFFFF));

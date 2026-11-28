@@ -333,9 +333,9 @@ TEST(ControlConfig, Version8MovesTheDefaultOwnToAnyAndKeepsTheGuestCap) {
   c.boot = 9;
   uint8_t buf[MQTTCTRL_CONFIG_LEN];
   ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mqttCtrlConfigEncode(&c, buf, sizeof(buf)));
-  EXPECT_EQ(8, buf[0]);
-  EXPECT_EQ((size_t)MQTTCTRL_CONFIG_LEN_7 + 1, (size_t)MQTTCTRL_CONFIG_LEN);
-  EXPECT_EQ(84u, (size_t)MQTTCTRL_CONFIG_LEN);
+  EXPECT_EQ(9, buf[0]);
+  EXPECT_EQ((size_t)MQTTCTRL_CONFIG_LEN_7 + 1, (size_t)MQTTCTRL_CONFIG_LEN_8);
+  EXPECT_EQ(84u, (size_t)MQTTCTRL_CONFIG_LEN_8);
   EXPECT_EQ(0u, mqttCtrlConfigEncode(&c, buf, sizeof(buf) - 1));
   EXPECT_EQ(MQTTCTRL_RELAY_OWN, buf[MQTTCTRL_CONFIG_LEN_6]);
   EXPECT_EQ(3, buf[MQTTCTRL_CONFIG_LEN_7]);
@@ -376,6 +376,65 @@ TEST(ControlConfig, Version8MovesTheDefaultOwnToAnyAndKeepsTheGuestCap) {
   EXPECT_EQ(42, back.relay_guest);
   ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
   EXPECT_EQ(0, back.relay_guest);
+}
+
+// Version 9 (lou-21): the report's two battery thresholds, 3600 and 3400 mV by default; an
+// older file keeps the defaults, and a value past 10000 reads as the default.
+TEST(ControlConfig, Version9KeepsTheBatteryThresholds) {
+  MqttCtrlStoredConfig c;
+  mqttCtrlConfigDefaults(&c);
+  EXPECT_EQ(MQTTCTRL_ANNOUNCE_LOW_DEFAULT, c.announce_low);
+  EXPECT_EQ(MQTTCTRL_ANNOUNCE_CRITICAL_DEFAULT, c.announce_critical);
+  EXPECT_EQ(3600, MQTTCTRL_ANNOUNCE_LOW_DEFAULT);
+  EXPECT_EQ(3400, MQTTCTRL_ANNOUNCE_CRITICAL_DEFAULT);
+  c.announce_low = 3300;
+  c.announce_critical = 0;
+  c.relay_guest = 7;
+  uint8_t buf[MQTTCTRL_CONFIG_LEN];
+  ASSERT_EQ((size_t)MQTTCTRL_CONFIG_LEN, mqttCtrlConfigEncode(&c, buf, sizeof(buf)));
+  EXPECT_EQ(88u, (size_t)MQTTCTRL_CONFIG_LEN);
+  EXPECT_EQ(9, buf[0]);
+  MqttCtrlStoredConfig back;
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(3300, back.announce_low);
+  EXPECT_EQ(0, back.announce_critical);
+  EXPECT_EQ(7, back.relay_guest);
+
+  // What lou-21 before version 9 and a short file leave: the defaults, the rest read.
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, MQTTCTRL_CONFIG_LEN_8, 6, &back));
+  EXPECT_EQ(MQTTCTRL_ANNOUNCE_LOW_DEFAULT, back.announce_low);
+  EXPECT_EQ(7, back.relay_guest);
+  buf[0] = 8;
+  mqttCtrlConfigDefaults(&back);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(MQTTCTRL_ANNOUNCE_LOW_DEFAULT, back.announce_low);
+  EXPECT_EQ(MQTTCTRL_ANNOUNCE_CRITICAL_DEFAULT, back.announce_critical);
+
+  buf[0] = 9;
+  const uint16_t big = 10001, max = 10000;
+  memcpy(&buf[MQTTCTRL_CONFIG_LEN_8], &big, 2);
+  memcpy(&buf[MQTTCTRL_CONFIG_LEN_8 + 2], &max, 2);
+  ASSERT_TRUE(mqttCtrlConfigDecode(buf, sizeof(buf), 6, &back));
+  EXPECT_EQ(MQTTCTRL_ANNOUNCE_LOW_DEFAULT, back.announce_low);
+  EXPECT_EQ(10000, back.announce_critical);
+}
+
+TEST(ControlConfig, TheBatteryThresholdsParse) {
+  uint16_t mv = 1;
+  EXPECT_TRUE(mqttCtrlAnnounceParseMv("0", &mv));
+  EXPECT_EQ(0, mv);
+  EXPECT_TRUE(mqttCtrlAnnounceParseMv("3450", &mv));
+  EXPECT_EQ(3450, mv);
+  EXPECT_TRUE(mqttCtrlAnnounceParseMv("10000", &mv));
+  EXPECT_FALSE(mqttCtrlAnnounceParseMv("10001", &mv));
+  EXPECT_FALSE(mqttCtrlAnnounceParseMv("70000", &mv));
+  EXPECT_FALSE(mqttCtrlAnnounceParseMv("", &mv));
+  EXPECT_FALSE(mqttCtrlAnnounceParseMv("3.6", &mv));
+  EXPECT_FALSE(mqttCtrlAnnounceParseMv("-1", &mv));
+  EXPECT_FALSE(mqttCtrlAnnounceParseMv(NULL, &mv));
+  EXPECT_EQ(10000, mv);
 }
 
 int main(int argc, char** argv) {
