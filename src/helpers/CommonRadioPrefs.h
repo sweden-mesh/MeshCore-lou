@@ -1,9 +1,16 @@
 #pragma once
 #include "ConfigSerializer.h"
 #include "KeyValueStore.h"
+#include "radiolib/RXPowerSaving.h"
 
 class CommonRadioPrefs : public ConfigSerializer, public KeyValueStore {
   bool _is_dirty = false;
+#ifdef RX_POWERSAVING
+  // The modulation RX power saving was last applied for, which `tempradio` can change
+  // without touching the saved one. 0 until applyRxPowerSaving().
+  uint8_t _active_sf = 0;
+  float _active_bw = 0;
+#endif
 protected:
   CommonRadioPrefs() { }
 public:
@@ -61,6 +68,12 @@ public:
 
   virtual uint8_t getFEMTxGain() const = 0;
   virtual void setFEMTxGain(uint8_t g) = 0;
+
+#ifdef RX_POWERSAVING
+  virtual RxPowerSavingConfig* getRxPowerSavingConfig() { return nullptr; }
+  bool applyRxPowerSaving(uint8_t sf, float bw);
+  bool isRxPowerSavingCalibrationActive() const;
+#endif
 
   bool handleCommand(const char* command, uint32_t sender_timestamp, char* reply);
 

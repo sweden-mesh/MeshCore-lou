@@ -2,6 +2,7 @@
 
 #include <RadioLib.h>
 #include "MeshCore.h"
+#include "RXPowerSaving.h"
 
 class CustomSX1262 : public SX1262 {
   uint32_t _preambleMillis = 66;
@@ -11,6 +12,12 @@ class CustomSX1262 : public SX1262 {
 
   public:
     CustomSX1262(Module *mod) : SX1262(mod) { }
+
+#ifdef RX_POWERSAVING
+    // The sleep -> RX transition RadioLib subtracts from a duty-cycle sleep.
+    // Protected in the RadioLib base, so the RXPS layer reads it through here.
+    uint32_t getTcxoDelay() const { return tcxoDelay; }
+#endif
 
   #ifdef RP2040_PLATFORM
     bool std_init(SPIClassRP2040* spi = NULL)
@@ -104,6 +111,39 @@ class CustomSX1262 : public SX1262 {
       // include the PREAMBLE_DETECTED irq bit in reported flags
       return SX1262::startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF, RADIOLIB_IRQ_RX_DEFAULT_FLAGS | (1UL << RADIOLIB_IRQ_PREAMBLE_DETECTED), RADIOLIB_IRQ_RX_DEFAULT_MASK, 0);
     }
+
+#ifdef RX_POWERSAVING
+    int16_t startReceiveDutyCycle(uint32_t rxPeriod, uint32_t sleepPeriod,
+                                  RadioLibIrqFlags_t irqFlags = RADIOLIB_IRQ_RX_DEFAULT_FLAGS,
+                                  RadioLibIrqFlags_t irqMask = RADIOLIB_IRQ_RX_DEFAULT_MASK) {
+      int16_t state = SX1262::startReceiveDutyCycle(rxPeriod, sleepPeriod, irqFlags, irqMask);
+      if (state == RADIOLIB_ERR_NONE) {
+        // RadioLib stages RX through standby, which leaves a host-controlled
+        // RXEN switch in IDLE. Set it back to RX for the whole duty-cycle;
+        // boards without an external RXEN table are unaffected.
+        this->mod->setRfSwitchState(Module::MODE_RX);
+      }
+      return state;
+    }
+
+    bool isChipBusy() {
+      uint32_t busy = this->mod->getGpio();
+      return busy != RADIOLIB_NC && this->mod->hal->digitalRead(busy);
+    }
+
+    int16_t stopRTC() {
+      uint8_t rtcStop = 0x00;
+      int16_t state = writeRegister(RADIOLIB_SX126X_REG_RTC_CTRL, &rtcStop, 1);
+      RADIOLIB_ASSERT(state);
+
+      uint8_t rtcEvent = 0;
+      state = readRegister(RADIOLIB_SX126X_REG_EVENT_MASK, &rtcEvent, 1);
+      RADIOLIB_ASSERT(state);
+
+      rtcEvent |= 0x02;
+      return writeRegister(RADIOLIB_SX126X_REG_EVENT_MASK, &rtcEvent, 1);
+    }
+#endif
 
     bool isReceiving() {
       uint32_t irq = getIrqFlags();

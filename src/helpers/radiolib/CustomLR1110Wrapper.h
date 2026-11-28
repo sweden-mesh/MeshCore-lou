@@ -9,6 +9,9 @@ public:
   CustomLR1110Wrapper(CustomLR1110& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
 
   void setParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
+#ifdef RX_POWERSAVING
+    prepareForRadioConfig();
+#endif
     ((CustomLR1110 *)_radio)->setFrequency(freq);
     ((CustomLR1110 *)_radio)->setSpreadingFactor(sf);
     ((CustomLR1110 *)_radio)->setBandwidth(bw);
@@ -20,6 +23,11 @@ public:
   }
 
   bool isReceivingPacket() override {
+#ifdef RX_POWERSAVING
+    // While duty-cycling, BUSY marks the sleep phase: probing IRQ status over
+    // SPI there could wake the chip and break the cycle (see CustomSX1262Wrapper).
+    if (_rx_ps_armed && ((CustomLR1110 *)_radio)->isChipBusy()) return false;
+#endif
     return ((CustomLR1110 *)_radio)->isReceiving();
   }
   float getCurrentRSSI() override {
@@ -38,12 +46,63 @@ public:
     _radio->setPreambleLength(preambleLengthForSF(getSpreadingFactor())); // overcomes weird issues with small and big pkts
   }
 
+#ifdef RX_POWERSAVING
+  float getLastRSSI() const override {
+    return rxPsInUse() ? RadioLibWrapper::getLastRSSI() : ((CustomLR1110 *)_radio)->getRSSI();
+  }
+  float getLastSNR() const override {
+    return rxPsInUse() ? RadioLibWrapper::getLastSNR() : ((CustomLR1110 *)_radio)->getSNR();
+  }
+
+  bool supportsRxPowerSaving() const override { return true; }
+
+  // Measured on ThinkNode M3 and T1000-E: this family needs roughly one symbol
+  // more margin than SX126x before a duty-cycled receiver latches a preamble.
+  float rxPowerSavingCaptureCostSymbols() const override {
+    return RX_POWERSAVING_CAPTURE_COST_SYMBOLS_LR11X0;
+  }
+
+  uint32_t rxPowerSavingTransitionUs() const override {
+    return ((CustomLR1110 *)_radio)->getTcxoDelay() + 1000;
+  }
+
+protected:
+  int16_t startContinuousReceive() override {
+    // Also covers a stopDutyCycleHardware() whose clock restore failed.
+    int16_t err = _radio->standby();
+    if (err == RADIOLIB_ERR_NONE) err = ((CustomLR1110*)_radio)->restoreLfClock();
+    return err == RADIOLIB_ERR_NONE ? _radio->startReceive() : err;
+  }
+
+  int16_t armDutyCycle(RadioLibIrqFlags_t irq_flags, RadioLibIrqFlags_t irq_mask,
+                       uint32_t* eff_rx_us, uint32_t* eff_sleep_us) override {
+    *eff_sleep_us = _rx_ps_sleep_us;   // only the RX window can get clamped
+    return ((CustomLR1110 *)_radio)->startReceiveDutyCycle(
+        _rx_ps_rx_us, _rx_ps_sleep_us, irq_flags, irq_mask, eff_rx_us);
+  }
+
+  int16_t stopDutyCycleHardware() override {
+    const int16_t state = _radio->standby();
+    const int16_t clock = ((CustomLR1110 *)_radio)->restoreLfClock();
+    return state != RADIOLIB_ERR_NONE ? state : clock;
+  }
+
+  bool isChipBusy() override {
+    return ((CustomLR1110 *)_radio)->isChipBusy();
+  }
+
+public:
+#else
   float getLastRSSI() const override { return ((CustomLR1110 *)_radio)->getRSSI(); }
   float getLastSNR() const override { return ((CustomLR1110 *)_radio)->getSNR(); }
+#endif
 
   uint8_t getSpreadingFactor() const override { return ((CustomLR1110 *)_radio)->getSpreadingFactor(); }
   
   bool setRxBoostedGainMode(bool en) override {
+#ifdef RX_POWERSAVING
+    prepareForRadioConfig();
+#endif
     return ((CustomLR1110 *)_radio)->setRxBoostedGainMode(en) == RADIOLIB_ERR_NONE;
   }
   bool getRxBoostedGainMode() const override {

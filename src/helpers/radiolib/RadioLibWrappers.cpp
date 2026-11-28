@@ -11,6 +11,14 @@
 #define NUM_NOISE_FLOOR_SAMPLES  64
 #define SAMPLING_THRESHOLD  14
 
+#ifdef RX_POWERSAVING
+#define NF_CALIB_INTERVAL_MS 60000UL
+#define NF_CALIB_TIMEOUT_MS 5000UL
+#define NF_CALIB_SETTLE_MS 20UL
+#define NF_CALIB_SAMPLE_INTERVAL_MS 1UL
+#define NF_CALIB_MAX_SAMPLE_ATTEMPTS (NUM_NOISE_FLOOR_SAMPLES * 4U)
+#endif
+
 static volatile uint8_t state = STATE_IDLE;
 
 // this function is called when a complete packet
@@ -48,6 +56,9 @@ uint32_t RadioLibWrapper::getRngSeed() {
 }
 
 void RadioLibWrapper::setTxPower(int8_t dbm) {
+#ifdef RX_POWERSAVING
+  prepareForRadioConfig();
+#endif
 #if defined(USE_LR2021)
   idle();
 #endif
@@ -55,6 +66,9 @@ void RadioLibWrapper::setTxPower(int8_t dbm) {
 }
 
 void RadioLibWrapper::idle() {
+#ifdef RX_POWERSAVING
+  if (_rx_ps_armed) stopReceiveDutyCycle();
+#endif
   _radio->standby();
   state = STATE_IDLE;   // need another startReceive()
 }
@@ -72,6 +86,12 @@ void RadioLibWrapper::doResetAGC() {
 }
 
 void RadioLibWrapper::resetAGC() {
+#ifdef RX_POWERSAVING
+  if (rxPsInUse()) {
+    resetAGCWithRxPowerSaving();
+    return;
+  }
+#endif
   // make sure we're not mid-receive of packet!
   if ((state & STATE_INT_READY) != 0 || isReceivingPacket()) return;
 
@@ -88,6 +108,30 @@ void RadioLibWrapper::resetAGC() {
 }
 
 void RadioLibWrapper::loop() {
+#ifdef RX_POWERSAVING
+  if (rxPsInUse()) {
+    if (_rx_ps_held && !isRxHeld()) {
+      _rx_ps_held = false;
+      _rx_ps_restart_pending = true;   // back to the duty cycle
+    }
+    if (_rx_ps_restart_pending && (state & ~STATE_INT_READY) != STATE_TX_WAIT &&
+        !isPacketPendingOrReceiving()) {
+      _rx_ps_restart_pending = false;
+      requestRestartRecv();
+    }
+    noiseFloorCalibCheck();
+
+    if (state == STATE_RX && _num_floor_samples < NUM_NOISE_FLOOR_SAMPLES) {
+      if (!_rx_ps_armed && !(_nf_calib_active && (long)(millis() - _nf_sample_from) < 0) &&
+          !isReceivingPacket()) {
+        sampleNoiseFloorOnce();
+      }
+    } else if (publishNoiseFloor()) {
+      if (_nf_calib_active) endNoiseFloorCalib(millis());
+    }
+    return;
+  }
+#endif
   if (state == STATE_RX && _num_floor_samples < NUM_NOISE_FLOOR_SAMPLES) {
     if (!isReceivingPacket()) {
       int rssi = getCurrentRSSI();
@@ -113,7 +157,11 @@ void RadioLibWrapper::startRecv() {
   #if defined(USE_LR2021)
   _radio->standby(); // without this LR2021 can throw -706 when calling startReceive after hardware CAD when side detectors are enabled
   #endif
+#ifdef RX_POWERSAVING
+  int err = startReceiveMode();
+#else
   int err = _radio->startReceive();
+#endif
   if (err == RADIOLIB_ERR_NONE) {
     state = STATE_RX;
   } else {
@@ -128,9 +176,23 @@ bool RadioLibWrapper::isInRecvMode() const {
 int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
   int len = 0;
   if (state & STATE_INT_READY) {
+#ifdef RX_POWERSAVING
+    const bool ready = !rxPsInUse() || isPacketReady();
+    if (ready && _rx_ps_armed) stopReceiveDutyCycle();
+    len = ready ? _radio->getPacketLength() : 0;
+#else
     len = _radio->getPacketLength();
+#endif
     if (len > 0) {
       if (len > sz) { len = sz; }
+#ifdef RX_POWERSAVING
+      // The radio is back in its duty cycle by the time the caller asks: read them now.
+      if (rxPsInUse()) {
+        _last_snr = _radio->getSNR();
+        _last_rssi = _radio->getRSSI();
+        _last_metrics_valid = true;
+      }
+#endif
       int err = _radio->readData(bytes, len);
       if (err != RADIOLIB_ERR_NONE) {
         MESH_DEBUG_PRINTLN("RadioLibWrapper: error: readData(%d)", err);
@@ -149,6 +211,12 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
   }
 
   if (state != STATE_RX) {
+#ifdef RX_POWERSAVING
+    if (rxPsInUse()) {
+      startRecv();
+      return len;
+    }
+#endif
     int err = _radio->startReceive();
     if (err == RADIOLIB_ERR_NONE) {
       state = STATE_RX;
@@ -164,6 +232,9 @@ uint32_t RadioLibWrapper::getEstAirtimeFor(int len_bytes) {
 }
 
 bool RadioLibWrapper::startSendRaw(const uint8_t* bytes, int len) {
+#ifdef RX_POWERSAVING
+  if (_rx_ps_armed) stopReceiveDutyCycle();
+#endif
   _board->onBeforeTransmit();
   int err = _radio->startTransmit((uint8_t *) bytes, len);
   if (err == RADIOLIB_ERR_NONE) {
@@ -189,6 +260,9 @@ void RadioLibWrapper::onSendFinished() {
   _radio->finishTransmit();
   _board->onAfterTransmit();
   state = STATE_IDLE;
+#ifdef RX_POWERSAVING
+  if (isRxHeld()) _rx_ps_hold_until = millis() + _rx_ps_hold_after_tx;
+#endif
 }
 
 int16_t RadioLibWrapper::performChannelScan() {
@@ -197,10 +271,18 @@ int16_t RadioLibWrapper::performChannelScan() {
 
 bool RadioLibWrapper::isChannelActive() {
   // int.thresh: RSSI-based interference detection (relative to noise floor)
+#ifdef RX_POWERSAVING
+  if (_threshold != 0 && !(_rx_ps_armed && isChipBusy()) &&
+      getCurrentRSSI() > _noise_floor + _threshold) return true;
+#else
   if (_threshold != 0 && getCurrentRSSI() > _noise_floor + _threshold) return true;
+#endif
 
   // cad: hardware channel activity detection
   if (_cad_enabled) {
+#ifdef RX_POWERSAVING
+    if (_rx_ps_armed) stopReceiveDutyCycle();
+#endif
     int16_t result = performChannelScan();
     // scanChannel() triggers DIO interrupt (CAD done) which sets STATE_INT_READY
     // via setFlag() ISR. Clear it before restarting RX so recvRaw() doesn't
@@ -214,9 +296,15 @@ bool RadioLibWrapper::isChannelActive() {
 }
 
 float RadioLibWrapper::getLastRSSI() const {
+#ifdef RX_POWERSAVING
+  if (rxPsInUse()) return _last_metrics_valid ? _last_rssi : _rx_ps_armed ? 0 : _radio->getRSSI();
+#endif
   return _radio->getRSSI();
 }
 float RadioLibWrapper::getLastSNR() const {
+#ifdef RX_POWERSAVING
+  if (rxPsInUse()) return _last_metrics_valid ? _last_snr : _rx_ps_armed ? 0 : _radio->getSNR();
+#endif
   return _radio->getSNR();
 }
 
@@ -258,3 +346,265 @@ PacketMillis RadioLibWrapper::calcMaxPacketMillis(uint8_t sf, float bw, uint8_t 
 
   return PacketMillis {(preamble_us + 999) / 1000, (payload_us + 999) / 1000};
 }
+
+#ifdef RX_POWERSAVING
+// RX power saving, from IoTThinks' PowerSaving 18 (RXPowerSaving.h). Reached only while
+// rxPsInUse(), apart from the _rx_ps_armed checks, which are false until then.
+
+void RadioLibWrapper::powerOff() {
+  if (_rx_ps_armed) stopReceiveDutyCycle();
+  _radio->sleep();
+}
+
+// MeshCore's resetAGC(), plus a noise floor measured on the spot: with the receiver asleep
+// between windows, loop() cannot sample it.
+void RadioLibWrapper::resetAGCWithRxPowerSaving() {
+  // make sure we're not mid-receive or mid-transmit of a packet
+  if (isPacketPendingOrReceiving() || state == STATE_TX_WAIT) return;
+
+  if (_rx_ps_armed) stopReceiveDutyCycle();
+
+  doResetAGC();
+  state = STATE_IDLE;
+
+  // Recalibrate synchronously so callers never observe the temporary zero
+  // used to bypass a stale sampling threshold after an AGC reset.
+  const int16_t previous_noise_floor = _noise_floor;
+  _noise_floor = 0;
+  _num_floor_samples = 0;
+  _floor_sample_sum = 0;
+
+  _nf_calib_active = true;  // force startReceiveMode() into continuous RX
+  bool packet_in_progress = false;
+  int16_t err = startReceiveMode();
+  if (err == RADIOLIB_ERR_NONE) {
+    state = STATE_RX;
+    delay(NF_CALIB_SETTLE_MS);
+
+    uint16_t sample_attempts = 0;
+    while (_num_floor_samples < NUM_NOISE_FLOOR_SAMPLES &&
+           sample_attempts++ < NF_CALIB_MAX_SAMPLE_ATTEMPTS) {
+      if (isPacketPendingOrReceiving()) {
+        packet_in_progress = true;
+        break;
+      }
+      sampleNoiseFloorOnce();
+      if (_num_floor_samples < NUM_NOISE_FLOOR_SAMPLES) {
+        delay(NF_CALIB_SAMPLE_INTERVAL_MS);
+      }
+    }
+  }
+
+  if (!publishNoiseFloor()) {
+    _noise_floor = previous_noise_floor;
+    _num_floor_samples = 0;
+    _floor_sample_sum = 0;
+  }
+
+  _nf_calib_active = false;
+  _nf_last_calib = millis();
+
+  // A frame can start after the idle check above. Keep continuous RX alive until
+  // recvRaw() consumes it; restarting RX here would abort a frame that is between
+  // preamble detection and RX_DONE.
+  if (!packet_in_progress) packet_in_progress = isPacketPendingOrReceiving();
+  if (!packet_in_progress) requestRestartRecv();
+}
+
+// Clear the RX/idle state so the next loop calls startRecv() again, without
+// dropping an STATE_INT_READY that the ISR may raise while we are in here.
+// A plain `state = STATE_IDLE` loses that flag (and with it, a received
+// packet) when setFlag() fires between the test and the store.
+void RadioLibWrapper::requestRestartRecv() {
+  noInterrupts();
+  if ((state & ~STATE_INT_READY) != STATE_TX_WAIT) {
+    state &= STATE_INT_READY;   // STATE_IDLE, but keep a pending interrupt
+  }
+  interrupts();
+}
+
+bool RadioLibWrapper::isPacketPendingOrReceiving() {
+  return (state & STATE_INT_READY) != 0 || isReceivingPacket();
+}
+
+void RadioLibWrapper::sampleNoiseFloorOnce() {
+  int rssi = getCurrentRSSI();
+  if (rssi < _noise_floor + SAMPLING_THRESHOLD) {
+    _num_floor_samples++;
+    _floor_sample_sum += rssi;
+  }
+}
+
+bool RadioLibWrapper::publishNoiseFloor() {
+  if (_num_floor_samples < NUM_NOISE_FLOOR_SAMPLES || _floor_sample_sum == 0) return false;
+
+  _noise_floor = _floor_sample_sum / NUM_NOISE_FLOOR_SAMPLES;
+  if (_noise_floor < -120) {
+    _noise_floor = -120;    // clamp to lower bound of -120dBi
+  }
+  _floor_sample_sum = 0;
+
+  #ifdef MESH_DEBUG_NOISE_FLOOR
+  MESH_DEBUG_PRINTLN("RadioLibWrapper: noise_floor = %d", (int)_noise_floor);
+  #endif
+  return true;
+}
+
+// Once a minute the receiver listens continuously for long enough to measure the noise floor.
+void RadioLibWrapper::noiseFloorCalibCheck() {
+  unsigned long now = millis();
+  if (_nf_calib_active) {
+    if (!_rx_ps_enabled || (long)(now - _nf_calib_deadline) >= 0) {
+      endNoiseFloorCalib(now);
+    } else if (_rx_ps_armed && !isPacketPendingOrReceiving()) {
+      // A packet may have delayed the RXPS-to-continuous-RX transition.
+      requestRestartRecv();
+    }
+  } else if (_rx_ps_enabled && _rx_ps_armed && state == STATE_RX &&
+             (_nf_last_calib == 0 || now - _nf_last_calib >= NF_CALIB_INTERVAL_MS) &&
+             !isPacketPendingOrReceiving()) {
+    _nf_calib_active = true;
+    _nf_calib_deadline = now + NF_CALIB_TIMEOUT_MS;
+    _nf_sample_from = now + NF_CALIB_SETTLE_MS;
+    _num_floor_samples = 0;
+    _floor_sample_sum = 0;
+    requestRestartRecv();
+  }
+}
+
+void RadioLibWrapper::endNoiseFloorCalib(unsigned long now) {
+  _nf_calib_active = false;
+  _nf_last_calib = now;
+  if (!isPacketPendingOrReceiving()) requestRestartRecv();
+}
+
+bool RadioLibWrapper::isRxHeld() const {
+  return _rx_ps_held && (long)(_rx_ps_hold_until - millis()) > 0;
+}
+
+void RadioLibWrapper::holdContinuousRx(uint16_t ms, uint16_t after_tx_ms) {
+  if (!_rx_ps_enabled) return;
+  _rx_ps_hold_until = millis() + ms;
+  _rx_ps_hold_after_tx = after_tx_ms;
+  _rx_ps_held = true;
+  if (_rx_ps_armed) _rx_ps_restart_pending = true;
+}
+
+int16_t RadioLibWrapper::startReceiveMode() {
+  // Periodic calibration switches RXPS to continuous RX. Re-check at the
+  // hardware transition so a preamble that arrived after the scheduler's
+  // idle check is not aborted by stopReceiveDutyCycle().
+  if (_nf_calib_active && _rx_ps_armed && isPacketPendingOrReceiving()) {
+    return RADIOLIB_ERR_NONE;
+  }
+  if (_rx_ps_armed) stopReceiveDutyCycle();
+  if (!_rx_ps_enabled || _nf_calib_active || isRxHeld()) {
+    _rx_ps_armed = false;
+    const int16_t err = startContinuousReceive();
+    _rx_ps_last_error = err;
+    return err;
+  }
+
+  if (!_rx_ps_arm_retry.canAttempt()) {
+    // arming has failed repeatedly; stop paying for a doomed SPI round-trip on
+    // every RX restart. A config change (setRxPowerSaving) re-enables retries.
+    _rx_ps_armed = false;
+    const int16_t err = startContinuousReceive();
+    if (err != RADIOLIB_ERR_NONE) _rx_ps_last_error = err;
+    return err;
+  }
+
+  const RadioLibIrqFlags_t irq_flags =
+      RADIOLIB_IRQ_RX_DEFAULT_FLAGS |
+      (1UL << RADIOLIB_IRQ_PREAMBLE_DETECTED);
+  const RadioLibIrqFlags_t irq_mask =
+      (1UL << RADIOLIB_IRQ_RX_DONE) |
+      (1UL << RADIOLIB_IRQ_TIMEOUT) |
+      (1UL << RADIOLIB_IRQ_CRC_ERR) |
+      (1UL << RADIOLIB_IRQ_HEADER_ERR);
+
+  uint32_t eff_rx_us = _rx_ps_rx_us;
+  uint32_t eff_sleep_us = _rx_ps_sleep_us;
+  int16_t err = armDutyCycle(irq_flags, irq_mask, &eff_rx_us, &eff_sleep_us);
+  if (err == RADIOLIB_ERR_NONE) {
+    _rx_ps_armed = true;
+    _rx_ps_last_error = RADIOLIB_ERR_NONE;
+    _rx_ps_arm_retry.recordSuccess();
+    _rx_ps_eff_rx_us = eff_rx_us;
+    _rx_ps_eff_sleep_us = eff_sleep_us;
+    return err;
+  }
+
+  _rx_ps_armed = false;
+  _rx_ps_last_error = err;
+  _rx_ps_eff_rx_us = 0;
+  _rx_ps_eff_sleep_us = 0;
+  n_rx_ps_arm_failures++;
+  _rx_ps_arm_retry.recordFailure();
+  MESH_DEBUG_PRINTLN("RadioLibWrapper: startReceiveDutyCycle(%d), continuous RX fallback", err);
+  stopDutyCycleHardware();
+  int16_t fallback_err = startContinuousReceive();
+  if (fallback_err != RADIOLIB_ERR_NONE) _rx_ps_last_error = fallback_err;
+  return fallback_err;
+}
+
+void RadioLibWrapper::stopReceiveDutyCycle() {
+  int16_t err = stopDutyCycleHardware();
+  _rx_ps_armed = false;
+  _rx_ps_eff_rx_us = 0;
+  _rx_ps_eff_sleep_us = 0;
+  if (err != RADIOLIB_ERR_NONE) _rx_ps_last_error = err;
+}
+
+bool RadioLibWrapper::isPacketReady() {
+  if (!_rx_ps_armed) return true;
+  return _radio->checkIrq(RADIOLIB_IRQ_RX_DONE) != 0;
+}
+
+void RadioLibWrapper::prepareForRadioConfig() {
+  if (!_rx_ps_armed) return;
+
+  stopReceiveDutyCycle();
+  requestRestartRecv();
+}
+
+bool RadioLibWrapper::setRxPowerSaving(bool enabled, uint32_t rx_us, uint32_t sleep_us) {
+  if (enabled && (!isValidRxPowerSavingPeriod(rx_us) || !isValidRxPowerSavingPeriod(sleep_us))) {
+    _rx_ps_enabled = false;
+    _rx_ps_last_error = RX_POWERSAVING_ERR_TIMING;
+    requestRestartRecv();
+    return false;
+  }
+  if (enabled && !supportsRxPowerSaving()) return false;
+  // Off and never on: nothing to restart, and MeshCore's own receiver stays untouched.
+  if (!enabled && !_rx_ps_enabled && !_rx_ps_armed) {
+    _rx_ps_rx_us = rx_us;
+    _rx_ps_sleep_us = sleep_us;
+    return true;
+  }
+
+  _rx_ps_enabled = enabled;
+  if (!enabled) _rx_ps_held = false;
+  _rx_ps_rx_us = rx_us;
+  _rx_ps_sleep_us = sleep_us;
+  _rx_ps_last_error = RADIOLIB_ERR_NONE;
+  _rx_ps_arm_retry.reset();   // new config, give the hardware a fresh chance
+  _rx_ps_restart_pending = true;
+  if ((state & ~STATE_INT_READY) != STATE_TX_WAIT && !isPacketPendingOrReceiving()) {
+    _rx_ps_restart_pending = false;
+    requestRestartRecv();
+  }
+  return true;
+}
+
+RxPowerSavingStatus RadioLibWrapper::getRxPowerSavingStatus() const {
+  RxPowerSavingStatus status;
+  status.supported = supportsRxPowerSaving();
+  status.armed = _rx_ps_armed;
+  status.last_error = _rx_ps_config_error ? RX_POWERSAVING_ERR_TIMING : _rx_ps_last_error;
+  status.arm_failures = n_rx_ps_arm_failures;
+  status.effective_rx_us = _rx_ps_eff_rx_us;
+  status.effective_sleep_us = _rx_ps_eff_sleep_us;
+  return status;
+}
+#endif
