@@ -1514,11 +1514,26 @@ static inline void mqttCtrlRelayDescribe(uint8_t mode, uint32_t forwarded, uint3
   }
 }
 
+// `set announce.low|critical <mV>`: the battery under which a node without Wi-Fi reports
+// less (MeshReportLogic.h), 0 = never.
+#define MQTTCTRL_ANNOUNCE_LOW_DEFAULT       3600
+#define MQTTCTRL_ANNOUNCE_CRITICAL_DEFAULT  3400
+#define MQTTCTRL_ANNOUNCE_MV_MAX            10000
+
+static inline bool mqttCtrlAnnounceParseMv(const char* text, uint16_t* out) {
+  uint32_t v = 0;
+  if (text == NULL || out == NULL || !mqttCtrlParseU32(text, strlen(text), &v)) return false;
+  if (v > MQTTCTRL_ANNOUNCE_MV_MAX) return false;
+  *out = (uint16_t)v;
+  return true;
+}
+
 // /mqttcontrol, the plane's settings file. Append-only, as /autoreply is: version 1 was
 // on/off and the counter; 2 added the slot and the command key; 3 two automatic-OTA bytes
 // that releases up to ar-13 kept here; 4 the mesh road's mode; 5 how the key was set; 6 the
 // alive interval and the boot counter alive messages are ordered by; 7 the relay's mode; 8
-// the guests' cap, and a relay mode that means what it says (see mqttCtrlConfigDecode). OTA
+// the guests' cap, and a relay mode that means what it says (see mqttCtrlConfigDecode); 9 the
+// two battery thresholds of the report, in mV, native order. OTA
 // keeps its bytes in /ota now, and they are carried exactly as read, so an image that rolls
 // back to ar-13 still finds what it wrote; an older image reads the fields it knows and
 // ignores the rest. A build without the plane neither reads nor writes this file, so it
@@ -1526,15 +1541,17 @@ static inline void mqttCtrlRelayDescribe(uint8_t mode, uint32_t forwarded, uint3
 //
 //   ver | enabled | counter (4, native order) | slot | key (64 hex + NUL) | ota (2) | mesh | via
 //       | alive minutes (2, 0 = the default) | boot counter (4) | relay | relay.guest
+//       | announce.low (2) | announce.critical (2)
 #define MQTTCTRL_CONFIG_VER_1   1
-#define MQTTCTRL_CONFIG_VER     8
+#define MQTTCTRL_CONFIG_VER     9
 #define MQTTCTRL_CONFIG_KEY_LEN 65
 #define MQTTCTRL_CONFIG_LEN_3   (1 + 1 + 4 + 1 + MQTTCTRL_CONFIG_KEY_LEN + 2)
 #define MQTTCTRL_CONFIG_LEN_4   (MQTTCTRL_CONFIG_LEN_3 + 1)
 #define MQTTCTRL_CONFIG_LEN_5   (MQTTCTRL_CONFIG_LEN_4 + 1)
 #define MQTTCTRL_CONFIG_LEN_6   (MQTTCTRL_CONFIG_LEN_5 + 2 + 4)
 #define MQTTCTRL_CONFIG_LEN_7   (MQTTCTRL_CONFIG_LEN_6 + 1)
-#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_7 + 1)
+#define MQTTCTRL_CONFIG_LEN_8   (MQTTCTRL_CONFIG_LEN_7 + 1)
+#define MQTTCTRL_CONFIG_LEN     (MQTTCTRL_CONFIG_LEN_8 + 2 + 2)
 
 // The alive message (mcc3, IATA-2 design §3): every `alive.interval` minutes, 5..1440,
 // default 15, and no `off`: alive is the owner's only discovery.
@@ -1554,6 +1571,8 @@ struct MqttCtrlStoredConfig {
   uint32_t boot;                             // +1 every boot of an image with the uplink
   uint8_t relay_mode;                        // MqttCtrlRelayMode; any by default
   uint8_t relay_guest;                       // floods a day per guest key
+  uint16_t announce_low;                     // mV, 0 = never
+  uint16_t announce_critical;                // mV, 0 = never
 };
 
 static inline void mqttCtrlConfigDefaults(MqttCtrlStoredConfig* c) {
@@ -1562,6 +1581,8 @@ static inline void mqttCtrlConfigDefaults(MqttCtrlStoredConfig* c) {
   c->ota_legacy[1] = OTA_AUTO_CHECK_HOURS_DEFAULT;
   c->relay_mode = MQTTCTRL_RELAY_ANY;
   c->relay_guest = MQTTCTRL_RELAY_GUEST_DEFAULT;
+  c->announce_low = MQTTCTRL_ANNOUNCE_LOW_DEFAULT;
+  c->announce_critical = MQTTCTRL_ANNOUNCE_CRITICAL_DEFAULT;
 }
 
 // Fields the file is too old or too short to hold keep what 'c' had. A version 1 file has
@@ -1591,10 +1612,16 @@ static inline bool mqttCtrlConfigDecode(const uint8_t* buf, size_t len, int slot
     c->relay_mode = buf[MQTTCTRL_CONFIG_LEN_6];
     if (ver == 7 && c->relay_mode == MQTTCTRL_RELAY_OWN) c->relay_mode = MQTTCTRL_RELAY_ANY;
   }
-  if (ver >= 8 && len >= MQTTCTRL_CONFIG_LEN) c->relay_guest = buf[MQTTCTRL_CONFIG_LEN_7];
+  if (ver >= 8 && len >= MQTTCTRL_CONFIG_LEN_8) c->relay_guest = buf[MQTTCTRL_CONFIG_LEN_7];
+  if (ver >= 9 && len >= MQTTCTRL_CONFIG_LEN) {
+    memcpy(&c->announce_low, &buf[MQTTCTRL_CONFIG_LEN_8], 2);
+    memcpy(&c->announce_critical, &buf[MQTTCTRL_CONFIG_LEN_8 + 2], 2);
+  }
   if (c->mesh_mode > MQTTCTRL_MESH_OFF) c->mesh_mode = MQTTCTRL_MESH_AUTO;
   if (c->relay_mode > MQTTCTRL_RELAY_ANY) c->relay_mode = MQTTCTRL_RELAY_ANY;
   if (c->relay_guest > MQTTCTRL_RELAY_GUEST_MAX) c->relay_guest = MQTTCTRL_RELAY_GUEST_DEFAULT;
+  if (c->announce_low > MQTTCTRL_ANNOUNCE_MV_MAX) c->announce_low = MQTTCTRL_ANNOUNCE_LOW_DEFAULT;
+  if (c->announce_critical > MQTTCTRL_ANNOUNCE_MV_MAX) c->announce_critical = MQTTCTRL_ANNOUNCE_CRITICAL_DEFAULT;
   if (c->key_via > MQTTCTRL_KEY_VIA_REKEY) c->key_via = MQTTCTRL_KEY_VIA_USB;
   if (c->slot > slot_count) c->slot = 0;
   if (c->alive_minutes != 0 && (c->alive_minutes < MQTTCTRL_ALIVE_MIN_MINUTES ||
@@ -1616,6 +1643,8 @@ static inline size_t mqttCtrlConfigEncode(const MqttCtrlStoredConfig* c, uint8_t
   memcpy(&buf[MQTTCTRL_CONFIG_LEN_5 + 2], &c->boot, 4);
   buf[MQTTCTRL_CONFIG_LEN_6] = c->relay_mode;
   buf[MQTTCTRL_CONFIG_LEN_7] = c->relay_guest;
+  memcpy(&buf[MQTTCTRL_CONFIG_LEN_8], &c->announce_low, 2);
+  memcpy(&buf[MQTTCTRL_CONFIG_LEN_8 + 2], &c->announce_critical, 2);
   return MQTTCTRL_CONFIG_LEN;
 }
 

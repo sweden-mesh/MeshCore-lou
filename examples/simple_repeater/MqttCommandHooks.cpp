@@ -569,6 +569,26 @@ bool Fork::handleMqttCommand(uint32_t sender_timestamp, bool mesh_admin, char* c
     }
     return true;
   }
+#ifdef FORK_LADDER
+  // The battery under which the report goes less often (MeshReportLogic.h), in mV.
+  if (strcmp(command, "get announce.low") == 0 || strcmp(command, "get announce.critical") == 0) {
+    sprintf(reply, "> %u", command[13] == 'l' ? _mqtt_control.announceLow() : _mqtt_control.announceCritical());
+    return true;
+  }
+  if (memcmp(command, "set announce.low ", 17) == 0 || memcmp(command, "set announce.critical ", 22) == 0) {
+    const bool low = command[13] == 'l';
+    uint16_t mv;
+    if (!mqttCtrlAnnounceParseMv(&command[low ? 17 : 22], &mv)) {
+      sprintf(reply, "Err - use: set announce.%s <0-%d>, mV, 0 = never", low ? "low" : "critical",
+              MQTTCTRL_ANNOUNCE_MV_MAX);
+      return true;
+    }
+    if (low) _mqtt_control.setAnnounceLow(mv);
+    else _mqtt_control.setAnnounceCritical(mv);
+    strcpy(reply, "OK");
+    return true;
+  }
+#endif
 #ifdef WITH_MQTT_BRIDGE
   MqttCtrlSlotPlan plan;
   const MqttCtrlSetup setup = mqttCtrlPlanSlot(command, &plan);

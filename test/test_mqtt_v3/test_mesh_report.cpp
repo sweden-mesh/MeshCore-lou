@@ -423,3 +423,101 @@ TEST(MeshReportLadder, TwelveHoursWhenReliable) {
   meshAliveSentIn(&c, 0, MREPORT_RELIABLE_MS, 2 * (MREPORT_RELIABLE_MS / 10));
   EXPECT_EQ(c.due_ms, 47520000u);                       // 13.2 h
 }
+
+// ---- the battery ----------------------------------------------------------------------
+
+TEST(MeshReportBattery, LowTakesTheTwelveHoursAway) {
+  uint8_t rounds = 5;
+  MreportBattery b = mreportBattery(3700, 3600, 3400, &rounds);
+  EXPECT_EQ(b.tries, MREPORT_ZERO_HOP_TRIES);
+  EXPECT_TRUE(b.fallback);
+  EXPECT_TRUE(b.twelve_hours);
+  EXPECT_EQ(rounds, 0);
+  b = mreportBattery(3600, 3600, 3400, &rounds);         // at the line is not under it
+  EXPECT_TRUE(b.twelve_hours);
+  b = mreportBattery(3599, 3600, 3400, &rounds);
+  EXPECT_FALSE(b.twelve_hours);
+  EXPECT_EQ(b.tries, MREPORT_ZERO_HOP_TRIES);
+  EXPECT_TRUE(b.fallback);
+  EXPECT_EQ(rounds, 0);
+}
+
+TEST(MeshReportBattery, CriticalTriesOnceAndFallsBackEverySecondReport) {
+  uint8_t rounds = 0;
+  MreportBattery b = mreportBattery(3400, 3600, 3400, &rounds);
+  EXPECT_EQ(b.tries, MREPORT_ZERO_HOP_TRIES);
+  EXPECT_FALSE(b.twelve_hours);
+  const bool expect[] = { true, false, true, false, true };
+  for (int i = 0; i < 5; i++) {
+    b = mreportBattery(3399, 3600, 3400, &rounds);
+    EXPECT_EQ(b.tries, 1) << i;
+    EXPECT_EQ(b.fallback, expect[i]) << i;              // the first of them falls back
+    EXPECT_FALSE(b.twelve_hours) << i;
+  }
+  // Charged again, and low again: it starts over with a fallback.
+  b = mreportBattery(3500, 3600, 3400, &rounds);
+  EXPECT_EQ(rounds, 0);
+  EXPECT_EQ(b.tries, MREPORT_ZERO_HOP_TRIES);
+  b = mreportBattery(3300, 3600, 3400, &rounds);
+  EXPECT_TRUE(b.fallback);
+  // A count that wraps keeps alternating.
+  rounds = 255;
+  b = mreportBattery(3300, 3600, 3400, &rounds);
+  EXPECT_FALSE(b.fallback);
+  EXPECT_EQ(rounds, 0);
+  b = mreportBattery(3300, 3600, 3400, &rounds);
+  EXPECT_TRUE(b.fallback);
+}
+
+TEST(MeshReportBattery, ZeroSwitchesItOff) {
+  uint8_t rounds = 0;
+  // A board that cannot read its battery.
+  MreportBattery b = mreportBattery(0, 3600, 3400, &rounds);
+  EXPECT_EQ(b.tries, MREPORT_ZERO_HOP_TRIES);
+  EXPECT_TRUE(b.fallback);
+  EXPECT_TRUE(b.twelve_hours);
+  EXPECT_EQ(rounds, 0);
+  // Thresholds of 0, each alone.
+  b = mreportBattery(3000, 0, 3400, &rounds);
+  EXPECT_TRUE(b.twelve_hours);
+  EXPECT_EQ(b.tries, 1);
+  b = mreportBattery(3000, 3600, 0, &rounds);
+  EXPECT_FALSE(b.twelve_hours);
+  EXPECT_EQ(b.tries, MREPORT_ZERO_HOP_TRIES);
+  EXPECT_TRUE(b.fallback);
+  EXPECT_EQ(rounds, 0);
+}
+
+TEST(MeshReportBattery, OneTryAndNoFallbackEndsTheReportUnacked) {
+  const uint8_t r[] = { 1, 2, 3, 4 };
+  uint8_t rounds = 1;
+  const MreportBattery b = mreportBattery(3300, 3600, 3400, &rounds);
+  ASSERT_FALSE(b.fallback);
+  MreportLadder l;
+  mreportStart(&l, r, 0);
+  mreportLimit(&l, &b);
+  EXPECT_EQ(mreportStep(&l, 0, true), MREPORT_SEND_STATE);
+  mreportSent(&l, 0, 0);
+  EXPECT_EQ(mreportStep(&l, 7999, true), MREPORT_WAIT);   // the ack still has its time
+  EXPECT_EQ(mreportStep(&l, 8000, true), MREPORT_DONE);
+  EXPECT_TRUE(mreportFellBack(&l));                       // no ack is no reliable round
+  EXPECT_EQ(l.tries, 1);
+
+  // Acked on that one try: a first-try ack, as on a full battery.
+  mreportStart(&l, r, 0);
+  mreportLimit(&l, &b);
+  mreportSent(&l, 0, 0);
+  EXPECT_TRUE(mreportAck(&l, r, 1));
+  EXPECT_EQ(l.first_try_by, 1);
+  EXPECT_EQ(mreportStep(&l, 100, true), MREPORT_DONE);
+  EXPECT_FALSE(mreportFellBack(&l));
+
+  // The round that falls back: one try, then the path and the flood as always.
+  const MreportBattery with = { 1, true, false };
+  mreportStart(&l, r, 0);
+  mreportLimit(&l, &with);
+  mreportSent(&l, 0, 0);
+  EXPECT_EQ(mreportStep(&l, 8000, true), MREPORT_SEND_DIRECT);
+  mreportSent(&l, 8000, 0);
+  EXPECT_EQ(mreportStep(&l, 38000, true), MREPORT_SEND_FLOOD);
+}

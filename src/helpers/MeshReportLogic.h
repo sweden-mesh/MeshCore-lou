@@ -424,6 +424,8 @@ enum MreportAction : uint8_t {
 struct MreportLadder {
   uint8_t rung;                 // MreportRung
   uint8_t tries;                // zero-hop tries sent
+  uint8_t max_tries;            // zero-hop tries this report may send
+  bool fallback;                // the path and the flood may follow them
   bool sent;                    // the path or the flood went
   bool acked;
   int first_try_by;             // the table entry that acked the first try, else -1
@@ -434,9 +436,47 @@ struct MreportLadder {
 static inline void mreportStart(MreportLadder* l, const uint8_t* report, uint32_t now_ms) {
   memset(l, 0, sizeof(*l));
   l->rung = MREPORT_ZERO_HOP;
+  l->max_tries = MREPORT_ZERO_HOP_TRIES;
+  l->fallback = true;
   l->first_try_by = -1;
   memcpy(l->report, report, MREPORT_ID_LEN);
   l->next_ms = now_ms;
+}
+
+// ---- the battery ----------------------------------------------------------------------
+//
+// A node whose battery runs low reports less: under `announce.low` mV no 12 h rate, under
+// `announce.critical` one zero-hop try, and the path and the flood only every second report,
+// the first of them included, so the owner hears of it. The reading is the one the announce
+// carries; 0 (a board that cannot read its battery) and a threshold of 0 switch the rule off.
+// The thresholds are settings of /mqttcontrol (MqttControlLogic.h), 3600 and 3400 by default.
+struct MreportBattery {
+  uint8_t tries;                // zero-hop tries
+  bool fallback;                // the path and the flood after them
+  bool twelve_hours;            // the reliable rule may bring the next report in 12 h
+};
+
+static inline bool mreportBatteryBelow(uint16_t mv, uint16_t threshold_mv) {
+  return mv != 0 && threshold_mv != 0 && mv < threshold_mv;
+}
+
+// `critical_rounds`, the caller's: reports in a row under `announce.critical`.
+static inline MreportBattery mreportBattery(uint16_t mv, uint16_t low_mv, uint16_t critical_mv,
+                                            uint8_t* critical_rounds) {
+  MreportBattery b = { MREPORT_ZERO_HOP_TRIES, true, !mreportBatteryBelow(mv, low_mv) };
+  if (!mreportBatteryBelow(mv, critical_mv)) {
+    *critical_rounds = 0;
+    return b;
+  }
+  b.tries = 1;
+  b.fallback = (*critical_rounds & 1) == 0;
+  *critical_rounds = (uint8_t)(*critical_rounds + 1);
+  return b;
+}
+
+static inline void mreportLimit(MreportLadder* l, const MreportBattery* b) {
+  l->max_tries = b->tries;
+  l->fallback = b->fallback;
 }
 
 // What to do now. `has_path`: the table holds a path. The caller sends, then calls
@@ -446,7 +486,8 @@ static inline uint8_t mreportStep(MreportLadder* l, uint32_t now_ms, bool has_pa
   if (l->acked) return MREPORT_DONE;
   if ((int32_t)(now_ms - l->next_ms) < 0) return MREPORT_WAIT;
   if (l->rung == MREPORT_ZERO_HOP) {
-    if (l->tries < MREPORT_ZERO_HOP_TRIES) return MREPORT_SEND_STATE;
+    if (l->tries < l->max_tries) return MREPORT_SEND_STATE;
+    if (!l->fallback) return MREPORT_DONE;
     l->rung = has_path ? MREPORT_PATH : MREPORT_FLOOD;
     l->sent = false;
   } else if (l->rung == MREPORT_PATH && (l->sent || !has_path)) {
@@ -482,5 +523,5 @@ static inline bool mreportAck(MreportLadder* l, const uint8_t* report, int by) {
   return true;
 }
 
-// Whether the report that ended needed the path or the flood.
-static inline bool mreportFellBack(const MreportLadder* l) { return l->rung >= MREPORT_PATH; }
+// Whether the report that ended needed the path or the flood, or went without an ack.
+static inline bool mreportFellBack(const MreportLadder* l) { return l->rung >= MREPORT_PATH || !l->acked; }

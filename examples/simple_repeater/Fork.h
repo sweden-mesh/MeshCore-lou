@@ -132,6 +132,7 @@ class Fork {
   MeshAliveClock _announce = {};
   uint32_t _announce_sequence = 0;
   char _announce_key_for[PUB_KEY_SIZE * 2 + 1] = {0};
+  uint16_t _announce_mv = 0;                   // the battery the newest announce carries
 
   bool announceRegion();
   bool announceScope(TransportKey* scope);
@@ -146,6 +147,8 @@ class Fork {
   MreportLadder _report = {};
   uint8_t _report_announce[MALIVE_PAYLOAD] = {0};
   uint8_t _report_fallbacks = 0;               // reports in a row that needed the path or the flood
+  MreportBattery _report_battery = {};         // what the battery allows the report under way
+  uint8_t _report_critical = 0;                // reports in a row under announce.critical
 
   void loadObservers();
   void saveObservers();

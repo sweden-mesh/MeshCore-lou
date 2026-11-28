@@ -87,6 +87,8 @@ class MqttControl {
   uint8_t _mesh_mode;         // MqttCtrlMeshMode
   uint8_t _relay_mode;        // MqttCtrlRelayMode
   uint8_t _relay_guest;       // floods a day per guest key
+  uint16_t _announce_low;     // mV under which the report has no 12 h rate, 0 = never
+  uint16_t _announce_critical;  // mV under which it tries once and falls back every second time
   MqttCtrlAirBudget _mesh_answers;
   // The newest counter answered over the mesh, run or refused. The saved counter moves only
   // when a command runs, so without this a refused request (the road closed, a denied
@@ -123,6 +125,10 @@ public:
   void setRelayMode(uint8_t mode) { _relay_mode = mode; save(); }
   uint8_t relayGuest() const { return _relay_guest; }
   void setRelayGuest(uint8_t floods) { _relay_guest = floods; save(); }
+  uint16_t announceLow() const { return _announce_low; }
+  void setAnnounceLow(uint16_t mv) { _announce_low = mv; save(); }
+  uint16_t announceCritical() const { return _announce_critical; }
+  void setAnnounceCritical(uint16_t mv) { _announce_critical = mv; save(); }
   uint16_t aliveMinutes() const { return mqttCtrlAliveMinutes(_alive_minutes); }
   uint32_t boots() const { return _boot; }
 
